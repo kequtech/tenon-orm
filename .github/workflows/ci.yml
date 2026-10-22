@@ -1,0 +1,77 @@
+name: Check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Node 24 / PostgreSQL ${{ matrix.postgres }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: [16, 18]
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres }}
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: tenom_orm_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TENON_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/tenom_orm_test
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      # Use the server's own pg_dump without relying on the runner's client major.
+      - name: Use matching PostgreSQL client
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/tenon-bin"
+          cat > "$RUNNER_TEMP/tenon-bin/pg_dump" <<'SH'
+          #!/bin/bash
+          set -euo pipefail
+          args=()
+          output=
+          while (( $# )); do
+            if [[ "$1" == --file ]]; then
+              output="$2"
+              shift 2
+            else
+              args+=("$1")
+              shift
+            fi
+          done
+          if [[ -n "$output" ]]; then
+            docker exec "$POSTGRES_CONTAINER" pg_dump "${args[@]}" > "$output"
+          else
+            exec docker exec "$POSTGRES_CONTAINER" pg_dump "${args[@]}"
+          fi
+          SH
+          chmod +x "$RUNNER_TEMP/tenon-bin/pg_dump"
+          echo "$RUNNER_TEMP/tenon-bin" >> "$GITHUB_PATH"
+      - run: npm ci
+      - name: Check types, PostgreSQL workflows and packed consumers
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: npm run check
+      - run: npm pack --dry-run --ignore-scripts

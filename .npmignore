@@ -1,0 +1,26 @@
+# package.json files is the primary allowlist. These exclusions also keep
+# development and local files out if that list is expanded later.
+src/
+test/
+docs/
+config/
+scripts/
+.test-dist/
+coverage/
+node_modules/
+.github/
+.entire/
+.codex/
+.agents/
+.aws/
+.env*
+*.pem
+*.key
+*.tgz
+*.tsbuildinfo
+**/*.map
+tsconfig*.json
+.editorconfig
+.gitattributes
+.gitignore
+.npmignore

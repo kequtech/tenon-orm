@@ -12,8 +12,7 @@
 3. Confirm documentation links, license, and npm organization
    access. Choose the release version and channel; update package metadata and the
    lockfile together. Use a prerelease tag for a prerelease.
-4. If the development checkout uses `private: true`, remove it for the release. Inspect the final
-   archive again, then publish explicitly using the chosen publishing identity.
+4. Inspect the final archive, then publish explicitly using the chosen publishing identity.
    Use the configured publishing method.
 
 ```sh

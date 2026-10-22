@@ -30,7 +30,7 @@ const db = createTenon({ connection: pool });
 let ownsNamespace = false;
 try {
   const database = await pool.query('SELECT current_database() AS name');
-  assert.equal(database.rows[0].name, 'tenom_orm_test');
+  assert.equal(database.rows[0].name, 'tenon_orm_test');
   await writeFile(
     join(directory, '0001_accounts.up.sql'),
     'CREATE TABLE "Account" (id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY, email text UNIQUE NOT NULL);',

@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { Pool } from 'pg';
-import { migrate } from '../src/index.js';
+import { generateDefinitions, migrate } from '../src/index.js';
 import { assertTestDatabase, migrationProject, testConnection } from './helpers/database.js';
 
 const run = promisify(execFile);
@@ -30,6 +30,7 @@ test('SafeQL checks actual Tenon tags, factories and schema changes and reports 
       },
       async (options) => {
         await migrate(options);
+        await writeFile(join(directory, 'generated-schema.ts'), await generateDefinitions(options));
         const table = '"' + options.namespace + '"."Account"';
         const note = '"' + options.namespace + '"."Note"';
         await writeFile(join(directory, 'package.json'), '{"type":"module"}');
@@ -63,14 +64,15 @@ test('SafeQL checks actual Tenon tags, factories and schema changes and reports 
         ];
       `;
         await writeFile(join(directory, 'eslint.config.mjs'), config);
-        const imports = `type PgArray<T> = (T | null | PgArray<T>)[];
+        const imports = `import type { Account, PgArray } from './generated-schema.js';
+type AccountSummary = Pick<Account, 'id' | 'email'>;
 import { sql, defineOperation } from ${JSON.stringify(resolve('dist/index.js'))};\n`;
         await writeFile(
           join(directory, 'valid.ts'),
           imports +
             `
         export const byEmail = defineOperation((email: string) =>
-          sql<{id:number;email:string}>\`SELECT id,email FROM ${table} WHERE email = \${email}\`,
+          sql<AccountSummary>\`SELECT id,email FROM ${table} WHERE email = \${email}\`,
           {returns:'oneOrNone'});
         export const joined = defineOperation((id: number) =>
           sql<{id:number;body:string|null}>\`SELECT a.id,n.body FROM ${table} a LEFT JOIN ${note} n ON n.account_id=a.id WHERE a.id=\${id}\`);

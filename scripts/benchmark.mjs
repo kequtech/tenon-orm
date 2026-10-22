@@ -5,7 +5,7 @@ import { createTenon, sql } from '../dist/index.js';
 
 const connectionString =
   process.env.TENON_TEST_DATABASE_URL ??
-  'postgresql://postgres:postgres@localhost:5432/tenom_orm_test';
+  'postgresql://postgres:postgres@localhost:5432/tenon_orm_test';
 const samples = 50;
 const results = [];
 for (const latencyMs of [0, 5]) {
@@ -27,7 +27,7 @@ for (const latencyMs of [0, 5]) {
   try {
     assert.equal(
       (await pool.query('SELECT current_database() AS name')).rows[0].name,
-      'tenom_orm_test',
+      'tenon_orm_test',
     );
     await pool.query(
       'CREATE TEMP TABLE tenon_benchmark (id integer PRIMARY KEY, value integer NOT NULL)',

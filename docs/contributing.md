@@ -28,16 +28,15 @@ dependencies. It also exercises the installed product lifecycle. It uses npm's o
 
 ## Test database
 
-`npm test` requires the dedicated database `tenom_orm_test` on PostgreSQL 16 or
-newer. The spelling is retained for compatibility with the existing local setup.
-Tests validate its name and version before making changes. They create temporary
+`npm test` requires the dedicated database `tenon_orm_test` on PostgreSQL 16 or
+newer. Tests validate its name and version before making changes. They create temporary
 namespaces and remove them afterward. Connection-failure tests terminate only
 backends they create in that test database.
 
 The default connection is:
 
 ```sh
-export TENON_TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/tenom_orm_test
+export TENON_TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/tenon_orm_test
 npm test
 ```
 
@@ -96,7 +95,7 @@ To update the generated fixture intentionally, use a fresh scratch namespace:
 
 ```sh
 npm run build
-export DATABASE_URL=postgresql://postgres:postgres@localhost:5432/tenom_orm_test
+export DATABASE_URL=postgresql://postgres:postgres@localhost:5432/tenon_orm_test
 node dist/cli.js migrate --directory test/fixtures/migrations --namespace tenon_fixture
 node dist/cli.js generate --directory test/fixtures/migrations --namespace tenon_fixture \
   --out test/fixtures/generated-schema.ts

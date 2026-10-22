@@ -1,10 +1,9 @@
 {
   "name": "@kequtech/tenon-orm",
-  "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
   "license": "ISC",
   "type": "module",
-  "description": "An experimental PostgreSQL ORM designed for coding agents",
+  "description": "A PostgreSQL ORM for coding agents and the humans reviewing their work",
   "homepage": "https://github.com/kequtech/tenon-orm#readme",
   "repository": {
     "type": "git",

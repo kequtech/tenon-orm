@@ -9,6 +9,9 @@ a string, `pg.PoolConfig`, or existing `pg.Pool`. `close()` closes pools Tenon
 creates, leaves supplied pools open, and rejects subsequent work. Finish outstanding
 work before closing.
 
+Missing connections and empty strings reject. Pass `connection: {}` explicitly
+to use pg's environment-based defaults.
+
 Tenon reports idle errors on owned pools through `process.emitWarning`; pg removes
 broken clients. With a supplied pool, install your own `pool.on('error', handler)`.
 Checked-out connection failures are observed between queries and broken clients

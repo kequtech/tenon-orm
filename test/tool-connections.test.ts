@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { test, type TestContext } from 'node:test';
 import { Pool, type PoolClient } from 'pg';
+import { createTenon, TenonError, type TenonOptions } from '../src/index.js';
 import { withMigrationLock } from '../src/migrations/connection.js';
 
 function mockClient(t: TestContext, query: (sql: string) => Promise<unknown>) {
@@ -11,6 +12,23 @@ function mockClient(t: TestContext, query: (sql: string) => Promise<unknown>) {
 }
 
 const emptyResult = { rows: [], fields: [], rowCount: null, command: '', oid: 0 };
+
+test('runtime and tools reject missing or invalid connections before acquiring a client', async (t) => {
+  const connect = t.mock.method(Pool.prototype, 'connect', async () => {
+    throw new Error('unexpected connection');
+  });
+  for (const value of [undefined, null, '', '  ', 42, false, [], new Date()]) {
+    const connection = value as TenonOptions['connection'];
+    assert.throws(() => createTenon({ connection }), TenonError);
+    await assert.rejects(
+      withMigrationLock({ connection }, 'shared', async () => {}),
+      TenonError,
+    );
+  }
+  // Explicit pg configuration retains its normal environment/default behavior.
+  await createTenon({ connection: {} }).close();
+  assert.equal(connect.mock.callCount(), 0);
+});
 
 test('tools release a borrowed connection without ending the application pool', async (t) => {
   const pool = new Pool();

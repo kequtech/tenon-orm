@@ -16,11 +16,18 @@ Requires Node.js 24+, PostgreSQL 16+, ESM, and TypeScript 6+ for TypeScript cons
 
 ```sh
 npm install @kequtech/tenon-orm pg
-npm install --save-dev @types/pg
 ```
 
-JavaScript applications can omit the typings. Your application owns the pg driver
-and connection configuration. Tenon adds no other runtime dependencies.
+For TypeScript projects, also install the compiler and development typings:
+
+```sh
+npm install --save-dev typescript@^6 @types/node@^24 @types/pg
+```
+
+Set `"type": "module"` in the application's package.json. For a Node TypeScript
+project, use `"module": "NodeNext"` and `"strict": true` in tsconfig.json.
+Your application owns the pg driver and connection configuration. Tenon adds no
+other runtime dependencies.
 
 ## Create the schema
 

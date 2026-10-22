@@ -8,7 +8,7 @@ import { quote } from '../../src/sql.js';
 
 export const testConnection =
   process.env.TENON_TEST_DATABASE_URL ??
-  'postgresql://postgres:postgres@localhost:5432/tenom_orm_test';
+  'postgresql://postgres:postgres@localhost:5432/tenon_orm_test';
 
 /** Check before a test creates or changes any namespace. */
 export async function assertTestDatabase(pool: Pool): Promise<string> {
@@ -17,12 +17,12 @@ export async function assertTestDatabase(pool: Pool): Promise<string> {
       current_setting('server_version_num')::integer AS version_num
   `);
   const database = result.rows[0]!;
-  if (database.name !== 'tenom_orm_test') {
-    throw new Error('Tests require the tenom_orm_test database. No test schemas were changed.');
+  if (database.name !== 'tenon_orm_test') {
+    throw new Error('Tests require the tenon_orm_test database. No test schemas were changed.');
   }
   if (database.version_num < 160000) {
     throw new Error(
-      `Tests require PostgreSQL 16 or newer; connected to ${database.version}. Upgrade the test server or set TENON_TEST_DATABASE_URL to a supported tenom_orm_test database. No test schemas were changed.`,
+      `Tests require PostgreSQL 16 or newer; connected to ${database.version}. Upgrade the test server or set TENON_TEST_DATABASE_URL to a supported tenon_orm_test database. No test schemas were changed.`,
     );
   }
   return database.version;

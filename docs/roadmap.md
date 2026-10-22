@@ -8,39 +8,41 @@ transactions, ISC licensing and the `@kequtech/tenon-orm` package name are settl
 ## Before public distribution
 
 - [x] Use a separate public repository for a fresh source baseline while retaining
-  previous development history privately. The owner created the new repository;
-  old commits and conversation checkpoint refs must not be transferred. See
-  [releasing.md](releasing.md).
+      previous development history privately. The owner created the new repository;
+      old commits and conversation checkpoint refs must not be transferred. See
+      [releasing.md](releasing.md).
 - [ ] Review and push the cleaned initial source baseline to the new repository.
 - [ ] Approve npm publication separately from source visibility. Keep
-  `private: true` until an npm release is explicitly approved. Choose an actual
-  release version and, for a prerelease, its dist-tag; `0.0.0` is a placeholder.
+      `private: true` until an npm release is explicitly approved. Choose an actual
+      release version and, for a prerelease, its dist-tag; `0.0.0` is a placeholder.
 - [ ] Run the configured PostgreSQL 16/18 CI matrix and inspect the results.
-  Local PostgreSQL 16.15 evidence does not establish compatibility with 18.
+      Local PostgreSQL 16.15 evidence does not establish compatibility with 18.
 - [ ] Verify the final npm tarball, metadata and documentation links against the
-  chosen repository, including the installed CLI and minimum consumer compiler.
-  Configure npm organization permissions and publishing credentials only when
-  needed for the approved release.
+      chosen repository, including the installed CLI and minimum consumer compiler.
+      Configure npm organization permissions and publishing credentials only when
+      needed for the approved release.
 
 ## Correctness and adoption evidence
 
 - [ ] Harden transaction connection-loss and rollback-failure behavior with
-  fault tests. Explicit savepoints, isolation and application-owned retries are
-  settled; nested transaction helpers remain deferred.
+      fault tests. Simulated commit/rollback, tool cleanup and pool-shutdown failures
+      are covered; live connection-loss coverage remains incomplete. Explicit
+      savepoints, isolation and application-owned retries are
+      settled; nested transaction helpers remain deferred.
 - [ ] Exercise realistic agent consumer workflows: migrations/backfills, joins,
-  transaction mistakes and ordinary application changes. Measure correctness,
-  unnoticed defects, repairs, human intervention, time and tokens against plain
-  pg plus generated types and another typed database tool. API preferences alone
-  are not evidence of usefulness.
+      transaction mistakes and ordinary application changes. Measure correctness,
+      unnoticed defects, repairs, human intervention, time and tokens against plain
+      pg plus generated types and another typed database tool. API preferences alone
+      are not evidence of usefulness.
 - [ ] Verify deployment compatibility and recovery on a real consumer beyond the
-  documented baseline-adoption workflow. File checksums do not detect manual
-  schema changes; latest-schema verification needs fresh migration replay.
+      documented baseline-adoption workflow. File checksums do not detect manual
+      schema changes; latest-schema verification needs fresh migration replay.
 - [ ] Extend verified PostgreSQL value mappings when a consumer needs them.
-  Unmapped columns intentionally fall back to `unknown` with warnings. Views,
-  materialized views and foreign tables intentionally use manual query types.
+      Unmapped columns intentionally fall back to `unknown` with warnings. Views,
+      materialized views and foreign tables intentionally use manual query types.
 - [ ] Measure compile/editor responsiveness with large registries and schemas,
-  generation catalog-query costs, execution overhead and bulk SQL performance.
-  No comparative performance benchmark has been run.
+      generation catalog-query costs, execution overhead and bulk SQL performance.
+      No comparative performance benchmark has been run.
 
 ## Deferred unless a concrete need appears
 

@@ -1,3 +1,3 @@
 # Keep migration checksums and generated-file comparisons stable across checkouts.
 *.sql text eol=lf
-test/generated-schema.ts text eol=lf
+test/fixtures/generated-schema.ts text eol=lf

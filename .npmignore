@@ -24,3 +24,4 @@ tsconfig*.json
 .gitattributes
 .gitignore
 .npmignore
+.prettierignore

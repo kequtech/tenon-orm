@@ -1,0 +1,200 @@
+import assert from 'node:assert/strict';
+import { after, before, test } from 'node:test';
+import { Pool } from 'pg';
+import { generateDefinitions, migrate } from '../src/index.js';
+import { qualified, quote } from '../src/sql.js';
+import {
+  assertTestDatabase,
+  testConnection as connection,
+  migrationProject,
+} from './helpers/database.js';
+import { checkGeneratedTypes, typeAssertions } from './helpers/generation.js';
+const pool = new Pool({ connectionString: connection });
+const project = migrationProject(pool);
+before(() => assertTestDatabase(pool));
+after(() => pool.end());
+
+test('schema comments describe SQL constraints, defaults, identity settings and complete index definitions', async () => {
+  await project(
+    {
+      '0001_summary.up.sql': `
+    CREATE TABLE "Account" (
+      tenant integer NOT NULL, id integer NOT NULL, code varchar(24) UNIQUE,
+      PRIMARY KEY (tenant, id)
+    );
+    CREATE TABLE "Detail" (
+      id integer GENERATED ALWAYS AS IDENTITY (START WITH 11 INCREMENT BY 3 CACHE 4) PRIMARY KEY,
+      tenant integer, account integer, label text NOT NULL, active boolean NOT NULL DEFAULT false,
+      upper_label text GENERATED ALWAYS AS (upper(label)) STORED,
+      serial_id serial,
+      CONSTRAINT account_fk FOREIGN KEY (tenant, account) REFERENCES "Account" (tenant, id)
+        ON UPDATE CASCADE ON DELETE SET NULL DEFERRABLE INITIALLY DEFERRED
+    );
+    ALTER TABLE "Detail" ADD CONSTRAINT label_check CHECK (label <> '') NOT VALID;
+    CREATE UNIQUE INDEX detail_partial ON "Detail" (lower(label) text_pattern_ops DESC NULLS LAST)
+      INCLUDE (tenant) WHERE active;
+    CREATE TABLE "Reservation" (period int4range, EXCLUDE USING gist (period WITH &&));
+  `,
+    },
+    async (options) => {
+      await migrate(options);
+      const source = await generateDefinitions({ ...options, onWarning: () => {} });
+      const summary = source.slice(0, source.indexOf('export const migrationHistory'));
+      assert.match(summary, /\/\/ TABLE "Account"\n/);
+      assert.match(summary, /\/\/   "code" character varying\(24\)/);
+      assert.match(summary, /CONSTRAINT "Account_pkey" PRIMARY KEY \(tenant, id\)/);
+      assert.match(summary, /CONSTRAINT "Account_code_key" UNIQUE \(code\)/);
+      assert.match(
+        summary,
+        /"id" integer NOT NULL GENERATED ALWAYS AS IDENTITY \(START WITH 11 INCREMENT BY 3 MINVALUE 1 MAXVALUE 2147483647 CACHE 4 NO CYCLE\)/,
+      );
+      assert.match(summary, /"active" boolean NOT NULL DEFAULT false/);
+      assert.match(summary, /"upper_label" text GENERATED ALWAYS AS \(upper\(label\)\) STORED/);
+      assert.match(
+        summary,
+        /"serial_id" integer NOT NULL DEFAULT nextval\('\"Detail_serial_id_seq\"'::regclass\)/,
+      );
+      assert.match(
+        summary,
+        /CONSTRAINT "account_fk" FOREIGN KEY \(tenant, account\) REFERENCES "Account"\(tenant, id\) ON UPDATE CASCADE ON DELETE SET NULL DEFERRABLE INITIALLY DEFERRED/,
+      );
+      assert.match(summary, /CONSTRAINT "label_check" CHECK \(\(label <> ''::text\)\) NOT VALID/);
+      assert.match(
+        summary,
+        /CREATE UNIQUE INDEX detail_partial ON "Detail" USING btree \(lower\(label\) text_pattern_ops DESC NULLS LAST\) INCLUDE \(tenant\) WHERE active/,
+      );
+      assert.match(
+        summary,
+        /CONSTRAINT "Reservation_period_excl" EXCLUDE USING gist \(period WITH &&\)/,
+      );
+      assert.equal(await generateDefinitions({ ...options, onWarning: () => {} }), source);
+
+      // Advancing a sequence changes data, not the declared schema summary.
+      await pool.query(
+        `INSERT INTO ${qualified(options.namespace, 'Detail')} (label) VALUES ('first')`,
+      );
+      assert.equal(await generateDefinitions({ ...options, onWarning: () => {} }), source);
+      // A metadata-only change must still invalidate the generated artifact.
+      await pool.query(
+        `ALTER TABLE ${qualified(options.namespace, 'Detail')} ALTER COLUMN active SET DEFAULT true`,
+      );
+      const changed = await generateDefinitions({ ...options, onWarning: () => {} });
+      assert.notEqual(changed, source);
+      assert.equal(
+        changed.slice(changed.indexOf('export const migrationHistory')),
+        source.slice(source.indexOf('export const migrationHistory')),
+      );
+      assert.match(changed, /"active" boolean NOT NULL DEFAULT true/);
+    },
+  );
+});
+
+test('schema deparsing preserves external references and restores borrowed connection settings', async () => {
+  await project({}, async (external) => {
+    await pool.query(`CREATE SCHEMA ${quote(external.namespace)}`);
+    await pool.query(
+      `CREATE TABLE ${qualified(external.namespace, 'External')} (id integer PRIMARY KEY)`,
+    );
+    await project(
+      {
+        '0001_external.up.sql': `
+      CREATE FUNCTION is_active() RETURNS boolean LANGUAGE sql AS 'SELECT true';
+      CREATE TABLE "Local" (id integer GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+        external_id integer REFERENCES ${qualified(external.namespace, 'External')} (id),
+        active boolean DEFAULT is_active());
+      CREATE INDEX "odd ON target.index" ON "Local" (external_id);
+    `,
+      },
+      async (options) => {
+        await migrate(options);
+        const source = await generateDefinitions(options);
+        assert.ok(source.includes(`REFERENCES ${external.namespace}."External"(id)`));
+        assert.match(source, /"active" boolean DEFAULT is_active\(\)/);
+        assert.match(
+          source,
+          /CREATE INDEX "odd ON target.index" ON "Local" USING btree \(external_id\)/,
+        );
+        const configured = new Pool({
+          connectionString: connection,
+          max: 1,
+          options:
+            '-c search_path=public -c quote_all_identifiers=on -c standard_conforming_strings=off',
+        });
+        const settings = `SELECT current_setting('search_path') AS path,
+        current_setting('quote_all_identifiers') AS quoted,
+        current_setting('standard_conforming_strings') AS strings`;
+        try {
+          const before = (await configured.query(settings)).rows;
+          assert.equal(await generateDefinitions({ ...options, connection: configured }), source);
+          assert.deepEqual((await configured.query(settings)).rows, before);
+        } finally {
+          await configured.end();
+        }
+      },
+    );
+  });
+});
+
+test('catalog names and multiline SQL literals always remain comments in generated TypeScript', async () => {
+  const name = 'odd\r\nthrow new Error("name")\u2028tail';
+  const payload = 'first\nthrow new Error("literal")\rreturn false;\u2029last';
+  await project(
+    {
+      '0001_comments.up.sql': `
+    CREATE DOMAIN ${quote(`domain${name}`)} AS text DEFAULT '${payload}' CHECK (VALUE <> '${payload}');
+    CREATE TABLE ${quote(name)} (id integer PRIMARY KEY, value ${quote(`domain${name}`)});
+    CREATE INDEX ${quote('index\nthrow new Error("index")')} ON ${quote(name)} (value);
+  `,
+    },
+    async (options) => {
+      await migrate(options);
+      const source = await generateDefinitions(options);
+      const summary = source.slice(0, source.indexOf('export const migrationHistory'));
+      for (const line of summary.split(/\r\n|[\n\r\u2028\u2029]/u)) {
+        assert.ok(
+          line === '' || line.startsWith('//'),
+          `Catalog text escaped its comment: ${line}`,
+        );
+      }
+      await checkGeneratedTypes(
+        options,
+        `
+      import type { Rows } from './definitions.js';
+      ${typeAssertions}
+      type Row = Assert<Equal<Rows[${JSON.stringify(name)}], { id: number; value: string | null }>>;
+    `,
+      );
+    },
+  );
+});
+
+test('partition indexes and foreign keys describe logical roots without physical constraint clones', async () => {
+  await project(
+    {
+      '0001_partition_summary.up.sql': `
+    CREATE TABLE "Ledger" (id integer PRIMARY KEY) PARTITION BY RANGE (id);
+    CREATE TABLE "LedgerToday" PARTITION OF "Ledger" FOR VALUES FROM (1) TO (100);
+    CREATE TABLE "Reference" (ledger_id integer, CONSTRAINT ledger_fk FOREIGN KEY (ledger_id) REFERENCES "Ledger" (id));
+  `,
+    },
+    async (options) => {
+      await migrate(options);
+      const source = await generateDefinitions(options);
+      assert.match(source, /CREATE UNIQUE INDEX "Ledger_pkey" ON ONLY "Ledger" USING btree \(id\)/);
+      assert.match(
+        source,
+        /CONSTRAINT "ledger_fk" FOREIGN KEY \(ledger_id\) REFERENCES "Ledger"\(id\)/,
+      );
+      assert.equal(source.match(/FOREIGN KEY/g)?.length, 1);
+      assert.ok(!source.includes('LedgerToday'));
+      await pool.query(`CREATE TABLE ${qualified(options.namespace, 'LedgerTomorrow')}
+      PARTITION OF ${qualified(options.namespace, 'Ledger')} FOR VALUES FROM (100) TO (200)`);
+      assert.equal(await generateDefinitions(options), source);
+      // Detach first so PostgreSQL can remove its internal referencing-FK clones.
+      await pool.query(`ALTER TABLE ${qualified(options.namespace, 'Ledger')}
+      DETACH PARTITION ${qualified(options.namespace, 'LedgerTomorrow')}`);
+      await pool.query(`DROP TABLE ${qualified(options.namespace, 'LedgerTomorrow')}`);
+      assert.equal(await generateDefinitions(options), source);
+    },
+  );
+});

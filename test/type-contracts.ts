@@ -1,21 +1,35 @@
+import type { Database, OperationRegistry, QueryResult } from '../src/index.js';
 import { createTenon, define } from '../src/index.js';
-import type { QueryResult, OperationRegistry, Database } from '../src/index.js';
-import { echo_values } from './operation-fixtures.js';
-import type { User } from './generated-schema.js';
+import type { User } from './fixtures/generated-schema.js';
+import { echo_values } from './fixtures/operations.js';
 
-type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
+type Equal<A, B> =
+  (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
 type Assert<T extends true> = T;
 
 async function checkOperationTypes() {
   type Summary = Pick<User, 'id' | 'email'>;
   const operations = {
     echo_values,
-    users_by_email: define<Summary, [email: User['email'], active: User['active']]>('SELECT id, email FROM "User" WHERE email = $1 AND active = $2', { returns: 'many' }),
+    users_by_email: define<Summary, [email: User['email'], active: User['active']]>(
+      'SELECT id, email FROM "User" WHERE email = $1 AND active = $2',
+      { returns: 'many' },
+    ),
     all_users: define<Summary>('SELECT id, email FROM "User"', { returns: 'many' }),
-    user_by_email: define<Summary, [email: string]>('SELECT id, email FROM "User" WHERE email = $1', { returns: 'one' }),
-    required_user_by_email: define<Summary, [email: string]>('SELECT id, email FROM "User" WHERE email = $1', { returns: 'requiredOne' }),
-    delete_user: define<never, [id: number]>('DELETE FROM "User" WHERE id = $1', { returns: 'native' }),
-    raw_user: define<Summary, [email: string]>('INSERT INTO "User" (email) VALUES ($1) RETURNING id, email'),
+    user_by_email: define<Summary, [email: string]>(
+      'SELECT id, email FROM "User" WHERE email = $1',
+      { returns: 'one' },
+    ),
+    required_user_by_email: define<Summary, [email: string]>(
+      'SELECT id, email FROM "User" WHERE email = $1',
+      { returns: 'requiredOne' },
+    ),
+    delete_user: define<never, [id: number]>('DELETE FROM "User" WHERE id = $1', {
+      returns: 'native',
+    }),
+    raw_user: define<Summary, [email: string]>(
+      'INSERT INTO "User" (email) VALUES ($1) RETURNING id, email',
+    ),
     clear_users: define('DELETE FROM "User"'),
     undeclared_many: define('SELECT id FROM "User"', { returns: 'many' }),
     undeclared_one: define('SELECT id FROM "User"', { returns: 'one' }),
@@ -44,7 +58,19 @@ async function checkOperationTypes() {
   type UndeclaredMany = Assert<Equal<typeof undeclaredMany, never[]>>;
   type UndeclaredOne = Assert<Equal<typeof undeclaredOne, undefined>>;
   type UndeclaredRequired = Assert<Equal<typeof undeclaredRequired, Promise<never>>>;
-  const contracts: [Users, Echoed, All, Optional, Required, Command, Raw, DefaultCommand, UndeclaredMany, UndeclaredOne, UndeclaredRequired] = [true, true, true, true, true, true, true, true, true, true, true];
+  const contracts: [
+    Users,
+    Echoed,
+    All,
+    Optional,
+    Required,
+    Command,
+    Raw,
+    DefaultCommand,
+    UndeclaredMany,
+    UndeclaredOne,
+    UndeclaredRequired,
+  ] = [true, true, true, true, true, true, true, true, true, true, true];
   void contracts;
   const readonlyInput = ['hello', false] as const;
   await db.run('echo_values', readonlyInput);
@@ -93,7 +119,7 @@ async function checkOperationTypes() {
   define<Summary, string>('SELECT id, email FROM "User"');
   // @ts-expect-error registry values must be typed operation definitions
   createTenon({ connection: 'unused', operations: { invalid: { sql: 'SELECT 1' } } });
-  await db.transaction(async tx => {
+  await db.transaction(async (tx) => {
     const rows = await tx.run('users_by_email', ['alice', true]);
     const optionalRow = await tx.run('user_by_email', ['alice']);
     const requiredRow = await tx.run('required_user_by_email', ['alice']);
@@ -118,16 +144,26 @@ void checkOperationTypes;
 
 async function checkInlineTypes(db: Database) {
   type Summary = Pick<User, 'id' | 'email'>;
-  const many = await db.sql<Summary>('SELECT id, email FROM users WHERE active = $1', [true], { returns: 'many' });
-  const optional = await db.sql<Summary>('SELECT id, email FROM users WHERE id = $1', [1], { returns: 'one' });
-  const required = await db.sql<Summary>('SELECT id, email FROM users WHERE id = $1', [1], { returns: 'requiredOne' });
+  const many = await db.sql<Summary>('SELECT id, email FROM users WHERE active = $1', [true], {
+    returns: 'many',
+  });
+  const optional = await db.sql<Summary>('SELECT id, email FROM users WHERE id = $1', [1], {
+    returns: 'one',
+  });
+  const required = await db.sql<Summary>('SELECT id, email FROM users WHERE id = $1', [1], {
+    returns: 'requiredOne',
+  });
   const command = await db.sql('DELETE FROM users WHERE id = $1', [1]);
-  const raw = await db.sql<Summary>('UPDATE users SET active = $1 RETURNING id, email', [true], { returns: 'native' });
+  const raw = await db.sql<Summary>('UPDATE users SET active = $1 RETURNING id, email', [true], {
+    returns: 'native',
+  });
   const implicitNative = await db.sql<Summary>('SELECT id, email FROM users', []);
   const undeclaredMany = await db.sql('SELECT id FROM users', [], { returns: 'many' });
   const undeclaredOne = await db.sql('SELECT id FROM users', [], { returns: 'one' });
   const undeclaredRequired = db.sql('SELECT id FROM users', [], { returns: 'requiredOne' });
-  const contextualNative = db.sql('SELECT id FROM users', []) satisfies Promise<QueryResult<Summary>>;
+  const contextualNative = db.sql('SELECT id FROM users', []) satisfies Promise<
+    QueryResult<Summary>
+  >;
   type Many = Assert<Equal<typeof many, Summary[]>>;
   type Optional = Assert<Equal<typeof optional, Summary | undefined>>;
   type Required = Assert<Equal<typeof required, Summary>>;
@@ -138,7 +174,18 @@ async function checkInlineTypes(db: Database) {
   type UndeclaredOne = Assert<Equal<typeof undeclaredOne, undefined>>;
   type UndeclaredRequired = Assert<Equal<typeof undeclaredRequired, Promise<never>>>;
   type ContextualNative = Assert<Equal<typeof contextualNative, Promise<QueryResult<never>>>>;
-  const contracts: [Many, Optional, Required, Command, Raw, ImplicitNative, UndeclaredMany, UndeclaredOne, UndeclaredRequired, ContextualNative] = [true, true, true, true, true, true, true, true, true, true];
+  const contracts: [
+    Many,
+    Optional,
+    Required,
+    Command,
+    Raw,
+    ImplicitNative,
+    UndeclaredMany,
+    UndeclaredOne,
+    UndeclaredRequired,
+    ContextualNative,
+  ] = [true, true, true, true, true, true, true, true, true, true];
   void contracts;
   await db.sql<object>('SELECT 1', [] as const, { returns: 'many' });
   // @ts-expect-error the old command mode is removed
@@ -167,7 +214,7 @@ async function checkInlineTypes(db: Database) {
   await db.query('SELECT 1');
   // @ts-expect-error no runtime schema metadata exists
   db.schema;
-  await db.transaction(async tx => {
+  await db.transaction(async (tx) => {
     const rows = await tx.sql<Summary>('SELECT id, email FROM users', [], { returns: 'many' });
     type Rows = Assert<Equal<typeof rows, Summary[]>>;
     const contract: Rows = true;

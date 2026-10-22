@@ -13,7 +13,13 @@
   "bugs": {
     "url": "https://github.com/kequtech/tenon-orm/issues"
   },
-  "keywords": ["postgresql", "sql", "typescript", "migrations", "agents"],
+  "keywords": [
+    "postgresql",
+    "sql",
+    "typescript",
+    "migrations",
+    "agents"
+  ],
   "publishConfig": {
     "access": "public",
     "registry": "https://registry.npmjs.org/"
@@ -37,9 +43,11 @@
     "typecheck": "node node_modules/typescript/bin/tsc --noEmit -p tsconfig.json",
     "test": "npm run build && node node_modules/typescript/bin/tsc -p config/tsconfig.test.json && node .test-dist/test/check-database.js && node --test .test-dist/test/*.test.js",
     "test:consumer": "npm run build && node node_modules/typescript/bin/tsc -p config/tsconfig.test.json && node --test .test-dist/test/consumer.test.js",
-    "check": "npm run typecheck && npm test",
+    "check": "npm run format:check && npm run typecheck && npm test",
     "prepack": "npm run build",
-    "prepublishOnly": "npm run check"
+    "prepublishOnly": "npm run check",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
   },
   "kequtech": {
     "source": "tenon-orm"
@@ -48,6 +56,7 @@
     "@types/node": "^24.19.2",
     "@types/pg": "^8.23.1",
     "pg": "^8.23.1",
+    "prettier": "^3.9.10",
     "typescript": "^7.0.2",
     "typescript-minimum": "npm:typescript@5.7.2"
   },
@@ -56,9 +65,15 @@
     "typescript": ">=5.7.2"
   },
   "peerDependenciesMeta": {
-    "typescript": { "optional": true }
+    "typescript": {
+      "optional": true
+    }
   },
   "bin": {
     "tenon": "./dist/cli.js"
+  },
+  "prettier": {
+    "singleQuote": true,
+    "printWidth": 100
   }
 }

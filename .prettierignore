@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.test-dist/
+coverage/
+package-lock.json
+test/fixtures/generated-schema.ts
+.entire/
+.codex/
+.agents/
+.aws/

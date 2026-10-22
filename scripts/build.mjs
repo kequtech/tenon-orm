@@ -3,9 +3,11 @@ import { chmod } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import './clean.mjs';
 
-const result = spawnSync(process.execPath, [
-  'node_modules/typescript/bin/tsc', '-p', 'config/tsconfig.build.json',
-], { cwd: fileURLToPath(new URL('../', import.meta.url)), stdio: 'inherit' });
+const result = spawnSync(
+  process.execPath,
+  ['node_modules/typescript/bin/tsc', '-p', 'config/tsconfig.build.json'],
+  { cwd: fileURLToPath(new URL('../', import.meta.url)), stdio: 'inherit' },
+);
 
 if (result.error) throw result.error;
 if (result.status !== 0) process.exit(result.status ?? 1);

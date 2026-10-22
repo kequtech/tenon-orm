@@ -134,12 +134,12 @@ driver values pass through without case conversion or value normalization.
 not `User[]`, as the row generic. `define<Row, Inputs>(text, options?)` has the
 same result modes:
 
-| `returns` | Result | Zero returned rows | More than one |
-| --- | --- | --- | --- |
-| `native` (default) | `QueryResult<Row>` | Native result with `rows: []` | Return all |
-| `many` | `Row[]` | `[]` | Return all |
-| `one` | `Row \| undefined` | `undefined` | Throw `TenonError` |
-| `requiredOne` | `Row` | Throw `TenonError` | Throw `TenonError` |
+| `returns`          | Result             | Zero returned rows            | More than one      |
+| ------------------ | ------------------ | ----------------------------- | ------------------ |
+| `native` (default) | `QueryResult<Row>` | Native result with `rows: []` | Return all         |
+| `many`             | `Row[]`            | `[]`                          | Return all         |
+| `one`              | `Row \| undefined` | `undefined`                   | Throw `TenonError` |
+| `requiredOne`      | `Row`              | Throw `TenonError`            | Throw `TenonError` |
 
 ```ts
 const inserted = await db.sql<UserSummary>(
@@ -148,16 +148,14 @@ const inserted = await db.sql<UserSummary>(
   { returns: 'requiredOne' },
 );
 
-const users = await db.sql<UserSummary>(
-  'SELECT id, email FROM public."User" ORDER BY id',
-  [],
-  { returns: 'many' },
-);
+const users = await db.sql<UserSummary>('SELECT id, email FROM public."User" ORDER BY id', [], {
+  returns: 'many',
+});
 
-const changed = await db.sql(
-  'UPDATE public."User" SET active = $1 WHERE id = $2',
-  [false, inserted.id],
-);
+const changed = await db.sql('UPDATE public."User" SET active = $1 WHERE id = $2', [
+  false,
+  inserted.id,
+]);
 console.log(changed.command, changed.rowCount);
 ```
 
@@ -202,7 +200,7 @@ without SQL-derived static parameter checking. PostgreSQL checks actual binding.
 ## Transactions, isolation and partial recovery
 
 ```ts
-const user = await db.transaction(async tx => {
+const user = await db.transaction(async (tx) => {
   await tx.sql('SET TRANSACTION ISOLATION LEVEL SERIALIZABLE', []);
   await tx.sql("SET LOCAL statement_timeout = '5s'", []);
 
@@ -327,16 +325,16 @@ or direct PostgreSQL inspection.
 
 Tenon preserves standard pg values and installs no parser overrides:
 
-| PostgreSQL scalar | Generated TypeScript |
-| --- | --- |
-| `integer` (`int4`) | `number` |
-| `bigint`, `numeric` / `decimal` | `string` |
-| `boolean` | `boolean` |
-| `text`, `varchar`, `uuid` | `string` |
-| `timestamptz` | `globalThis.Date` |
-| Native enum | Literal string union |
-| `json`, `jsonb` | `unknown` |
-| `bytea` | `import('node:buffer').Buffer` |
+| PostgreSQL scalar               | Generated TypeScript           |
+| ------------------------------- | ------------------------------ |
+| `integer` (`int4`)              | `number`                       |
+| `bigint`, `numeric` / `decimal` | `string`                       |
+| `boolean`                       | `boolean`                      |
+| `text`, `varchar`, `uuid`       | `string`                       |
+| `timestamptz`                   | `globalThis.Date`              |
+| Native enum                     | Literal string union           |
+| `json`, `jsonb`                 | `unknown`                      |
+| `bytea`                         | `import('node:buffer').Buffer` |
 
 Nullable verified scalar columns add `null`. `unknown` already includes null;
 JSON intentionally emits no warning. Declare JSON contracts beside queries and
@@ -349,14 +347,14 @@ Verified arrays use a generated, type-only recursive helper:
 export type PgArray<T> = (T | null | PgArray<T>)[];
 ```
 
-| Verified array | Leaf type |
-| --- | --- |
-| `integer[]`, `numeric[]` | `number` |
-| `bigint[]`, `text[]`, `varchar[]`, `uuid[]` | `string` |
-| `boolean[]` | `boolean` |
-| `timestamptz[]` | `globalThis.Date` |
-| `bytea[]` | `Buffer` |
-| `json[]`, `jsonb[]` | `unknown` |
+| Verified array                              | Leaf type         |
+| ------------------------------------------- | ----------------- |
+| `integer[]`, `numeric[]`                    | `number`          |
+| `bigint[]`, `text[]`, `varchar[]`, `uuid[]` | `string`          |
+| `boolean[]`                                 | `boolean`         |
+| `timestamptz[]`                             | `globalThis.Date` |
+| `bytea[]`                                   | `Buffer`          |
+| `json[]`, `jsonb[]`                         | `unknown`         |
 
 Array column nullability is separate. Dimensions are not fixed by SQL array
 declarations. Null elements, nested arrays and native driver behavior remain
@@ -399,11 +397,12 @@ warnings or otherwise-unused domains. No foreign data source is contacted.
    ```
 
    This writes `0001_baseline.up.sql` with no down file, using native `pg_dump
-   --schema-only --no-owner --no-privileges`. Default scope is the complete
+--schema-only --no-owner --no-privileges`. Default scope is the complete
    database schema. Repeat `--schema name` for native schema selection; own its
    dependencies and required extensions/roles. Capture excludes Tenon's history,
    preserves existing files, and changes no source history, data or sequence
    positions. Existing ORM metadata is left in the captured schema.
+
 3. Review and commit that SQL. On each existing database at the checkpoint:
 
    ```sh
@@ -415,6 +414,7 @@ warnings or otherwise-unused domains. No foreign data source is contacted.
    an existing namespace and the first `0001_baseline.up.sql` with no down file.
    Repeating matching adoption is a no-op, even after later Tenon migrations;
    conflicting history fails. Tenon does not compare the actual target schema.
+
 4. Replace the old ORM's application behavior and deployment commands. Own its
    validation, IDs, timestamps, hooks, serialization, seeds, metadata cleanup and
    backups. Prefer a schema-preserving replacement release so application rollback
@@ -437,16 +437,16 @@ backup or a restore plan.
 
 All tools are named exports from `@kequtech/tenon-orm`:
 
-| Function | Arguments | Resolves to |
-| --- | --- | --- |
-| `createMigration` | `{ name, directory? }` | `{ id, upPath, downPath }` |
-| `readMigrations` | `directory?` | Ordered `SqlMigration[]` (readonly) |
-| `migrate` | Database tool options | Applied IDs (readonly array) |
-| `rollback` | Database tool options plus `steps?` | Rolled-back IDs (readonly array) |
-| `migrationStatus` | Database tool options | `{ applied, pending }` IDs |
-| `generateDefinitions` | Database tool options plus `onWarning?` | TypeScript source string |
-| `captureBaseline` | `{ connection, directory?, namespace?, schemas?, onWarning? }` | `{ id, upPath }` |
-| `adoptBaseline` | Database tool options | `['0001']` or `[]` |
+| Function              | Arguments                                                      | Resolves to                         |
+| --------------------- | -------------------------------------------------------------- | ----------------------------------- |
+| `createMigration`     | `{ name, directory? }`                                         | `{ id, upPath, downPath }`          |
+| `readMigrations`      | `directory?`                                                   | Ordered `SqlMigration[]` (readonly) |
+| `migrate`             | Database tool options                                          | Applied IDs (readonly array)        |
+| `rollback`            | Database tool options plus `steps?`                            | Rolled-back IDs (readonly array)    |
+| `migrationStatus`     | Database tool options                                          | `{ applied, pending }` IDs          |
+| `generateDefinitions` | Database tool options plus `onWarning?`                        | TypeScript source string            |
+| `captureBaseline`     | `{ connection, directory?, namespace?, schemas?, onWarning? }` | `{ id, upPath }`                    |
+| `adoptBaseline`       | Database tool options                                          | `['0001']` or `[]`                  |
 
 Database tool options are `{ connection, directory?, namespace? }`, defaulting
 to `migrations` and `public`. They accept the same string/config/pool connection

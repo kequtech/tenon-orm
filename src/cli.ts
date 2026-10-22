@@ -79,8 +79,9 @@ async function runBaseline(
 }
 
 async function main(): Promise<void> {
-  const { positionals, values } = parseArgs({
+  const { positionals, values, tokens } = parseArgs({
     allowPositionals: true,
+    tokens: true,
     options: {
       directory: { type: 'string', default: 'migrations' },
       namespace: { type: 'string', default: 'public' },
@@ -97,6 +98,28 @@ async function main(): Promise<void> {
   }
 
   const [command, argument] = positionals;
+  // Validate explicitly supplied flags, not defaults. Silently ignoring --check
+  // on migrate, for example, would turn an intended dry run into a schema change.
+  const allowed = new Set(['directory', 'help']);
+  if (command !== 'new') {
+    allowed.add('namespace');
+  }
+  if (command === 'generate') {
+    allowed.add('out');
+    allowed.add('check');
+  }
+  if (command === 'rollback') {
+    allowed.add('steps');
+  }
+  if (command === 'baseline' && argument === 'capture') {
+    allowed.add('schema');
+  }
+  for (const token of tokens) {
+    if (token.kind === 'option' && !allowed.has(token.name)) {
+      throw new TenonError(`--${token.name} is not supported by ${command ?? 'this command'}.`);
+    }
+  }
+
   if (command === 'new') {
     if (positionals.length !== 2) {
       throw new TenonError('Use new <name> to create a migration pair.');

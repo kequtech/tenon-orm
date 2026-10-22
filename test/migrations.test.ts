@@ -4,7 +4,15 @@ import { join } from 'node:path';
 import { after, before, test } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
 import { Pool } from 'pg';
-import tenon, { generateDefinitions, migrate, migrationStatus, rollback } from '../src/index.js';
+import {
+  createTenon,
+  generateDefinitions,
+  identifier,
+  migrate,
+  migrationStatus,
+  rollback,
+  sql,
+} from '../src/index.js';
 import { withMigrationLock } from '../src/migrations/connection.js';
 import { qualified } from '../src/sql.js';
 import { recordMigrations } from './fixtures/record-migrations.js';
@@ -54,25 +62,32 @@ test('generation describes current migration checkpoints and upgrades preserve e
     const warnings: string[] = [];
     await generateDefinitions({ ...options, onWarning: (message) => warnings.push(message) });
     assert.equal(warnings.length, 1);
-    const db = tenon({ connection: pool });
+    const db = createTenon({ connection: pool });
     const target = qualified(options.namespace, 'Record');
     try {
       assert.deepEqual(
-        await db.sql<object>(`SELECT * FROM ${target} ORDER BY id`, [], { returns: 'many' }),
+        await db.query(sql`SELECT * FROM ${identifier(options.namespace, 'Record')} ORDER BY id`, {
+          returns: 'many',
+        }),
         [{ id: 1, name: 'existing' }],
       );
       assert.deepEqual(await migrationStatus(options), { applied: ['0001'], pending: ['0002'] });
       await migrate(options);
       assert.equal(
         (
-          await db.sql<never>(`INSERT INTO ${target} (name) VALUES ($1)`, ['new'], {
-            returns: 'native',
-          })
+          await db.query(
+            sql`INSERT INTO ${identifier(options.namespace, 'Record')} (name) VALUES (${'new'})`,
+            {
+              returns: 'native',
+            },
+          )
         ).rowCount,
         1,
       );
       assert.deepEqual(
-        await db.sql<object>(`SELECT * FROM ${target} ORDER BY id`, [], { returns: 'many' }),
+        await db.query(sql`SELECT * FROM ${identifier(options.namespace, 'Record')} ORDER BY id`, {
+          returns: 'many',
+        }),
         [
           { id: 1, name: 'existing', enabled: true },
           { id: 2, name: 'new', enabled: true },
@@ -80,7 +95,9 @@ test('generation describes current migration checkpoints and upgrades preserve e
       );
       assert.deepEqual(await rollback(options), ['0002']);
       assert.deepEqual(
-        await db.sql<object>(`SELECT * FROM ${target} ORDER BY id`, [], { returns: 'many' }),
+        await db.query(sql`SELECT * FROM ${identifier(options.namespace, 'Record')} ORDER BY id`, {
+          returns: 'many',
+        }),
         [
           { id: 1, name: 'existing' },
           { id: 2, name: 'new' },
@@ -88,14 +105,20 @@ test('generation describes current migration checkpoints and upgrades preserve e
       );
       assert.equal(
         (
-          await db.sql<never>(`INSERT INTO ${target} (name) VALUES ($1)`, ['after rollback'], {
-            returns: 'native',
-          })
+          await db.query(
+            sql`INSERT INTO ${identifier(options.namespace, 'Record')} (name) VALUES (${'after rollback'})`,
+            {
+              returns: 'native',
+            },
+          )
         ).rowCount,
         1,
       );
       assert.deepEqual(
-        await db.sql<object>(`SELECT * FROM ${target} WHERE id = $1`, [3], { returns: 'one' }),
+        await db.query(
+          sql`SELECT * FROM ${identifier(options.namespace, 'Record')} WHERE id = ${3}`,
+          { returns: 'oneOrNone' },
+        ),
         { id: 3, name: 'after rollback' },
       );
     } finally {

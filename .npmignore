@@ -2,7 +2,6 @@
 # development and local files out if that list is expanded later.
 src/
 test/
-docs/
 config/
 scripts/
 .test-dist/

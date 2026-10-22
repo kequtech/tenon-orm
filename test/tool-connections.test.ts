@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import { test, type TestContext } from 'node:test';
 import { Pool, type PoolClient } from 'pg';
 import { withMigrationLock } from '../src/migrations/connection.js';
 
 function mockClient(t: TestContext, query: (sql: string) => Promise<unknown>) {
   const release = t.mock.fn();
-  const client = { query, release } as unknown as PoolClient;
+  const client = Object.assign(new EventEmitter(), { query, release }) as unknown as PoolClient;
   return { client, release };
 }
 

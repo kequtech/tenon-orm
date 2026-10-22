@@ -1,7 +1,11 @@
-import { define } from '../../src/index.js';
+import { defineOperation, sql } from '../../src/index.js';
 
-// Ordinary imports compose a registry without loading unrelated SQL definitions.
-export const echo_values = define<
-  { label: string; enabled: boolean },
-  [label: string, enabled: boolean]
->('SELECT $1::text AS label, $2::boolean AS enabled', { returns: 'many' });
+// Import this definition directly; its parameter and result types travel with it.
+export const echo_values = defineOperation(
+  (label: string, enabled: boolean) =>
+    sql<{
+      label: string;
+      enabled: boolean;
+    }>`SELECT ${label}::text AS label, ${enabled}::boolean AS enabled`,
+  { returns: 'many' },
+);

@@ -131,3 +131,17 @@ test('the migration creation CLI needs no DATABASE_URL', async () => {
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test('migration SQL handles carriage-return comments and dollar signs inside identifiers', () => {
+  assert.throws(
+    () => validateMigrationSql('-- comment\rCOMMIT;', 'bad.sql'),
+    /transaction-control/,
+  );
+  assert.doesNotThrow(() =>
+    validateMigrationSql('CREATE TABLE item$tag$ (id integer);', 'valid.sql'),
+  );
+  assert.throws(
+    () => validateMigrationSql('SELECT item$tag$; COMMIT;', 'bad.sql'),
+    /transaction-control/,
+  );
+});

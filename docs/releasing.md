@@ -1,37 +1,20 @@
 # Release preparation
 
-Nothing in this document authorizes a public repository, push, registry upload,
-new repository, repository deletion or history rewrite. The source and package
-can be reviewed locally while `private: true` blocks npm publication.
+## Verify the release
 
-## Establish public source history
-
-The development repository used conversation checkpoints stored in custom Git
-refs. Removing capture configuration, session directories or refs does not
-establish that a hosting service has erased historical objects. Do not make
-that private repository public on the strength of working-tree cleanup alone.
-GitHub documents the remaining references and caches in its
-[history-removal guidance](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/removing-sensitive-data-from-a-repository).
-
-The recommended first public baseline is an audited snapshot of the current
-source, without `.git`, conversation captures, ignored files, dependencies or
-build outputs. Keep the old repository private for historical recovery. Extract
-the reviewed snapshot into an empty directory, initialize a new repository and
-inspect its complete file list before creating any remote or pushing.
-
-The owner has created a separate public `kequtech/tenon-orm` repository for the
-clean baseline and retained previous development history privately. Package
-metadata and README links already target the new repository. Never copy old refs
-or Git hooks into the new baseline, or mirror-push the development repository to
-the public one. Review the clean initial commit before pushing it.
-
-A Git source baseline is separate from Tenon's SQL `baseline capture` feature.
-No database baseline changes are needed for this repository cleanup.
-
-## Review and pack
-
-From a clean checkout with development dependencies and the dedicated test
-database available:
+1. Review the final source diff and package contents. Run `npm run check` against
+   the dedicated test database and inspect the PostgreSQL 16/18 CI results. A local
+   pass on 16 is not evidence that 18 passes.
+2. Install the tarball in a consumer and exercise migrations, generated
+   types, queries, and deployment from the installed package. The automated consumer
+   test already verifies exports, the CLI, both compiler versions, and production
+   imports without development typings.
+3. Confirm documentation links, license, and npm organization
+   access. Choose the release version and channel; update package metadata and the
+   lockfile together. Use a prerelease tag for a prerelease.
+4. If the development checkout uses `private: true`, remove it for the release. Inspect the final
+   archive again, then publish explicitly using the chosen publishing identity.
+   Use the configured publishing method.
 
 ```sh
 npm ci
@@ -40,36 +23,56 @@ npm pack --dry-run
 npm pack --pack-destination /path/to/review-directory
 ```
 
-`prepack` builds from clean output directories and marks the CLI executable.
-`files` in package metadata
-allows only compiled JavaScript and declarations; npm also includes README,
-LICENSE and package.json. `.npmignore` excludes development/configuration files,
-local environments, keys and conversation captures as an additional safeguard.
-Source maps are not emitted. The consumer test checks the actual tarball's file
-manifest, installed license, CLI executable, public exports and production
-runtime without development typings. No credentials belong in registry config
-committed to this repository.
+`prepack` builds clean outputs and marks the CLI executable. The package allowlist
+contains compiled JavaScript, declarations, and user documentation; npm also
+includes README, LICENSE, and package.json. No source maps, tests, credentials, or
+agent captures belong in the archive. `prepublishOnly` runs the complete suite,
+including its database preflight. Publishing an existing tarball is still a
+separate action; lifecycle hooks do not replace artifact review.
 
-Review the actual archive with `tar -tzf <package.tgz>` and install that archive
-in a consumer. Verify README examples against the final built package. Keep
-application-specific migrations and generated application files out of the npm
-package. Library tests/fixtures are source repository material only.
+## Verify deployment
 
-## Approve the release
+Use a disposable instance with the product's actual PostgreSQL major, connection
+proxy, and permissions to rehearse:
 
-Before the first npm release:
+- Applying migrations from empty and from the previous release, then starting the
+  packed application with only production dependencies.
+- Overlapping old/new application versions with compatible schema changes.
+- A failed migration, a disconnected transaction, and an interrupted deployment.
+  The suite covers live backend termination and simulated cleanup failures; it
+  does not establish recovery from every network or commit-acknowledgment failure.
+- Restoring a backup and verifying the application's data, not merely rerunning
+  migrations. Down files cannot recover discarded data.
 
-1. Approve the source repository and its visibility independently of npm.
-2. Verify the PostgreSQL 16/18 CI results and resolve known release blockers.
-3. Choose the version and release channel; update metadata and lockfile together.
-4. Confirm the npm `@kequtech` organization and publisher permissions.
-5. Remove `private: true` only for the approved release and inspect the final diff
-   and tarball again. `publishConfig` already selects the public npm registry and
-   public access. It does not publish anything by itself.
-6. Publish explicitly, selecting a prerelease tag when applicable. Prefer a
-   verified publishing identity; do not add a release workflow or credentials
-   before choosing the publishing method.
+Migration tools need direct connections or session pooling for their session
+advisory locks. Transaction-only migrations cannot create indexes concurrently;
+plan that maintenance separately. Treat baseline adoption as an assertion that
+the target already matches the captured checkpoint, not a schema comparison.
 
-`prepublishOnly` runs the complete check suite, including the dedicated database
-preflight. Publishing an already-reviewed tarball is a separate explicit action;
-lifecycle hooks are not a substitute for reviewing that artifact.
+There is no separate roadmap: release checks live here, behavior in the
+[reference](reference.md), and unresolved tradeoffs in [design decisions](design-decisions.md).
+
+## Local lifecycle and guard cost
+
+The installed consumer test exercises migrations, generation, direct operations,
+an additive upgrade with old/new projections, migration failure/repair, rollback,
+baseline adoption, and schema replay with a logical row snapshot and restored
+identity sequence. The separate connection tests exercise backend loss. This is
+not a physical backup/PITR rehearsal or a test of a hosted proxy and deployment
+runner; perform those in the first product's environment before launch.
+
+Run `npm run benchmark` against the dedicated test database for a reproducible
+sequential microbenchmark. On local PostgreSQL 16, 50 samples gave these medians:
+
+| Call                                | Local   | With simulated 5 ms per driver query |
+| ----------------------------------- | ------- | ------------------------------------ |
+| pg query                            | 0.26 ms | 5.49 ms                              |
+| Tenon query                         | 0.30 ms | 5.54 ms                              |
+| Tenon query with affectedRows       | 0.63 ms | 16.46 ms                             |
+| Transaction query                   | 0.23 ms | 5.45 ms                              |
+| Transaction query with affectedRows | 0.49 ms | 16.40 ms                             |
+
+These are observations, not performance guarantees. The latency simulation delays
+each driver call; it is not a real network test. Transaction figures exclude the
+outer BEGIN/COMMIT. Successful guarded calls send three commands instead of one.
+Use constraints where the expectation matters and measure the product workload.

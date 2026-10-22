@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
 import { Pool } from 'pg';
-import tenon, { generateDefinitions, migrate } from '../src/index.js';
+import { createTenon, generateDefinitions, identifier, migrate, sql } from '../src/index.js';
 import { qualified, quote } from '../src/sql.js';
 import {
   assertTestDatabase,
@@ -73,7 +73,7 @@ test('domains use verified base parsers while retaining ordinary row types and S
       import type { Buffer } from 'node:buffer';
       ${typeAssertions}
       type Expected = { number: number; optional: number | null; big: string; decimal: string;
-        flag: boolean; label: string; text: string; id: string; time: Date; bytes: Buffer;
+        flag: boolean; label: string; text: string; id: string; time: Date | number; bytes: Buffer;
         doc: unknown; payload: unknown; role: 'reader' | 'writer';
         ints: PgArray<number>; numbers: PgArray<number> | null };
       type Full = Assert<Equal<DomainValues, Expected>>;
@@ -81,17 +81,16 @@ test('domains use verified base parsers while retaining ordinary row types and S
       const input: DomainValues['number'] = 42;
     `,
       );
-      const db = tenon({ connection: pool });
+      const db = createTenon({ connection: pool });
       const table = qualified(options.namespace, 'DomainValues');
       try {
-        const row = await db.sql<Record<string, unknown>>(
-          `INSERT INTO ${table}
+        const row = await db.query(
+          sql<Record<string, unknown>>`INSERT INTO ${identifier(options.namespace, 'DomainValues')}
         (big, decimal, flag, text, id, time, bytes, doc, payload, role, ints, numbers)
         VALUES ('9007199254740993', 123.45678, true, 'text', '123e4567-e89b-42d3-a456-426614174000',
           '2026-01-01T00:00:00Z', decode('00ff', 'hex'), '{"nested":[1,null]}', 'null', 'reader',
           ARRAY[1,NULL,3], ARRAY[1.25::numeric,NULL]) RETURNING *`,
-          [],
-          { returns: 'requiredOne' },
+          { returns: 'one' },
         );
         assert.deepEqual(row, {
           number: 3,
@@ -111,21 +110,26 @@ test('domains use verified base parsers while retaining ordinary row types and S
           numbers: [1.25, null],
         });
         assert.deepEqual(
-          await db.sql(
-            `UPDATE ${table} SET optional = NULL, numbers = NULL RETURNING optional, numbers`,
-            [],
+          await db.query(
+            sql`UPDATE ${identifier(options.namespace, 'DomainValues')} SET optional = NULL, numbers = NULL RETURNING optional, numbers`,
             { returns: 'many' },
           ),
           [{ optional: null, numbers: null }],
         );
-        await assert.rejects(db.sql(`UPDATE ${table} SET number = 0`, []), {
-          code: '23514',
-          constraint: 'positive_check',
-        });
-        await assert.rejects(db.sql(`UPDATE ${table} SET number = 100`, []), {
-          code: '23514',
-          constraint: 'nested_check',
-        });
+        await assert.rejects(
+          db.query(sql`UPDATE ${identifier(options.namespace, 'DomainValues')} SET number = 0`),
+          {
+            code: '23514',
+            constraint: 'positive_check',
+          },
+        );
+        await assert.rejects(
+          db.query(sql`UPDATE ${identifier(options.namespace, 'DomainValues')} SET number = 100`),
+          {
+            code: '23514',
+            constraint: 'nested_check',
+          },
+        );
       } finally {
         await db.close();
       }

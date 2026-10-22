@@ -6,9 +6,11 @@ import { join, resolve } from 'node:path';
 import { test } from 'node:test';
 import { promisify } from 'node:util';
 
+import { testConnection } from './helpers/database.js';
+
 const run = promisify(execFile);
 
-test('the packed package preserves API contracts under the minimum and development TypeScript compilers', async () => {
+test('the packed package preserves API contracts under TypeScript 6 and 7', async () => {
   const temporary = await mkdtemp(join(tmpdir(), 'tenon-consumer-'));
   try {
     const packed = await run('npm', [
@@ -30,12 +32,21 @@ test('the packed package preserves API contracts under the minimum and developme
       'dist/index.js',
       'dist/index.d.ts',
       'dist/cli.js',
+      'docs/reference.md',
+      'docs/safeql.md',
+      'docs/adopting.md',
+      'docs/contributing.md',
+      'docs/design-decisions.md',
+      'docs/releasing.md',
     ]) {
       assert.ok(paths.includes(required), `Package is missing ${required}`);
     }
     for (const path of paths) {
       assert.ok(
         ['LICENSE', 'README.md', 'package.json'].includes(path) ||
+          /^docs\/(?:reference|safeql|adopting|contributing|design-decisions|releasing)\.md$/.test(
+            path,
+          ) ||
           /^dist\/(?:[\w-]+\/)*[\w-]+\.(?:js|d\.ts)$/.test(path),
         `Unexpected package content: ${path}`,
       );
@@ -52,7 +63,7 @@ test('the packed package preserves API contracts under the minimum and developme
       await readFile(resolve('node_modules/@types/pg/package.json'), 'utf8'),
     ) as { version: string };
     const minimum = JSON.parse(
-      await readFile(resolve('node_modules/typescript-minimum/package.json'), 'utf8'),
+      await readFile(resolve('node_modules/typescript/package.json'), 'utf8'),
     ) as { version: string };
     await writeFile(
       join(consumer, 'package.json'),
@@ -126,7 +137,7 @@ test('the packed package preserves API contracts under the minimum and developme
     );
     for (const compiler of [
       join(consumer, 'node_modules/typescript/bin/tsc'),
-      resolve('node_modules/typescript/bin/tsc'),
+      resolve('node_modules/typescript-next/bin/tsc'),
     ]) {
       try {
         await run(process.execPath, [compiler, '-p', config], { cwd: consumer });
@@ -136,6 +147,21 @@ test('the packed package preserves API contracts under the minimum and developme
           `Packed consumer failed with ${compiler}:\n${output.stdout ?? ''}${output.stderr ?? ''}`,
         );
       }
+    }
+    await writeFile(
+      join(consumer, 'lifecycle.mjs'),
+      await readFile(resolve('test/fixtures/lifecycle.mjs'), 'utf8'),
+    );
+    try {
+      await run(process.execPath, ['lifecycle.mjs'], {
+        cwd: consumer,
+        env: { ...process.env, TENON_TEST_DATABASE_URL: testConnection },
+      });
+    } catch (error) {
+      const result = error as { stdout?: string; stderr?: string };
+      assert.fail(`Installed lifecycle failed:
+${result.stdout ?? ''}
+${result.stderr ?? ''}`);
     }
     // Production JavaScript needs only the application-owned driver. Tenon's
     // typings must not turn the application's development typings into runtime
@@ -154,8 +180,12 @@ test('the packed package preserves API contracts under the minimum and developme
         `
       import assert from 'node:assert/strict';
       import { Pool } from 'pg';
-      import { createTenon, define } from '@kequtech/tenon-orm';
-      const db = createTenon({ connection: 'postgresql://unused', operations: { noop: define('SELECT 1') } });
+      import { createTenon, defineOperation } from '@kequtech/tenon-orm';
+      const api = await import('@kequtech/tenon-orm');
+      assert.equal('default' in api, false);
+      assert.equal('tenon' in api, false);
+      assert.equal('define' in api, false);
+      const db = createTenon({ connection: 'postgresql://unused' });
       await db.close();
       const pool = new Pool({ connectionString: 'postgresql://unused' });
       const shared = createTenon({ connection: pool });

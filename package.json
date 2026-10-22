@@ -32,7 +32,8 @@
   },
   "files": [
     "dist/**/*.js",
-    "dist/**/*.d.ts"
+    "dist/**/*.d.ts",
+    "docs/*.md"
   ],
   "engines": {
     "node": ">=24"
@@ -47,7 +48,8 @@
     "prepack": "npm run build",
     "prepublishOnly": "npm run check",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "benchmark": "npm run build && node scripts/benchmark.mjs"
   },
   "kequtech": {
     "source": "tenon-orm"
@@ -57,12 +59,15 @@
     "@types/pg": "^8.23.1",
     "pg": "^8.23.1",
     "prettier": "^3.9.10",
-    "typescript": "^7.0.2",
-    "typescript-minimum": "npm:typescript@5.7.2"
+    "typescript": "~6.0.2",
+    "typescript-next": "npm:typescript@^7.0.2",
+    "@ts-safeql/eslint-plugin": "^5.4.2",
+    "typescript-eslint": "^8.58.0",
+    "eslint": "^10.0.0"
   },
   "peerDependencies": {
     "pg": "^8.23.1",
-    "typescript": ">=5.7.2"
+    "typescript": ">=6"
   },
   "peerDependenciesMeta": {
     "typescript": {

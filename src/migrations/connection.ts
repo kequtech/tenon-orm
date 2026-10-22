@@ -1,6 +1,6 @@
 import type { PoolClient } from 'pg';
 import type { Connection } from '../connection.js';
-import { createPool } from '../connection.js';
+import { createPool, watchClient } from '../connection.js';
 import { validateName } from '../sql.js';
 
 export interface DatabaseToolOptions {
@@ -22,14 +22,17 @@ export async function withMigrationLock<T>(
   const lockKey = `tenon:migrations:${namespace}`;
   const errors: unknown[] = [];
   let client: PoolClient | undefined;
+  let connection: ReturnType<typeof watchClient> | undefined;
   let locked = false;
   let result!: T;
 
   try {
     client = await pool.connect();
+    connection = watchClient(client);
     await client.query(`SELECT pg_advisory_lock${suffix}(hashtextextended($1, 0))`, [lockKey]);
     locked = true;
     result = await work(client, namespace);
+    connection.check();
   } catch (error) {
     errors.push(error);
   } finally {
@@ -47,7 +50,11 @@ export async function withMigrationLock<T>(
         releaseError =
           error instanceof Error ? error : new Error('Tool connection cleanup failed.');
       }
-      client.release(releaseError);
+      try {
+        connection!.release(releaseError);
+      } catch (error) {
+        errors.push(error);
+      }
     }
     if (owned) {
       try {

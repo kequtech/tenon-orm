@@ -7,7 +7,15 @@ import { after, before, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { Pool } from 'pg';
-import tenon, { generateDefinitions, migrate, migrationStatus, rollback } from '../src/index.js';
+import {
+  createTenon,
+  generateDefinitions,
+  identifier,
+  migrate,
+  migrationStatus,
+  rollback,
+  sql,
+} from '../src/index.js';
 import { qualified, quote } from '../src/sql.js';
 import { recordMigrations } from './fixtures/record-migrations.js';
 import {
@@ -116,11 +124,11 @@ test('generated types preserve unusual SQL names, module-name collisions and dat
       `
       import type { Rows, Date as DateRow, 東京 } from './definitions.js';
       ${typeAssertions}
-      type Expected = { id: number; 'created at': globalThis.Date; 'nullable-value': string | null; '__proto__': string };
+      type Expected = { id: number; 'created at': globalThis.Date | number; 'nullable-value': string | null; '__proto__': string };
       type Matches = { [Name in keyof Rows]: Equal<Rows[Name], Expected> };
       type AllRows = Assert<Equal<Matches[keyof Rows], true>>;
       type UnicodeAlias = Assert<Equal<東京, Expected>>;
-      type DateAlias = Assert<Equal<DateRow['created at'], globalThis.Date>>;
+      type DateAlias = Assert<Equal<DateRow['created at'], globalThis.Date | number>>;
       type ExactName = Assert<Equal<Pick<Rows['user-details'], 'nullable-value'>, { 'nullable-value': string | null }>>;
       // @ts-expect-error SQL column names are preserved rather than converted
       type Renamed = Rows['user-details']['createdAt'];
@@ -224,20 +232,18 @@ test('generation includes ordinary tables and partitioned roots while skipping a
       assert.equal(await generateDefinitions({ ...options, onWarning: () => {} }), source);
       await pool.query(`DROP TABLE ${qualified(options.namespace, 'EventsTomorrow')}`);
       assert.equal(await generateDefinitions({ ...options, onWarning: () => {} }), source);
-      const db = tenon({ connection: pool });
+      const db = createTenon({ connection: pool });
       try {
-        await db.sql(
-          `INSERT INTO ${qualified(options.namespace, 'Events')} (id, tenant, label)
-        VALUES (1, 1, 'first'), (2, 2, NULL), (101, 1, NULL), (250, 1, NULL)`,
-          [],
+        await db.query(sql`INSERT INTO ${identifier(options.namespace, 'Events')} (id, tenant, label)
+        VALUES (1, 1, 'first'), (2, 2, NULL), (101, 1, NULL), (250, 1, NULL)`);
+        await db.query(
+          sql`INSERT INTO ${identifier(options.namespace, 'EventsRecentA')} (id, tenant) VALUES (3, 1)`,
         );
-        await db.sql(
-          `INSERT INTO ${qualified(options.namespace, 'EventsRecentA')} (id, tenant) VALUES (3, 1)`,
-          [],
-        );
-        const all = await db.sql<{ id: number; label: string | null }>(
-          `SELECT id, label FROM ${qualified(options.namespace, 'Events')} ORDER BY id`,
-          [],
+        const all = await db.query(
+          sql<{
+            id: number;
+            label: string | null;
+          }>`SELECT id, label FROM ${identifier(options.namespace, 'Events')} ORDER BY id`,
           { returns: 'many' },
         );
         assert.deepEqual(all, [
@@ -247,9 +253,11 @@ test('generation includes ordinary tables and partitioned roots while skipping a
           { id: 101, label: null },
           { id: 250, label: null },
         ]);
-        const leaf = await db.sql<{ id: number; label: string | null }>(
-          `SELECT id, label FROM ${qualified(options.namespace, 'EventsRecentA')} ORDER BY id`,
-          [],
+        const leaf = await db.query(
+          sql<{
+            id: number;
+            label: string | null;
+          }>`SELECT id, label FROM ${identifier(options.namespace, 'EventsRecentA')} ORDER BY id`,
           { returns: 'many' },
         );
         assert.deepEqual(leaf, [
@@ -257,9 +265,8 @@ test('generation includes ordinary tables and partitioned roots while skipping a
           { id: 3, label: 'local default' },
         ]);
         await assert.rejects(
-          db.sql(
-            `INSERT INTO ${qualified(options.namespace, 'Events')} (id, tenant, label) VALUES (4, 1, NULL)`,
-            [],
+          db.query(
+            sql`INSERT INTO ${identifier(options.namespace, 'Events')} (id, tenant, label) VALUES (4, 1, NULL)`,
           ),
           { code: '23502' },
         );
@@ -293,9 +300,10 @@ test('generation includes ordinary tables and partitioned roots while skipping a
         type Unchanged = Rows['EmptyEvents']['enabled'];
       `,
         );
-        const updated = await db.sql<{ enabled: boolean }>(
-          `SELECT enabled FROM ${qualified(options.namespace, 'EventsRecentA')} ORDER BY id`,
-          [],
+        const updated = await db.query(
+          sql<{
+            enabled: boolean;
+          }>`SELECT enabled FROM ${identifier(options.namespace, 'EventsRecentA')} ORDER BY id`,
           { returns: 'many' },
         );
         assert.deepEqual(updated, [{ enabled: true }, { enabled: true }]);
@@ -418,17 +426,18 @@ test('views always use authored types and do not block table generation', async 
       type Snapshot = Rows['RecordSnapshot'];
     `,
       );
-      const db = tenon({ connection: pool });
+      const db = createTenon({ connection: pool });
       try {
         type AuthoredView = { id: number; name: string; age: string };
-        const view = await db.sql<AuthoredView>(
-          `SELECT id, name, age::text AS age FROM ${qualified(options.namespace, 'RecordView')}`,
-          [],
+        const view = await db.query(
+          sql<AuthoredView>`SELECT id, name, age::text AS age FROM ${identifier(options.namespace, 'RecordView')}`,
         );
         assert.deepEqual(view.rows, [{ id: 1, name: 'example', age: '1 day' }]);
-        const snapshot = await db.sql<{ id: number; name: string }>(
-          `SELECT id, name FROM ${qualified(options.namespace, 'RecordSnapshot')}`,
-          [],
+        const snapshot = await db.query(
+          sql<{
+            id: number;
+            name: string;
+          }>`SELECT id, name FROM ${identifier(options.namespace, 'RecordSnapshot')}`,
         );
         assert.deepEqual(snapshot.rows, [{ id: 1, name: 'example' }]);
       } finally {

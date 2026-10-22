@@ -6,7 +6,6 @@ import { after, before, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { Pool } from 'pg';
-import {} from '../src/index.js';
 import { qualified } from '../src/sql.js';
 import { recordMigrations } from './fixtures/record-migrations.js';
 import {
@@ -102,5 +101,28 @@ test('CLI migration and generation remain separate; check mode catches stale fil
       run(process.execPath, [cli, 'generate', ...args, '--out', output], { env }),
     );
     assert.equal(await readFile(output, 'utf8'), withPartition);
+  });
+});
+
+test('flags for other commands reject before changing files or the database', async () => {
+  await project(recordMigrations, async (options) => {
+    const env = { ...process.env, DATABASE_URL: connection };
+    const common = ['--directory', options.directory, '--namespace', options.namespace];
+    for (const args of [
+      ['migrate', '--check'],
+      ['migrate', '--steps', '2'],
+      ['status', '--out', join(options.directory, 'unexpected.ts')],
+      ['baseline', 'adopt', '--schema', 'public'],
+      ['new', 'unexpected', '--check'],
+    ]) {
+      await assert.rejects(run(process.execPath, [cli, ...args, ...common], { env }));
+    }
+    const { rows } = await pool.query('SELECT 1 FROM pg_namespace WHERE nspname = $1', [
+      options.namespace,
+    ]);
+    assert.deepEqual(rows, []);
+    await assert.rejects(readFile(join(options.directory, '0002_unexpected.up.sql')), {
+      code: 'ENOENT',
+    });
   });
 });

@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { mkdir, open, readdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { TenonError } from '../errors.js';
+import { baselineHeader } from './baseline-sql.js';
 import { validateMigrationSql } from './sql.js';
 
 export interface SqlMigration {
@@ -21,7 +22,6 @@ export interface CreatedMigration {
   readonly downPath: string;
 }
 const migrationFilename = /^(\d+)_([A-Za-z0-9_-]+)\.(up|down)\.sql$/;
-export const baselineHeader = '-- Tenon baseline captured by pg_dump.\n';
 
 /** Serialize offline scaffolding and baseline capture in one directory. */
 export async function withMigrationCreationLock<T>(
@@ -117,8 +117,9 @@ export async function readMigrations(directory = 'migrations'): Promise<readonly
     if (!sql.trim()) {
       throw new TenonError(`Empty migration: ${file.name}`);
     }
-    // Trust native pg_dump SQL, including SQL-standard function bodies that the
-    // authored-migration transaction guard does not attempt to parse.
+    // The filename/header opts into native pg_dump SQL, including SQL-standard
+    // function bodies our guard cannot parse. This is an explicit trust convention,
+    // not proof of provenance: baseline SQL must be reviewed before execution.
     if (!(file.name === '0001_baseline.up.sql' && sql.startsWith(baselineHeader))) {
       validateMigrationSql(sql, file.name);
     }

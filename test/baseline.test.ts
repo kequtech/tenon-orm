@@ -199,21 +199,18 @@ test('capture failures preserve existing files and release the creation lock', a
 
 test('baseline CLI captures and adopts without replaying live data or exposing credentials', async () => {
   await project(async (options) => {
-    const args = [
-      '--directory',
-      options.directory,
-      '--namespace',
-      options.namespace,
-      '--schema',
-      options.namespace,
-    ];
+    const args = ['--directory', options.directory, '--namespace', options.namespace];
     const env = { ...process.env, DATABASE_URL: connection };
     const table = qualified(options.namespace, 'LiveRecord');
     await pool.query(`CREATE TABLE ${table} (id integer PRIMARY KEY, value text);
       INSERT INTO ${table} VALUES (1, 'existing data')`);
     const original = (await pool.query(`SELECT * FROM ${table}`)).rows;
 
-    await run(process.execPath, [cli, 'baseline', 'capture', ...args], { env });
+    await run(
+      process.execPath,
+      [cli, 'baseline', 'capture', ...args, '--schema', options.namespace],
+      { env },
+    );
     assert.deepEqual(await migrationStatus(options), { applied: [], pending: ['0001'] });
     assert.deepEqual((await pool.query(`SELECT * FROM ${table}`)).rows, original);
 
@@ -235,7 +232,7 @@ test('baseline CLI captures and adopts without replaying live data or exposing c
     );
     await rm(join(options.directory, '0001_baseline.up.sql'));
     await assert.rejects(
-      run(process.execPath, [cli, 'baseline', 'capture', ...args], {
+      run(process.execPath, [cli, 'baseline', 'capture', ...args, '--schema', options.namespace], {
         env: { ...env, DATABASE_URL: 'postgresql://postgres:secret_for_test@localhost:1/missing' },
       }),
       (error: unknown) => {
@@ -247,7 +244,7 @@ test('baseline CLI captures and adopts without replaying live data or exposing c
       },
     );
     await assert.rejects(
-      run(process.execPath, [cli, 'baseline', 'capture', ...args], {
+      run(process.execPath, [cli, 'baseline', 'capture', ...args, '--schema', options.namespace], {
         env: { ...env, PATH: options.directory },
       }),
       (error: unknown) => {

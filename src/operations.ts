@@ -1,125 +1,111 @@
 import type { QueryResult, QueryResultRow } from 'pg';
+import type { AffectedRowsConstraint } from './affected-rows.js';
+import { validateAffectedRows } from './affected-rows.js';
 import { TenonError } from './errors.js';
+import type { SqlQuery, UnknownRow } from './query.js';
 import { plainObject } from './validation.js';
 
-const definition = Symbol('Tenon operation');
-declare const operationTypes: unique symbol;
-
-export type OperationReturnMode = 'native' | 'many' | 'one' | 'requiredOne';
-
-/** Carries the derived output type and parameters in $1, $2, … order. */
-export interface OperationDefinition<
-  Output extends object | undefined = object | undefined,
-  Input extends readonly unknown[] = readonly unknown[],
-> {
-  readonly sql: string;
-  readonly returns: OperationReturnMode;
-  readonly [definition]: true;
-  readonly [operationTypes]?: { readonly output: Output; readonly input: Input };
-}
-
-export type OperationRegistry = Readonly<Record<string, OperationDefinition>>;
-export type EmptyOperations = Record<never, never>;
-type OperationInput<D> =
-  D extends OperationDefinition<object | undefined, infer Input> ? Input : never;
-type OperationOutput<D> =
-  D extends OperationDefinition<infer Output, readonly unknown[]> ? Output : never;
-
-export interface OperationClient<O extends OperationRegistry> {
-  run<K extends keyof O & string>(
-    name: K,
-    input: Readonly<OperationInput<O[NoInfer<K>]>>,
-  ): Promise<OperationOutput<O[K]>>;
-}
-
-export interface ResultOptions {
+export type OperationReturnMode = 'native' | 'many' | 'oneOrNone' | 'one';
+export interface OperationOptions {
   readonly returns?: OperationReturnMode;
+  readonly affectedRows?: AffectedRowsConstraint;
+  /** Optional diagnostic label. No SQL or input values are sent to observers. */
+  readonly label?: string;
+}
+export type OperationResult<
+  Row extends QueryResultRow,
+  Mode extends OperationReturnMode,
+> = Mode extends 'native'
+  ? QueryResult<Row>
+  : Mode extends 'many'
+    ? Row[]
+    : Mode extends 'oneOrNone'
+      ? Row | undefined
+      : Row;
+
+export interface OperationDefinition<
+  Input extends readonly unknown[] = readonly unknown[],
+  Row extends QueryResultRow = UnknownRow,
+  Mode extends OperationReturnMode = OperationReturnMode,
+> {
+  readonly build: (...input: Input) => SqlQuery<Row>;
+  readonly options: Readonly<OperationOptions & { returns: Mode }>;
+}
+const definitions = new WeakSet<object>();
+
+/** Input types come from the factory parameters; the query carries its row type. */
+export function defineOperation<Input extends readonly unknown[], Row extends QueryResultRow>(
+  build: (...input: Input) => SqlQuery<Row>,
+  options?: OperationOptions & { readonly returns?: 'native' },
+): OperationDefinition<Input, Row, 'native'>;
+export function defineOperation<
+  Input extends readonly unknown[],
+  Row extends QueryResultRow,
+  Mode extends OperationReturnMode,
+>(
+  build: (...input: Input) => SqlQuery<Row>,
+  options: OperationOptions & { readonly returns: Mode },
+): OperationDefinition<Input, Row, Mode>;
+export function defineOperation<Input extends readonly unknown[], Row extends QueryResultRow>(
+  build: (...input: Input) => SqlQuery<Row>,
+  options: OperationOptions | undefined,
+): OperationDefinition<Input, Row>;
+export function defineOperation<Input extends readonly unknown[], Row extends QueryResultRow>(
+  build: (...input: Input) => SqlQuery<Row>,
+  options?: OperationOptions,
+): OperationDefinition<Input, Row> {
+  if (typeof build !== 'function')
+    throw new TenonError('defineOperation requires a query factory.');
+  const config = validateOptions(options);
+  const result = Object.freeze({ build, options: config });
+  definitions.add(result);
+  return result;
 }
 
-/** Row describes one SQL record; returns determines its surrounding result shape. */
-// NoInfer keeps a registry's context from silently supplying omitted contracts.
-export function define<Row extends QueryResultRow = never, Input extends readonly unknown[] = []>(
-  sql: string,
-  options?: { readonly returns?: 'native' },
-): NoInfer<OperationDefinition<QueryResult<Row>, Input>>;
-export function define<Row extends QueryResultRow = never, Input extends readonly unknown[] = []>(
-  sql: string,
-  options: { readonly returns: 'many' },
-): NoInfer<OperationDefinition<Row[], Input>>;
-export function define<Row extends QueryResultRow = never, Input extends readonly unknown[] = []>(
-  sql: string,
-  options: { readonly returns: 'one' },
-): NoInfer<OperationDefinition<Row | undefined, Input>>;
-export function define<Row extends QueryResultRow = never, Input extends readonly unknown[] = []>(
-  sql: string,
-  options: { readonly returns: 'requiredOne' },
-): NoInfer<OperationDefinition<Row, Input>>;
-export function define(sql: string, options?: ResultOptions): OperationDefinition {
-  return createOperation(sql, options);
-}
-
-/** Shared runtime validation for inline SQL and registered definitions. */
-export function createOperation(sql: string, options?: ResultOptions): OperationDefinition {
-  if (typeof sql !== 'string' || !sql.trim()) {
-    throw new TenonError('Operation SQL must be a nonempty string.');
+export function assertOperation(value: unknown): void {
+  if (!value || typeof value !== 'object' || !definitions.has(value)) {
+    throw new TenonError('run() requires an operation created with defineOperation().');
   }
+}
+
+export function validateOptions(
+  options?: OperationOptions,
+): Readonly<OperationOptions & { returns: OperationReturnMode }> {
   const config = options === undefined ? {} : plainObject(options, 'Operation options');
   for (const key of Object.keys(config)) {
-    if (key !== 'returns') {
+    if (!['returns', 'affectedRows', 'label'].includes(key))
       throw new TenonError(`Unknown operation option: ${key}`);
-    }
   }
-  const returns = config.returns === undefined ? 'native' : config.returns;
+  const returns = config.returns ?? 'native';
   if (
-    returns !== 'many' &&
-    returns !== 'one' &&
-    returns !== 'requiredOne' &&
-    returns !== 'native'
+    config.returns === null ||
+    !['native', 'many', 'oneOrNone', 'one'].includes(returns as string)
   ) {
-    throw new TenonError('Operation returns must be native, many, one, or requiredOne.');
+    throw new TenonError('Operation returns must be native, many, oneOrNone, or one.');
   }
-  return Object.freeze({ sql, returns, [definition]: true as const });
+  const affectedRows = validateAffectedRows(config.affectedRows);
+  const label = config.label;
+  if (label !== undefined && (typeof label !== 'string' || !label.trim())) {
+    throw new TenonError('Operation label must be a nonempty string.');
+  }
+  return Object.freeze({
+    returns: returns as OperationReturnMode,
+    ...(affectedRows && { affectedRows }),
+    ...(typeof label === 'string' && { label }),
+  });
 }
 
 export function operationResult(
-  name: string,
-  operation: OperationDefinition,
-  result: QueryResult<Record<string, unknown>>,
+  options: OperationOptions,
+  result: QueryResult<UnknownRow>,
 ): object | undefined {
-  if (operation.returns === 'native') {
-    return result;
-  }
-  const rows = result.rows;
-  if (operation.returns === 'many') {
-    return rows;
-  }
-  const expected = operation.returns === 'one' ? 'at most one row' : 'exactly one row';
-  if (rows.length > 1 || (operation.returns === 'requiredOne' && rows.length === 0)) {
+  if (options.returns === 'native') return result;
+  if (options.returns === 'many') return result.rows;
+  const expected = options.returns === 'oneOrNone' ? 'at most one row' : 'exactly one row';
+  if (result.rows.length > 1 || (options.returns === 'one' && result.rows.length === 0)) {
     throw new TenonError(
-      `Operation ${name} expected ${expected}, but returned ${rows.length} rows.`,
+      `${options.label ?? 'Query'} expected ${expected}, but returned ${result.rows.length} rows.`,
     );
   }
-  return rows[0];
-}
-
-/** Capture registrations once; definitions can be imported from any module. */
-export function inspectOperations(
-  operations: OperationRegistry,
-): ReadonlyMap<string, OperationDefinition> {
-  const result = new Map<string, OperationDefinition>();
-  for (const [name, value] of Object.entries(plainObject(operations, 'operations'))) {
-    if (!name.trim() || name.includes('\0')) {
-      throw new TenonError('Operation names must be nonempty and contain no NUL character.');
-    }
-    if (
-      !value ||
-      typeof value !== 'object' ||
-      !(definition in value) ||
-      value[definition] !== true
-    ) {
-      throw new TenonError(`Operation ${name} must be created with define().`);
-    }
-    result.set(name, value as OperationDefinition);
-  }
-  return result;
+  return result.rows[0];
 }

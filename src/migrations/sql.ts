@@ -24,7 +24,7 @@ export function validateMigrationSql(sql: string, filename: string): void {
     const ch = sql[i]!;
     const next = sql[i + 1];
     if (lineComment) {
-      if (ch === '\n') {
+      if (ch === '\n' || ch === '\r') {
         lineComment = false;
         statement += ' ';
       }
@@ -74,7 +74,8 @@ export function validateMigrationSql(sql: string, filename: string): void {
       statement += ' quoted ';
       continue;
     }
-    if (ch === '$') {
+    // A dollar inside an unquoted identifier is not the start of a SQL body.
+    if (ch === '$' && (i === 0 || !/[A-Za-z_0-9$\u0080-\uFFFF]/.test(sql[i - 1]!))) {
       const match = /^\$(?:[A-Za-z_][A-Za-z_0-9]*)?\$/.exec(sql.slice(i));
       if (match) {
         quote = match[0];

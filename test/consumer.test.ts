@@ -14,18 +14,20 @@ const run = promisify(execFile);
 test('the packed package preserves API contracts under TypeScript 6 and 7', async () => {
   const temporary = await mkdtemp(join(tmpdir(), 'tenon-consumer-'));
   const pool = new Pool({ connectionString: testConnection });
+  // npm publish --dry-run passes this setting into its lifecycle tests. Exercise
+  // that environment while explicitly creating the local pack/install fixtures.
+  const npmEnv = { ...process.env, npm_config_dry_run: 'true' };
   try {
-    const packed = await run('npm', [
-      'pack',
-      '--ignore-scripts',
-      '--json',
-      '--pack-destination',
-      temporary,
-    ]);
+    const packed = await run(
+      'npm',
+      ['pack', '--dry-run=false', '--ignore-scripts', '--json', '--pack-destination', temporary],
+      { env: npmEnv },
+    );
     const manifest = (
       JSON.parse(packed.stdout) as { filename: string; files: { path: string }[] }[]
     )[0]!;
     const tarball = manifest.filename;
+    assert.ok((await stat(join(temporary, tarball))).size > 0, 'npm pack must create a tarball');
     const paths = manifest.files.map((file) => file.path);
     for (const required of [
       'LICENSE',
@@ -89,9 +91,11 @@ test('the packed package preserves API contracts under TypeScript 6 and 7', asyn
     // npm ci seeds the cache with these dependencies. No registry access, install
     // scripts or repository sources are available. The application supplies pg
     // and its own development typings, as required by the public declarations.
-    await run('npm', ['install', '--offline', '--ignore-scripts', '--no-audit', '--no-fund'], {
-      cwd: consumer,
-    });
+    await run(
+      'npm',
+      ['install', '--dry-run=false', '--offline', '--ignore-scripts', '--no-audit', '--no-fund'],
+      { cwd: consumer, env: npmEnv },
+    );
     const installed = join(consumer, 'node_modules/@kequtech/tenon-orm');
     const metadata = JSON.parse(await readFile(join(installed, 'package.json'), 'utf8')) as {
       name: string;
@@ -359,8 +363,16 @@ ${result.stderr ?? ''}`);
     );
     await run(
       'npm',
-      ['install', '--omit=dev', '--offline', '--ignore-scripts', '--no-audit', '--no-fund'],
-      { cwd: production },
+      [
+        'install',
+        '--dry-run=false',
+        '--omit=dev',
+        '--offline',
+        '--ignore-scripts',
+        '--no-audit',
+        '--no-fund',
+      ],
+      { cwd: production, env: npmEnv },
     );
     await cp(join(installed, 'dist'), join(production, 'second-tenon'), { recursive: true });
     for (const name of [

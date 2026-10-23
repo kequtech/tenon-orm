@@ -32,6 +32,14 @@ const run = promisify(execFile);
 
 /** Capture schema only. No source history writes, comparisons or ORM cleanup. */
 export async function captureBaseline(options: CaptureBaselineOptions): Promise<CapturedBaseline> {
+  if (typeof options.connection !== 'string' || !options.connection.trim()) {
+    throw new Error('Baseline capture requires an explicit nonempty connection string.');
+  }
+  if (options.schemas !== undefined && options.schemas.length === 0) {
+    throw new Error(
+      'Baseline schemas must not be empty; omit schemas to capture the whole database schema.',
+    );
+  }
   const namespace = options.namespace ?? 'public';
   quote(namespace);
   const schemas = options.schemas?.map((schema) => `--schema=${quote(schema)}`) ?? [];

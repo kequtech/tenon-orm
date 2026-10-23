@@ -1,23 +1,200 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { test } from 'node:test';
 import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
+import { ESLint, type Linter } from 'eslint';
+import { defineConfig } from 'eslint/config';
+import safeql from '@ts-safeql/eslint-plugin/config';
+import tseslint from 'typescript-eslint';
+import { createRequire } from 'node:module';
 import { Pool } from 'pg';
 import type { SqlQuery } from '../src/index.js';
 import { generateDefinitions, migrate } from '../src/index.js';
-import { tenonSafeql } from '../src/safeql.js';
+import { eslintPlugin, safeqlPlugin } from '../src/safeql.js';
 import { assertTestDatabase, migrationProject, testConnection } from './helpers/database.js';
 
 const run = promisify(execFile);
-test('the SafeQL preset requires an explicit database address', () => {
-  assert.throws(() => tenonSafeql({ databaseUrl: '' }), /explicit development\/test databaseUrl/);
-  // JavaScript callers must not accidentally select a default database either.
-  // @ts-expect-error no connection was supplied
-  assert.throws(() => tenonSafeql({}), /explicit development\/test databaseUrl/);
+test('the composition rule requires type-aware parsing', async () => {
+  const eslint = new ESLint({
+    overrideConfigFile: true,
+    overrideConfig: {
+      plugins: { tenon: eslintPlugin },
+      rules: { 'tenon/check-composition': 'error' },
+    },
+  });
+  await assert.rejects(
+    eslint.lintText('const value = 1;'),
+    /requires type-aware TypeScript parsing/,
+  );
+});
+
+test('SafeQL file scopes and tag targets select separate connections for inference and SQL errors', async () => {
+  const pool = new Pool({ connectionString: testConnection });
+  const directory = await mkdtemp(join(tmpdir(), 'tenon-safeql-connections-'));
+  try {
+    await assertTestDatabase(pool);
+    // Separate search paths exercise connection routing using the existing test database.
+    // Each search path exposes a different table, so accidentally reusing a connection fails.
+    await migrationProject(pool)(
+      {
+        '0001_users.up.sql':
+          'CREATE TABLE users_record (id integer NOT NULL); CREATE TABLE shared_record (id integer NOT NULL);',
+      },
+      async (users) => {
+        await migrate(users);
+        await migrationProject(pool)(
+          {
+            '0001_billing.up.sql':
+              'CREATE TABLE billing_record (id text NOT NULL); CREATE TABLE shared_record (id text NOT NULL);',
+          },
+          async (billing) => {
+            await migrate(billing);
+            await writeFile(join(directory, 'package.json'), '{"type":"module"}');
+            await writeFile(
+              join(directory, 'tsconfig.json'),
+              JSON.stringify({
+                compilerOptions: { strict: true, noEmit: true, module: 'NodeNext' },
+                include: ['**/*.ts'],
+              }),
+            );
+            const configs = defineConfig({
+              files: ['**/*.ts'],
+              languageOptions: {
+                parser: tseslint.parser,
+                parserOptions: { project: './tsconfig.json', tsconfigRootDir: directory },
+              },
+              plugins: { tenon: eslintPlugin },
+              rules: { 'tenon/check-composition': 'error' },
+            });
+            const connections = [];
+            const imports = `import { sql } from ${JSON.stringify(resolve('dist/index.js'))};\n`;
+            for (const [group, namespace, otherGroup] of [
+              ['users', users.namespace, 'billing'],
+              ['billing', billing.namespace, 'users'],
+            ] as const) {
+              const url = new URL(testConnection);
+              url.searchParams.set('options', `-c search_path=${namespace}`);
+              connections.push({
+                databaseUrl: url.href,
+                keepAlive: false,
+                plugins: [safeqlPlugin],
+                targets: [{ tag: `${group}Sql` }],
+                ...(group === 'billing' ? { overrides: { types: { numeric: 'number' } } } : {}),
+              });
+              configs.push(
+                ...defineConfig({
+                  files: [`${group}/**/*.ts`],
+                  // SafeQL's published config type still uses ESLint's legacy types.
+                  extends: [
+                    safeql.configs.connections({
+                      databaseUrl: url.href,
+                      keepAlive: false,
+                      plugins: [safeqlPlugin],
+                      targets: [{ tag: 'sql' }],
+                    }) as unknown as Linter.Config,
+                  ],
+                }),
+              );
+              await mkdir(join(directory, group));
+              await writeFile(
+                join(directory, group, 'valid.ts'),
+                imports + `export const query = sql\`SELECT id FROM ${group}_record\`;\n`,
+              );
+              await writeFile(
+                join(directory, group, 'wrong.ts'),
+                imports + `export const query = sql\`SELECT id FROM ${otherGroup}_record\`;\n`,
+              );
+              // Qualify same-named tables: SafeQL does not reliably use search_path for inference.
+              await writeFile(
+                join(directory, group, 'qualified.ts'),
+                imports +
+                  `export const query = sql\`SELECT id FROM "${namespace}".shared_record\`;\n`,
+              );
+            }
+            const eslint = new ESLint({
+              cwd: directory,
+              overrideConfigFile: true,
+              overrideConfig: configs,
+              fix: true,
+            });
+            const results = await eslint.lintFiles(['users/*.ts', 'billing/*.ts']);
+            assert.equal(results.length, 6);
+            for (const [group, type, wrongTable] of [
+              ['users', 'number', 'billing_record'],
+              ['billing', 'string', 'users_record'],
+            ] as const) {
+              for (const file of ['valid.ts', 'qualified.ts']) {
+                const valid = results.find(
+                  (result) => result.filePath === join(directory, group, file),
+                )!;
+                assert.deepEqual(valid.messages, []);
+                assert.match(valid.output!, new RegExp(`sql<\\{\\s*id:\\s*${type}\\s*\\}>`));
+              }
+              const wrong = results.find(
+                (result) => result.filePath === join(directory, group, 'wrong.ts'),
+              )!;
+              assert.equal(wrong.messages.length, 1);
+              assert.equal(wrong.messages[0]!.ruleId, '@ts-safeql/check-sql');
+              assert.match(wrong.messages[0]!.message, new RegExp(wrongTable));
+            }
+            // Normal connection targets also route queries in the same file. A separate
+            // non-Tenon target can use upstream SafeQL unchanged alongside the adapter.
+            await writeFile(
+              join(directory, 'routed.ts'),
+              `
+              import { sql as usersSql, sql as billingSql } from ${JSON.stringify(resolve('dist/index.js'))};
+              export const user = usersSql\`SELECT id FROM users_record\`;
+              export const bill = billingSql\`SELECT id FROM billing_record\`;
+              export const userAmount = usersSql\`SELECT 1::numeric AS amount\`;
+              export const billAmount = billingSql\`SELECT 1::numeric AS amount\`;
+              export const wrongUser = usersSql\`SELECT id FROM billing_record\`;
+              export const wrongBill = billingSql\`SELECT id FROM users_record\`;
+              function foreignSql<Row>(parts: TemplateStringsArray): Row { throw new Error('fixture'); }
+              export const foreign = foreignSql\`SELECT 1 AS id\`;
+            `,
+            );
+            const routed = new ESLint({
+              cwd: directory,
+              overrideConfigFile: true,
+              fix: true,
+              overrideConfig: [
+                configs[0]!,
+                safeql.configs.connections([
+                  ...connections,
+                  {
+                    databaseUrl: testConnection,
+                    keepAlive: false,
+                    targets: [{ tag: 'foreignSql' }],
+                  },
+                ]) as unknown as Linter.Config,
+              ],
+            });
+            const [result] = await routed.lintFiles(['routed.ts']);
+            assert.equal(result!.messages.length, 2, JSON.stringify(result!.messages));
+            assert.ok(
+              result!.messages.every((message) => message.ruleId === '@ts-safeql/check-sql'),
+            );
+            assert.ok(
+              result!.messages.some((message) => message.message.includes('billing_record')),
+            );
+            assert.ok(result!.messages.some((message) => message.message.includes('users_record')));
+            assert.match(result!.output!, /usersSql<\{\s*id:\s*number\s*\}>/);
+            assert.match(result!.output!, /billingSql<\{\s*id:\s*string\s*\}>/);
+            assert.match(result!.output!, /foreignSql</);
+            assert.match(result!.output!, /usersSql<\{\s*amount:\s*string\s*\}>/);
+            assert.match(result!.output!, /billingSql<\{\s*amount:\s*number\s*\}>/);
+          },
+        );
+      },
+    );
+  } finally {
+    await pool.end();
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test('SafeQL checks actual Tenon tags, query functions and schema changes and reports contract errors', async () => {
@@ -56,12 +233,24 @@ test('SafeQL checks actual Tenon tags, query functions and schema changes and re
             include: ['*.ts'],
           }),
         );
+        const require = createRequire(import.meta.url);
         const config = `
-        import { tenonSafeql } from ${JSON.stringify(pathToFileURL(resolve('dist/safeql.js')).href)};
-        export default tenonSafeql({
-          databaseUrl: process.env.TENON_TEST_DATABASE_URL,
+        import { defineConfig } from ${JSON.stringify(pathToFileURL(require.resolve('eslint/config')).href)};
+        import safeql from ${JSON.stringify(pathToFileURL(require.resolve('@ts-safeql/eslint-plugin/config')).href)};
+        import tseslint from ${JSON.stringify(pathToFileURL(require.resolve('typescript-eslint')).href)};
+        import { safeqlPlugin, eslintPlugin } from ${JSON.stringify(pathToFileURL(resolve('dist/safeql.js')).href)};
+        export default defineConfig({
           files: ['**/*.ts'],
-          overrides: { columns: { 'Account.tags': 'PgArray<string>' } },
+          languageOptions: { parser: tseslint.parser, parserOptions: { project: './tsconfig.json', tsconfigRootDir: import.meta.dirname } },
+          plugins: { tenon: eslintPlugin },
+          rules: { 'tenon/check-composition': 'error' },
+          extends: [safeql.configs.connections({
+            databaseUrl: process.env.TENON_TEST_DATABASE_URL,
+            keepAlive: false,
+            plugins: [safeqlPlugin],
+            targets: [{ tag: { regex: '.*' } }],
+            overrides: { columns: { 'Account.tags': 'PgArray<string>' } },
+          })],
         });
       `;
         await writeFile(join(directory, 'eslint.config.mjs'), config);
@@ -72,6 +261,7 @@ import { sql, type QueryClient } from ${JSON.stringify(resolve('dist/index.js'))
           join(directory, 'valid.ts'),
           imports +
             `
+        export const full = sql<Account>\`SELECT * FROM ${table}\`;
         export const byEmail = (client: QueryClient, { email }: { email: string }) => client.query(
           sql<AccountSummary>\`SELECT id,email FROM ${table} WHERE email = \${email}\`,
           {returns:'oneOrNone'});
@@ -211,10 +401,29 @@ import { sql, type QueryClient } from ${JSON.stringify(resolve('dist/index.js'))
         const unsupported = (await lint('unsupported.ts'))[0]!.messages;
         assert.equal(unsupported.length, 8, JSON.stringify(unsupported));
         assert.ok(
-          unsupported.every((m) =>
-            m.message.includes('Tenon cannot statically check this composition'),
+          unsupported.every(
+            (m) =>
+              m.ruleId === 'tenon/check-composition' &&
+              m.message.includes('Tenon cannot statically check this composition'),
           ),
         );
+        await writeFile(
+          join(directory, 'suppressed.ts'),
+          imports +
+            `
+          const fragments = [sql.fragment\`TRUE\`];
+          // eslint-disable-next-line tenon/check-composition -- Runtime variants have database tests.
+          const dynamic = sql<{id: number}>\`SELECT id FROM ${table} WHERE \${sql.join(fragments, 'AND')}\`;
+          // eslint-disable-next-line tenon/check-composition -- Deliberate escaped template tested at runtime.
+          const escaped = sql<{id: number}>\`SELECT id FROM ${table}\\n\`;
+          const checked = sql\`SELECT id FROM ${table}\`;
+        `,
+        );
+        assert.deepEqual((await lint('suppressed.ts', true))[0]!.messages, []);
+        const suppressedSource = await readFile(join(directory, 'suppressed.ts'), 'utf8');
+        assert.match(suppressedSource, /const checked = sql<\{\s*id: number\s*\}>/);
+        assert.ok(suppressedSource.includes('const dynamic = sql<{id: number}>'));
+
         await writeFile(
           join(directory, 'fragment.ts'),
           `
@@ -293,7 +502,13 @@ import { sql, type QueryClient } from ${JSON.stringify(resolve('dist/index.js'))
         );
         const escapeErrors = (await lint('escapes.ts', true))[0]!.messages;
         assert.equal(escapeErrors.length, 3, JSON.stringify(escapeErrors));
-        assert.ok(escapeErrors.every((error) => error.message.includes('JavaScript escapes')));
+        assert.ok(
+          escapeErrors.every(
+            (error) =>
+              error.ruleId === 'tenon/check-composition' &&
+              error.message.includes('JavaScript escapes'),
+          ),
+        );
 
         // Check inferred annotations against executed queries, not just expected lint output.
         await pool.query(

@@ -5,13 +5,15 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { test } from 'node:test';
 import { promisify } from 'node:util';
+import { Pool } from 'pg';
 
-import { testConnection } from './helpers/database.js';
+import { assertTestDatabase, migrationProject, testConnection } from './helpers/database.js';
 
 const run = promisify(execFile);
 
 test('the packed package preserves API contracts under TypeScript 6 and 7', async () => {
   const temporary = await mkdtemp(join(tmpdir(), 'tenon-consumer-'));
+  const pool = new Pool({ connectionString: testConnection });
   try {
     const packed = await run('npm', [
       'pack',
@@ -125,10 +127,21 @@ test('the packed package preserves API contracts under TypeScript 6 and 7', asyn
     await writeFile(
       join(consumer, 'safeql-config.ts'),
       `
-      import { tenonSafeql } from '@kequtech/tenon-orm/safeql';
-      const config = tenonSafeql({ databaseUrl: 'postgresql://unused', overrides: { types: { numeric: 'string' } } });
-      // @ts-expect-error a database address must be supplied explicitly
-      tenonSafeql({});
+      import { ESLint } from 'eslint';
+      import { defineConfig } from 'eslint/config';
+      import safeql from '@ts-safeql/eslint-plugin/config';
+      import { safeqlPlugin, eslintPlugin } from '@kequtech/tenon-orm/safeql';
+      // The descriptor fits SafeQL's public configuration, and the rule fits ESLint's.
+      safeql.configs.connections({
+        databaseUrl: 'postgresql://unused',
+        plugins: [safeqlPlugin],
+        targets: [{ tag: 'sql' }],
+        overrides: { types: { numeric: 'string' } },
+      });
+      new ESLint({ overrideConfig: defineConfig({
+        plugins: { tenon: eslintPlugin },
+        rules: { 'tenon/check-composition': 'error' },
+      }) });
     `,
     );
     const config = join(consumer, 'tsconfig.json');
@@ -176,44 +189,146 @@ test('the packed package preserves API contracts under TypeScript 6 and 7', asyn
         files: ['type-contracts.ts', 'copies.ts', 'safeql-config.ts', 'checked.ts'],
       }),
     );
-    await writeFile(
-      join(consumer, 'checked.ts'),
-      `
+    await assertTestDatabase(pool);
+    await migrationProject(pool)(
+      {
+        '0001_user.up.sql': `CREATE TABLE "User" (
+        id integer PRIMARY KEY, email text NOT NULL, nickname text,
+        "createdAt" timestamptz NOT NULL, balance numeric NOT NULL, settings jsonb NOT NULL
+      );`,
+      },
+      async (options) => {
+        const cli = join(consumer, 'node_modules/.bin/tenon');
+        const commandOptions = {
+          cwd: consumer,
+          env: { ...process.env, DATABASE_URL: testConnection },
+        };
+        await run(
+          cli,
+          ['migrate', '--directory', options.directory, '--namespace', options.namespace],
+          commandOptions,
+        );
+        const generateUser = () =>
+          run(
+            cli,
+            ['generate', '--namespace', options.namespace, '--out', 'generated-user.ts'],
+            commandOptions,
+          );
+        await generateUser();
+        await writeFile(
+          join(consumer, 'checked.ts'),
+          `
       import { sql, type Database } from '@kequtech/tenon-orm';
+      import type { User, Rows } from './generated-user.js';
       declare const db: Database;
       const predicate = sql.fragment\`1 = \${1}\`;
       const row = await db.query(sql\`SELECT 1 AS id WHERE \${predicate}\`, { returns: 'one' });
       const id: number = row.id;
+      const user = await db.query(sql<User>\`SELECT * FROM "${options.namespace}"."User"\`, { returns: 'one' });
+      const projection = sql<Pick<User, 'id' | 'email'>>\`SELECT id,email FROM "${options.namespace}"."User"\`;
+      type UserRow = Rows['User'];
+      const indexed = sql<UserRow>\`SELECT * FROM "${options.namespace}"."User"\`;
+      const nickname: string | null = user.nickname;
+      const created: Date | number = user.createdAt;
+      const balance: string = user.balance;
+      // @ts-expect-error JSON remains unknown even when imported through a generated type
+      user.settings.anything;
     `,
-    );
-    await writeFile(
-      join(consumer, 'eslint.config.mjs'),
-      `
-      import { tenonSafeql } from '@kequtech/tenon-orm/safeql';
-      export default tenonSafeql({ databaseUrl: process.env.TENON_TEST_DATABASE_URL, files: ['checked.ts'] });
-    `,
-    );
-    await run(join(consumer, 'node_modules/.bin/eslint'), ['checked.ts', '--fix'], {
-      cwd: consumer,
-      env: { ...process.env, TENON_TEST_DATABASE_URL: testConnection },
-    });
-    await run(join(consumer, 'node_modules/.bin/eslint'), ['checked.ts'], {
-      cwd: consumer,
-      env: { ...process.env, TENON_TEST_DATABASE_URL: testConnection },
-    });
-    for (const compiler of [
-      join(consumer, 'node_modules/typescript/bin/tsc'),
-      resolve('node_modules/typescript-next/bin/tsc'),
-    ]) {
-      try {
-        await run(process.execPath, [compiler, '-p', config], { cwd: consumer });
-      } catch (error) {
-        const output = error as Error & { stdout?: string; stderr?: string };
-        assert.fail(
-          `Packed consumer failed with ${compiler}:\n${output.stdout ?? ''}${output.stderr ?? ''}`,
         );
-      }
-    }
+        await writeFile(
+          join(consumer, 'eslint.config.mjs'),
+          `
+      import { defineConfig } from 'eslint/config';
+      import safeql from '@ts-safeql/eslint-plugin/config';
+      import tseslint from 'typescript-eslint';
+      import { safeqlPlugin, eslintPlugin } from '@kequtech/tenon-orm/safeql';
+      export default defineConfig({
+        files: ['checked.ts'],
+        languageOptions: { parser: tseslint.parser, parserOptions: { projectService: true } },
+        plugins: { tenon: eslintPlugin },
+        rules: { 'tenon/check-composition': 'error' },
+        extends: [safeql.configs.connections({
+          databaseUrl: process.env.TENON_TEST_DATABASE_URL,
+          keepAlive: false,
+          plugins: [safeqlPlugin],
+          targets: [{ tag: 'sql' }],
+        })],
+      });
+    `,
+        );
+        await run(join(consumer, 'node_modules/.bin/eslint'), ['checked.ts', '--fix'], {
+          cwd: consumer,
+          env: { ...process.env, TENON_TEST_DATABASE_URL: testConnection },
+        });
+        await run(join(consumer, 'node_modules/.bin/eslint'), ['checked.ts'], {
+          cwd: consumer,
+          env: { ...process.env, TENON_TEST_DATABASE_URL: testConnection },
+        });
+        const checkedSource = await readFile(join(consumer, 'checked.ts'), 'utf8');
+        assert.ok(checkedSource.includes('sql<User>'), 'Valid imported types must survive autofix');
+        assert.ok(checkedSource.includes("sql<Pick<User, 'id' | 'email'>>"));
+        assert.ok(checkedSource.includes('sql<UserRow>'));
+        const assertInvalidAnnotations = async (expectedCount: number) => {
+          await assert.rejects(
+            run(join(consumer, 'node_modules/.bin/eslint'), ['checked.ts', '--format', 'json'], {
+              cwd: consumer,
+              env: { ...process.env, TENON_TEST_DATABASE_URL: testConnection },
+            }),
+            (error: unknown) => {
+              const result = error as { stdout: string };
+              const [file] = JSON.parse(result.stdout) as {
+                messages: { ruleId: string; messageId: string }[];
+              }[];
+              assert.equal(file!.messages.length, expectedCount, result.stdout);
+              assert.ok(
+                file!.messages.every(
+                  (message) =>
+                    message.ruleId === '@ts-safeql/check-sql' &&
+                    message.messageId === 'incorrectTypeAnnotations',
+                ),
+              );
+              return true;
+            },
+          );
+        };
+        await writeFile(
+          join(consumer, 'checked.ts'),
+          checkedSource +
+            `
+      const incomplete = sql<User>\`SELECT id FROM "${options.namespace}"."User"\`;
+      const nullable = sql<Pick<User, 'id' | 'email'>>\`SELECT id,nickname AS email FROM "${options.namespace}"."User"\`;
+      const directIndex = sql<Rows['User']>\`SELECT * FROM "${options.namespace}"."User"\`;
+    `,
+        );
+        await assertInvalidAnnotations(3);
+        await writeFile(join(consumer, 'checked.ts'), checkedSource);
+        // Both full-row aliases become stale after adding a column; regeneration repairs them.
+        await pool.query(
+          'ALTER TABLE "' +
+            options.namespace +
+            '"."User" ADD COLUMN active boolean NOT NULL DEFAULT true',
+        );
+        await assertInvalidAnnotations(2);
+        await generateUser();
+        await run(join(consumer, 'node_modules/.bin/eslint'), ['checked.ts'], {
+          cwd: consumer,
+          env: { ...process.env, TENON_TEST_DATABASE_URL: testConnection },
+        });
+        for (const compiler of [
+          join(consumer, 'node_modules/typescript/bin/tsc'),
+          resolve('node_modules/typescript-next/bin/tsc'),
+        ]) {
+          try {
+            await run(process.execPath, [compiler, '-p', config], { cwd: consumer });
+          } catch (error) {
+            const output = error as Error & { stdout?: string; stderr?: string };
+            assert.fail(
+              `Packed consumer failed with ${compiler}:\n${output.stdout ?? ''}${output.stderr ?? ''}`,
+            );
+          }
+        }
+      },
+    );
     await writeFile(
       join(consumer, 'lifecycle.mjs'),
       await readFile(resolve('test/fixtures/lifecycle.mjs'), 'utf8'),
@@ -283,6 +398,7 @@ ${result.stderr ?? ''}`);
       { cwd: production },
     );
   } finally {
+    await pool.end();
     await rm(temporary, { recursive: true, force: true });
   }
 });

@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
+import { access, mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test, type TestContext } from 'node:test';
 import { Pool, type PoolClient } from 'pg';
-import { createTenon, type TenonOptions } from '../src/index.js';
+import { captureBaseline, createTenon, type TenonOptions } from '../src/index.js';
 import { withMigrationLock } from '../src/migrations/connection.js';
 
 function mockClient(t: TestContext, query: (sql: string) => Promise<unknown>) {
@@ -12,6 +15,26 @@ function mockClient(t: TestContext, query: (sql: string) => Promise<unknown>) {
 }
 
 const emptyResult = { rows: [], fields: [], rowCount: null, command: '', oid: 0 };
+
+test('baseline capture rejects implicit connections and empty schema selections before creating files', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'tenon-baseline-options-'));
+  const directory = join(root, 'migrations');
+  try {
+    for (const connection of [undefined, null, '', '  ', 42, false, {}]) {
+      await assert.rejects(
+        captureBaseline({ connection: connection as string, directory }),
+        /explicit nonempty connection string/,
+      );
+    }
+    await assert.rejects(
+      captureBaseline({ connection: 'postgresql://unused', directory, schemas: [] }),
+      /schemas must not be empty/,
+    );
+    await assert.rejects(access(directory), { code: 'ENOENT' });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test('runtime and tools reject missing or invalid connections before acquiring a client', async (t) => {
   const connect = t.mock.method(Pool.prototype, 'connect', async () => {

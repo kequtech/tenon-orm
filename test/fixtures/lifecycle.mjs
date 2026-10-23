@@ -6,7 +6,6 @@ import { join } from 'node:path';
 import { Pool } from 'pg';
 import {
   createTenon,
-  defineOperation,
   sql,
   identifier,
   AffectedRowsError,
@@ -40,20 +39,23 @@ try {
   ownsNamespace = true;
   assert.deepEqual(await migrate(options), ['0001']);
   const firstTypes = await generateDefinitions(options);
-  const createAccount = defineOperation(
-    (email) => sql`
+  const createAccount = (client, { email }) =>
+    client.query(
+      sql`
     INSERT INTO ${table} (email) VALUES (${email}) RETURNING id, email`,
-    { returns: 'one', affectedRows: { exact: 1 } },
-  );
-  const oldRead = defineOperation((id) => sql`SELECT id,email FROM ${table} WHERE id=${id}`, {
-    returns: 'one',
-  });
-  const account = await db.run(createAccount, ['first@example.test']);
-  const copiedLookup = second.defineOperation(
-    (id) => second.sql`SELECT id,email FROM ${identifier(namespace, 'Account')} WHERE id=${id}`,
-    { returns: 'one' },
-  );
-  assert.deepEqual(await db.run(copiedLookup, [account.id]), account);
+      { returns: 'one', affectedRows: { exact: 1 } },
+    );
+  const oldRead = (client, { id }) =>
+    client.query(sql`SELECT id,email FROM ${table} WHERE id=${id}`, {
+      returns: 'one',
+    });
+  const account = await createAccount(db, { email: 'first@example.test' });
+  const copiedLookup = (client, { id }) =>
+    client.query(
+      second.sql`SELECT id,email FROM ${identifier(namespace, 'Account')} WHERE id=${id}`,
+      { returns: 'one' },
+    );
+  assert.deepEqual(await copiedLookup(db, { id: account.id }), account);
   assert.deepEqual(
     await db.query(
       sql`SELECT id,email FROM ${second.identifier(namespace, 'Account')} WHERE id=${account.id}`,
@@ -74,20 +76,18 @@ try {
   assert.deepEqual(await migrate(options), ['0002']);
   assert.notEqual(await generateDefinitions(options), firstTypes);
   // Old and new application projections coexist after an additive migration.
-  assert.deepEqual(await db.run(oldRead, [account.id]), account);
-  const newRead = defineOperation(
-    (id) => sql`SELECT id,email,active FROM ${table} WHERE id=${id}`,
-    { returns: 'one' },
-  );
-  assert.equal((await db.run(newRead, [account.id])).active, true);
-  await db.run(createAccount, ['second@example.test']);
+  assert.deepEqual(await oldRead(db, { id: account.id }), account);
+  const newRead = (client, { id }) =>
+    client.query(sql`SELECT id,email,active FROM ${table} WHERE id=${id}`, { returns: 'one' });
+  assert.equal((await newRead(db, { id: account.id })).active, true);
+  await createAccount(db, { email: 'second@example.test' });
   await assert.rejects(
     db.query(sql`UPDATE ${table} SET active=false`, {
       affectedRows: { exact: 1 },
     }),
     (error) => error instanceof AffectedRowsError && error.actual === 2,
   );
-  assert.equal((await db.run(newRead, [account.id])).active, true);
+  assert.equal((await newRead(db, { id: account.id })).active, true);
 
   await writeFile(
     join(directory, '0003_failed.up.sql'),
@@ -107,7 +107,7 @@ try {
   );
   await migrate(options);
   await rollback(options);
-  assert.deepEqual(await db.run(oldRead, [account.id]), account);
+  assert.deepEqual(await oldRead(db, { id: account.id }), account);
 
   const baselineDirectory = join(directory, 'baseline');
   await captureBaseline({
@@ -121,7 +121,7 @@ try {
     await adoptBaseline({ connection: pool, namespace: history, directory: baselineDirectory }),
     ['0001'],
   );
-  assert.deepEqual(await db.run(oldRead, [account.id]), account);
+  assert.deepEqual(await oldRead(db, { id: account.id }), account);
   await pool.query('DROP SCHEMA "' + history + '" CASCADE');
 
   // Schema replay plus a logical row snapshot; not a physical backup/PITR test.
@@ -146,7 +146,9 @@ try {
     await db.query(sql`SELECT id,email,active FROM ${table} ORDER BY id`, { returns: 'many' }),
     snapshot,
   );
-  assert.ok((await db.run(createAccount, ['after-restore@example.test'])).id > snapshot.at(-1).id);
+  assert.ok(
+    (await createAccount(db, { email: 'after-restore@example.test' })).id > snapshot.at(-1).id,
+  );
   console.log('Installed lifecycle passed.');
 } finally {
   try {

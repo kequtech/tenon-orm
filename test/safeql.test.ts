@@ -7,6 +7,7 @@ import { test } from 'node:test';
 import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { Pool } from 'pg';
+import type { SqlQuery } from '../src/index.js';
 import { generateDefinitions, migrate } from '../src/index.js';
 import { tenonSafeql } from '../src/safeql.js';
 import { assertTestDatabase, migrationProject, testConnection } from './helpers/database.js';
@@ -19,7 +20,7 @@ test('the SafeQL preset requires an explicit database address', () => {
   assert.throws(() => tenonSafeql({}), /explicit development\/test databaseUrl/);
 });
 
-test('SafeQL checks actual Tenon tags, factories and schema changes and reports contract errors', async () => {
+test('SafeQL checks actual Tenon tags, query functions and schema changes and reports contract errors', async () => {
   const pool = new Pool({ connectionString: testConnection });
   const directory = await mkdtemp(join(tmpdir(), 'tenon-safeql-'));
   try {
@@ -66,19 +67,19 @@ test('SafeQL checks actual Tenon tags, factories and schema changes and reports 
         await writeFile(join(directory, 'eslint.config.mjs'), config);
         const imports = `import type { Account, PgArray } from './generated-schema.js';
 type AccountSummary = Pick<Account, 'id' | 'email'>;
-import { sql, defineOperation } from ${JSON.stringify(resolve('dist/index.js'))};\n`;
+import { sql, type QueryClient } from ${JSON.stringify(resolve('dist/index.js'))};\n`;
         await writeFile(
           join(directory, 'valid.ts'),
           imports +
             `
-        export const byEmail = defineOperation((email: string) =>
+        export const byEmail = (client: QueryClient, { email }: { email: string }) => client.query(
           sql<AccountSummary>\`SELECT id,email FROM ${table} WHERE email = \${email}\`,
           {returns:'oneOrNone'});
-        export const joined = defineOperation((id: number) =>
+        export const joined = (client: QueryClient, { id }: { id: number }) => client.query(
           sql<{id:number;body:string|null}>\`SELECT a.id,n.body FROM ${table} a LEFT JOIN ${note} n ON n.account_id=a.id WHERE a.id=\${id}\`);
         export const summary = sql<{count:string;total:string|null}>\`SELECT count(*) AS count, sum(amount) AS total FROM ${table}\`;
         export const values = sql<{kind:'person'|'company';amount:string;payload:unknown;created:Date|number;tags:PgArray<string>}>\`SELECT kind,amount,payload,created,tags FROM ${table}\`;
-        export const change = defineOperation((email: string, id: number) =>
+        export const change = (client: QueryClient, { email, id }: { email: string; id: number }) => client.query(
           sql<{id:number}>\`UPDATE ${table} SET email=\${email} WHERE id=\${id} RETURNING id\`,
           {returns:'one',affectedRows:{exact:1}});
       `,
@@ -90,11 +91,11 @@ import { sql, defineOperation } from ${JSON.stringify(resolve('dist/index.js'))}
         const column = sql<{id:number}>\`SELECT missing FROM ${table}\`;
         const projection = sql<{id:string}>\`SELECT id FROM ${table}\`;
         const wrong = true;
-        const parameter = sql<{id:number}>\`SELECT id FROM ${table} WHERE id = \${wrong}\`;
+        const parameter = sql<{id:number}>\`SELECT id FROM ${table} WHERE id = \${wrong}::boolean\`;
         const nullable = sql<{id:number;body:string}>\`SELECT a.id,n.body FROM ${table} a LEFT JOIN ${note} n ON n.account_id=a.id\`;
         const fragmentColumn = sql.fragment\`missing = \${1}\`;
         const badFragmentColumn = sql<{id:number}>\`SELECT id FROM ${table} WHERE \${fragmentColumn}\`;
-        const badType = sql.fragment\`id = \${true}\`;
+        const badType = sql.fragment\`id = \${true}::boolean\`;
         const badFragmentType = sql<{id:number}>\`SELECT id FROM ${table} WHERE \${badType}\`;
       `,
         );
@@ -145,7 +146,7 @@ import { sql, defineOperation } from ${JSON.stringify(resolve('dist/index.js'))}
             const values = await db.query(sql\`SELECT tags, payload, created, amount FROM ${table}\`, { returns: 'one' });
             const predicate = sql.fragment\`email = \${email}\`;
             const nested = sql.fragment\`(\${predicate})\`;
-            const composed = await db.query(sql\`SELECT id FROM ${table} WHERE \${sql.join([nested, sql.fragment\`id > \${0}\`], sql.fragment\` AND \`)}\`, { returns: 'many' });
+            const composed = await db.query(sql\`SELECT id FROM ${table} WHERE \${sql.join([nested, sql.fragment\`id > \${0}\`], 'AND')}\`, { returns: 'many' });
             const composedId: number = composed[0]!.id;
             const primitive = sql.fragment\`id = ANY(\${[1, 2]}::int[]) AND \${true}::boolean AND \${null}::text IS NULL AND \${1n}::bigint > 0\`;
             const primitiveRows = await db.query(sql\`SELECT id FROM ${table} WHERE \${primitive}\`, { returns: 'many' });
@@ -192,21 +193,23 @@ import { sql, defineOperation } from ${JSON.stringify(resolve('dist/index.js'))}
             `
           const fragments = [sql.fragment\`id = \${1}\`];
           fragments.push(sql.fragment\`missing = \${2}\`);
-          const dynamic = sql<{id:number}>\`SELECT id FROM ${table} WHERE \${sql.join(fragments, sql.fragment\` AND \`)}\`;
+          const dynamic = sql<{id:number}>\`SELECT id FROM ${table} WHERE \${sql.join(fragments, 'AND')}\`;
           let mutable = sql.fragment\`id = \${1}\`;
           const reassigned = sql<{id:number}>\`SELECT id FROM ${table} WHERE \${mutable}\`;
           const conditional = sql<{id:number}>\`SELECT id FROM ${table} WHERE \${Math.random() ? sql.fragment\`TRUE\` : sql.fragment\`FALSE\`}\`;
-          const object = sql.fragment\`payload = \${{ arbitrary: 1 }}\`;
-          const unknownMapping = sql<{id:number}>\`SELECT id FROM ${table} WHERE \${object}\`;
           const build = () => sql.fragment\`TRUE\`;
           const factory = sql<{id:number}>\`SELECT id FROM ${table} WHERE \${build()}\`;
           import { identifier } from ${JSON.stringify(resolve('dist/index.js'))};
           declare const tableName: string;
           const dynamicName = sql<{id:number}>\`SELECT id FROM \${identifier(tableName)}\`;
+          declare const separator: 'AND';
+          const dynamicSeparator = sql\`SELECT id FROM ${table} WHERE \${sql.join([sql.fragment\`TRUE\`], separator)}\`;
+          const invalidSeparator = sql\`SELECT id FROM ${table} WHERE \${sql.join([sql.fragment\`TRUE\`], 'UNION')}\`;
+          const oldSeparator = sql\`SELECT id FROM ${table} WHERE \${sql.join([sql.fragment\`TRUE\`], sql.fragment\` AND \`)}\`;
         `,
         );
         const unsupported = (await lint('unsupported.ts'))[0]!.messages;
-        assert.equal(unsupported.length, 6, JSON.stringify(unsupported));
+        assert.equal(unsupported.length, 8, JSON.stringify(unsupported));
         assert.ok(
           unsupported.every((m) =>
             m.message.includes('Tenon cannot statically check this composition'),
@@ -233,6 +236,168 @@ import { sql, defineOperation } from ${JSON.stringify(resolve('dist/index.js'))}
         );
         assert.equal((await lint('aliased.ts'))[0]!.messages.length, 2);
         assert.deepEqual((await lint('aliased.ts', true))[0]!.messages, []);
+        await writeFile(
+          join(directory, 'local-aliases.ts'),
+          imports +
+            `
+          import * as tenon from ${JSON.stringify(resolve('dist/index.js'))};
+          const query = sql;
+          const tags = { sql };
+          const { sql: destructured } = tenon;
+          let mutableTag: typeof sql = query;
+          const a = query\`SELECT missing FROM ${table}\`;
+          const b = tags.sql\`SELECT missing FROM ${table}\`;
+          const c = destructured\`SELECT missing FROM ${table}\`;
+          const d = mutableTag\`SELECT missing FROM ${table}\`;
+          const predicate = query.fragment\`missing = \${1}\`;
+          const e = query\`SELECT id FROM ${table} WHERE \${predicate}\`;
+          // Similar syntax from another library must not be checked as Tenon SQL.
+          const other = { sql: (parts: TemplateStringsArray) => parts.join('') };
+          const ignored = other.sql\`SELECT missing FROM ${table}\`;
+        `,
+        );
+        const aliasErrors = (await lint('local-aliases.ts'))[0]!.messages;
+        assert.equal(aliasErrors.length, 5, JSON.stringify(aliasErrors));
+        assert.ok(aliasErrors.every((error) => error.message.includes('missing')));
+
+        await writeFile(
+          join(directory, 'invalid-identifiers.ts'),
+          imports +
+            `
+          import { identifier } from ${JSON.stringify(resolve('dist/index.js'))};
+          const a = sql\`SELECT 1 FROM \${identifier('')}\`;
+          const b = sql\`SELECT 1 FROM \${identifier('bad\\0name')}\`;
+          const c = sql\`SELECT 1 FROM \${identifier('${'é'.repeat(32)}')}\`;
+          const d = sql\`SELECT missing FROM ${table}\`;
+        `,
+        );
+        const identifierErrors = (await lint('invalid-identifiers.ts'))[0]!.messages;
+        assert.equal(identifierErrors.length, 4, JSON.stringify(identifierErrors));
+        assert.equal(
+          identifierErrors.filter((error) => error.message.includes('1–63 UTF-8 bytes')).length,
+          3,
+        );
+        assert.ok(identifierErrors.some((error) => error.message.includes('missing')));
+
+        // These escapes change the executed SQL, including whether a UNION is a comment.
+        await writeFile(
+          join(directory, 'escapes.ts'),
+          imports +
+            [
+              "export const quote = sql`SELECT '1\\'::int AS v --' AS v`;",
+              "export const newline = sql`SELECT 1 AS v -- note\\n UNION ALL SELECT 'x'::text AS v`;",
+              "export const tail = sql`SELECT ${1}::int AS v -- note\\n UNION ALL SELECT 'x'::text AS v`;",
+              'const unrelated = (parts: TemplateStringsArray) => parts[0];',
+              'const ignored = unrelated`escaped\\ntext`;',
+            ].join('\n'),
+        );
+        const escapeErrors = (await lint('escapes.ts', true))[0]!.messages;
+        assert.equal(escapeErrors.length, 3, JSON.stringify(escapeErrors));
+        assert.ok(escapeErrors.every((error) => error.message.includes('JavaScript escapes')));
+
+        // Check inferred annotations against executed queries, not just expected lint output.
+        await pool.query(
+          `INSERT INTO ${table} VALUES (1, 'reader@example.test', 'person', 1, '{}', now(), '{}')`,
+        );
+        await writeFile(
+          join(directory, 'runtime.ts'),
+          imports +
+            `
+          import type { SqlQuery } from ${JSON.stringify(resolve('dist/index.js'))};
+          const value = sql.fragment\`\${1.5}\`;
+          const cast = sql.fragment\`\${1.5}::float8\`;
+          function enumQueries(kind: 'person' | 'company') {
+            const condition = sql.fragment\`kind = \${kind}\`;
+            return {
+              direct: sql\`SELECT id FROM ${table} WHERE kind = \${kind}\`,
+              fragment: sql\`SELECT id FROM ${table} WHERE \${condition}\`,
+            };
+          }
+          function nullable(v: number | null) {
+            const value = sql.fragment\`\${v}::int\`;
+            return sql\`SELECT \${value} AS v\`;
+          }
+          const object = sql.fragment\`\${{ answer: 42 }}::jsonb\`;
+          const escaped = sql.fragment\`SELECT '1\\'::int AS v --' AS v\`;
+          const separator = 'OR' as const;
+          const choice = sql.join([sql.fragment\`id = \${1}\`, sql.fragment\`id = \${2}\`], separator);
+          const predicate = sql.join([sql.fragment\`(\${choice})\`, sql.fragment\`kind = \${'person'}\`], 'AND');
+          export const queries = {
+            bareDirect: sql\`SELECT \${1.5} AS v\`,
+            bareFragment: sql\`SELECT \${value} AS v\`,
+            castDirect: sql\`SELECT \${1.5}::float8 AS v\`,
+            castFragment: sql\`SELECT \${cast} AS v\`,
+            nullable: nullable(null),
+            json: sql\`SELECT \${object} AS v\`,
+            escapedFragment: sql\`\${escaped}\`,
+            boundString: sql\`SELECT \${"a'b\\nc"}::text AS v\`,
+            literalNewline: sql\`SELECT 1 AS v -- note
+              UNION ALL SELECT 2 AS v\`,
+            joined: sql\`SELECT \${sql.join([sql.fragment\`id\`, sql.fragment\`email\`], ',')} FROM ${table} WHERE \${predicate}\`,
+            ...enumQueries('person'),
+          };
+          const bare: SqlQuery<{v: string | null}> = queries.bareFragment;
+          const bareDirect: typeof bare = queries.bareDirect;
+          const casted: SqlQuery<{v: number | null}> = queries.castFragment;
+          const castDirect: typeof casted = queries.castDirect;
+          const nullableResult: typeof casted = queries.nullable;
+          const enumResult: SqlQuery<{id: number}> = queries.fragment;
+          const enumDirect: typeof enumResult = queries.direct;
+          const escapedResult: SqlQuery<{v: number}> = queries.escapedFragment;
+          const joinedResult: SqlQuery<{id: number; email: string}> = queries.joined;
+          // Value conversion is a runtime concern; this valid SQL has an invalid input.
+          export const badInput = sql\`SELECT id FROM ${table} WHERE id = \${true}\`;
+        `,
+        );
+        assert.deepEqual((await lint('runtime.ts', true))[0]!.messages, []);
+        await writeFile(
+          join(directory, 'tsconfig.runtime.json'),
+          JSON.stringify({
+            extends: './tsconfig.json',
+            compilerOptions: { noEmit: false, outDir: './compiled' },
+            include: ['runtime.ts', 'escapes.ts', 'generated-schema.ts'],
+          }),
+        );
+        await run(
+          process.execPath,
+          [resolve('node_modules/typescript/bin/tsc'), '-p', 'tsconfig.runtime.json'],
+          { cwd: directory },
+        );
+        const runtime = (await import(
+          pathToFileURL(join(directory, 'compiled/runtime.js')).href
+        )) as {
+          queries: Record<string, SqlQuery>;
+          badInput: SqlQuery;
+        };
+        const rows: Record<string, unknown> = {};
+        for (const [name, query] of Object.entries(runtime.queries)) {
+          rows[name] = (await pool.query(query.text, [...query.values])).rows;
+        }
+        assert.deepEqual(rows, {
+          bareDirect: [{ v: '1.5' }],
+          bareFragment: [{ v: '1.5' }],
+          castDirect: [{ v: 1.5 }],
+          castFragment: [{ v: 1.5 }],
+          nullable: [{ v: null }],
+          json: [{ v: { answer: 42 } }],
+          escapedFragment: [{ v: 1 }],
+          boundString: [{ v: "a'b\nc" }],
+          literalNewline: [{ v: 1 }, { v: 2 }],
+          joined: [{ id: 1, email: 'reader@example.test' }],
+          direct: [{ id: 1 }],
+          fragment: [{ id: 1 }],
+        });
+        await assert.rejects(pool.query(runtime.badInput.text, [...runtime.badInput.values]), {
+          code: '22P02',
+        });
+        const escapes = (await import(
+          pathToFileURL(join(directory, 'compiled/escapes.js')).href
+        )) as Record<'quote' | 'newline' | 'tail', SqlQuery>;
+        assert.equal(escapes.quote.text, "SELECT '1'::int AS v --' AS v");
+        assert.deepEqual((await pool.query(escapes.quote.text)).rows, [{ v: 1 }]);
+        for (const query of [escapes.newline, escapes.tail]) {
+          await assert.rejects(pool.query(query.text, [...query.values]), { code: '42804' });
+        }
         await pool.query(`ALTER TABLE ${table} RENAME COLUMN email TO address`);
         assert.ok((await lint('valid.ts'))[0]!.messages.some((m) => /email/.test(m.message)));
       },

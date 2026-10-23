@@ -1,16 +1,10 @@
+import type { QueryClient } from '../src/index.js';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { after, before, beforeEach, test } from 'node:test';
 import { Pool } from 'pg';
-import type { OperationOptions, Transaction } from '../src/index.js';
-import {
-  AffectedRowsError,
-  createTenon,
-  defineOperation,
-  identifier,
-  sql,
-  unsafeSql,
-} from '../src/index.js';
+import type { QueryOptions, Transaction } from '../src/index.js';
+import { AffectedRowsError, createTenon, identifier, sql, unsafeSql } from '../src/index.js';
 import { qualified, quote } from '../src/sql.js';
 import { assertTestDatabase, testConnection } from './helpers/database.js';
 
@@ -50,13 +44,13 @@ const rows = (client: Transaction = db) =>
   );
 
 test('max permits zero or one match and rolls back an overbroad UPDATE without RETURNING', async () => {
-  const update = defineOperation(
-    (id: number) =>
+  const update = (client: QueryClient, { id }: { id: number }) =>
+    client.query(
       sql`UPDATE ${identifier(namespace, 'items')} SET value = value + 1 WHERE id = ${id}`,
-    { affectedRows: { max: 1 } },
-  );
-  assert.equal((await db.run(update, [-1])).rowCount, 0);
-  assert.equal((await db.run(update, [1])).rowCount, 1);
+      { affectedRows: { max: 1 } },
+    );
+  assert.equal((await update(db, { id: -1 })).rowCount, 0);
+  assert.equal((await update(db, { id: 1 })).rowCount, 1);
   await assert.rejects(
     db.query(sql`UPDATE ${identifier(namespace, 'items')} SET value = value + 10`, {
       affectedRows: { max: 1 },
@@ -77,13 +71,11 @@ test('max permits zero or one match and rolls back an overbroad UPDATE without R
 });
 
 test('exact enforces zero, one and multiple matches independently of result mode', async () => {
-  const remove = defineOperation(
-    (id: number) => sql`DELETE FROM ${identifier(namespace, 'items')} WHERE id = ${id}`,
-    {
+  const remove = (client: QueryClient, { id }: { id: number }) =>
+    client.query(sql`DELETE FROM ${identifier(namespace, 'items')} WHERE id = ${id}`, {
       affectedRows: { exact: 1 },
-    },
-  );
-  await assert.rejects(db.run(remove, [-1]), /exactly 1 affected rows.*reported 0/);
+    });
+  await assert.rejects(remove(db, { id: -1 }), /exactly 1 affected rows.*reported 0/);
   await assert.rejects(
     db.query(sql`DELETE FROM ${identifier(namespace, 'items')}`, {
       returns: 'many',
@@ -123,7 +115,7 @@ test('exact enforces zero, one and multiple matches independently of result mode
     }),
     /at most 0 affected rows/,
   );
-  assert.equal((await db.run(remove, [1])).rowCount, 1);
+  assert.equal((await remove(db, { id: 1 })).rowCount, 1);
 });
 
 test('guarded INSERT and MERGE roll back rejected writes', async () => {
@@ -184,19 +176,19 @@ test('caught constraint and SQL errors recover locally while surrounding writes 
 });
 
 test('result cardinality validation happens inside the guarded rollback boundary', async () => {
-  const invalid = defineOperation(
-    () =>
+  const invalid = (client: QueryClient) =>
+    client.query(
       sql<{
         id: number;
       }>`INSERT INTO ${identifier(namespace, 'items')} (id) VALUES (3), (4) RETURNING id`,
-    {
-      returns: 'one',
-      affectedRows: { max: 2 },
-    },
-  );
-  await assert.rejects(db.run(invalid, []), /returned 2 rows/);
+      {
+        returns: 'one',
+        affectedRows: { max: 2 },
+      },
+    );
+  await assert.rejects(invalid(db), /returned 2 rows/);
   await db.transaction(async (tx) => {
-    await assert.rejects(tx.run(invalid, []), /returned 2 rows/);
+    await assert.rejects(invalid(tx), /returned 2 rows/);
     await tx.query(sql`INSERT INTO ${identifier(namespace, 'items')} (id) VALUES (5)`);
   });
   assert.deepEqual(
@@ -269,10 +261,6 @@ test('the constraint checks only the final command count, not other CTE writes',
 });
 
 test('constraint options are validated before execution and captured immutably', async () => {
-  const uncheckedDefine = defineOperation as (
-    build: () => ReturnType<typeof sql>,
-    options: unknown,
-  ) => unknown;
   const uncheckedSql = db.query as (query: unknown, options: unknown) => Promise<unknown>;
   for (const affectedRows of [
     null,
@@ -290,24 +278,14 @@ test('constraint options are validated before execution and captured immutably',
     { max: '1' },
     { exact: undefined },
   ]) {
-    assert.throws(
-      () =>
-        uncheckedDefine(() => sql`DELETE FROM ${identifier(namespace, 'items')}`, { affectedRows }),
-      /affectedRows/,
-    );
     await assert.rejects(
       uncheckedSql(sql`DELETE FROM ${identifier(namespace, 'items')}`, { affectedRows }),
       /affectedRows/,
     );
   }
-  const options = { affectedRows: { max: 1 } } satisfies OperationOptions;
-  const operation = defineOperation(
-    () => sql`DELETE FROM ${identifier(namespace, 'items')}`,
-    options,
-  );
-  Object.assign(options.affectedRows!, { max: 100 });
-  assert.ok(Object.isFrozen(operation.options.affectedRows));
-  assert.deepEqual(operation.options.affectedRows, { max: 1 });
-  await assert.rejects(db.run(operation, []), /reported 2/);
+  const options = { affectedRows: { max: 1 } } satisfies QueryOptions;
+  const pending = db.query(sql`DELETE FROM ${identifier(namespace, 'items')}`, options);
+  Object.assign(options.affectedRows, { max: 100 });
+  await assert.rejects(pending, /reported 2/);
   assert.equal((await rows()).length, 2);
 });

@@ -1,19 +1,20 @@
 import type {
   Database,
-  OperationOptions,
+  QueryClient,
+  QueryOptions,
   QueryResult,
   SqlQuery,
   UnknownRow,
 } from '../src/index.js';
-import { defineOperation, identifier, sql, unsafeSql } from '../src/index.js';
+import { identifier, sql, unsafeSql } from '../src/index.js';
 import type { User } from './fixtures/generated-schema.js';
-import { echo_values } from './fixtures/operations.js';
+import { echoValues } from './fixtures/queries.js';
 
 type Equal<A, B> =
   (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
 type Assert<T extends true> = T;
 
-async function contracts(db: Database, options?: OperationOptions) {
+async function contracts(db: Database, options?: QueryOptions) {
   type Summary = Pick<User, 'id' | 'email'>;
   const query = sql<Summary>`SELECT id, email FROM public."User" WHERE id = ${42}`;
   const many = await db.query(query, { returns: 'many' });
@@ -53,36 +54,27 @@ async function contracts(db: Database, options?: OperationOptions) {
   await db.query(query, { first: true });
   // @ts-expect-error a non-native generic cannot replace a runtime mode
   await db.query<Summary, 'one'>(query);
-  // @ts-expect-error definition modes also require their runtime option
-  defineOperation<[], Summary, 'one'>(() => query);
   // Runtime-selected options cannot promise a particular return shape.
   const dynamic = await db.query(query, options);
-  const dynamicOperation = await db.run(
-    defineOperation(() => query, options),
-    [],
-  );
   type DynamicResult = QueryResult<Summary> | Summary[] | Summary | undefined;
-  const dynamicTypes: [
-    Assert<Equal<typeof dynamic, DynamicResult>>,
-    Assert<Equal<typeof dynamicOperation, DynamicResult>>,
-  ] = [true, true];
-  void dynamicTypes;
+  const dynamicType: Assert<Equal<typeof dynamic, DynamicResult>> = true;
+  void dynamicType;
 
-  const byEmail = defineOperation(
-    (email: string, active: boolean) =>
+  const byEmail = (client: QueryClient, { email, active }: { email: string; active: boolean }) =>
+    client.query(
       sql<Summary>`SELECT id, email FROM public."User" WHERE email = ${email} AND active = ${active}`,
-    { returns: 'oneOrNone' },
-  );
-  const all = defineOperation(() => sql<Summary>`SELECT id, email FROM public."User"`, {
-    returns: 'many',
-  });
-  const remove = defineOperation((id: number) => sql`DELETE FROM public."User" WHERE id = ${id}`, {
-    affectedRows: { exact: 1 },
-  });
-  const found = await db.run(byEmail, ['a', true]);
-  const echoed = await db.run(echo_values, ['label', true] as const);
-  const every = await db.run(all, []);
-  const removed = await db.run(remove, [1]);
+      { returns: 'oneOrNone' },
+    );
+  const all = (client: QueryClient) =>
+    client.query(sql<Summary>`SELECT id, email FROM public."User"`, {
+      returns: 'many',
+    });
+  const remove = (client: QueryClient, { id }: { id: number }) =>
+    client.query(sql`DELETE FROM public."User" WHERE id = ${id}`, { affectedRows: { exact: 1 } });
+  const found = await byEmail(db, { email: 'a', active: true });
+  const echoed = await echoValues(db, { label: 'label', enabled: true });
+  const every = await all(db);
+  const removed = await remove(db, { id: 1 });
   const types: [
     Assert<Equal<typeof found, Summary | undefined>>,
     Assert<Equal<typeof echoed, { label: string; enabled: boolean }[]>>,
@@ -90,24 +82,12 @@ async function contracts(db: Database, options?: OperationOptions) {
     Assert<Equal<typeof removed, QueryResult<UnknownRow>>>,
   ] = [true, true, true, true];
   void types;
-  // @ts-expect-error input order follows factory parameters
-  await db.run(byEmail, [true, 'a']);
-  // @ts-expect-error missing inputs are rejected
-  await db.run(byEmail, ['a']);
-  // @ts-expect-error extra inputs are rejected
-  await db.run(all, [1]);
-  // @ts-expect-error zero-input operations require []
-  await db.run(all);
-  // @ts-expect-error definitions are references, not names
-  await db.run('byEmail', ['a', true]);
-  // @ts-expect-error factory must return a query
-  defineOperation((email: string) => email);
-  // @ts-expect-error asynchronous factories are not supported
-  defineOperation(async () => query);
-  // @ts-expect-error operation options cannot be overridden at the call site
-  await db.run(remove, [1], { affectedRows: { max: 99 } });
+  // @ts-expect-error query functions preserve their named input contract
+  await byEmail(db, { email: true, active: 'a' });
+  // @ts-expect-error required fields cannot be omitted
+  await byEmail(db, { email: 'a' });
   // @ts-expect-error bounds are mutually exclusive
-  defineOperation(() => query, { affectedRows: { max: 1, exact: 1 } });
+  await db.query(query, { affectedRows: { max: 1, exact: 1 } });
   // @ts-expect-error bounds must be numbers
   await db.query(query, { affectedRows: { max: '1' } });
   // @ts-expect-error a bound is required
@@ -127,17 +107,22 @@ async function contracts(db: Database, options?: OperationOptions) {
   sql.fragment<Summary>`id = 1`;
   // @ts-expect-error fragments are not executable
   await db.query(predicate);
-  // @ts-expect-error separators cannot be raw strings
+  sql.join([predicate], 'AND');
+  sql.join([predicate], 'OR');
+  sql.join([predicate], ',');
+  // @ts-expect-error separators must be one of the supported strings
   sql.join([predicate], ' AND ');
+  // @ts-expect-error fragment separators are no longer supported
+  sql.join([predicate], sql.fragment` AND `);
   // @ts-expect-error a query's row type does not describe a fragment or enclosing SELECT
-  sql.join([query], sql.fragment`, `);
+  sql.join([query], ',');
   // @ts-expect-error unsafe SQL still requires an explicit array
   unsafeSql('SELECT 1');
   const contextual = sql`SELECT id FROM public."User"` satisfies SqlQuery<UnknownRow>;
   const context: Assert<Equal<typeof contextual, SqlQuery<UnknownRow>>> = true;
   void context;
   await db.transaction(async (tx) => {
-    const row = await tx.run(byEmail, ['a', true]);
+    const row = await byEmail(tx, { email: 'a', active: true });
     const same: Assert<Equal<typeof row, Summary | undefined>> = true;
     void same;
     await tx.query(query, { returns: 'one' });

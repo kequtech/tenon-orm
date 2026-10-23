@@ -1,11 +1,12 @@
 # Tenon ORM
 
-A PostgreSQL ORM built around SQL, with typed operations, migrations, and generated
-TypeScript types. Designed for straightforward use by developers and coding agents.
+A PostgreSQL ORM built around SQL, with typed queries, migrations, and generated
+TypeScript types. Designed for coding agents and the developers working with them.
 
-Write ordinary SQL with bound parameters. Compose queries with explicit fragments,
-choose the returned-row contract, and use transactions or affected-row checks for
-writes. Your application owns the `pg` driver, connection configuration, and validation.
+Write PostgreSQL queries directly. Tenon binds input values, lets you choose how
+results are returned, and provides transactions and optional affected-row checks.
+Reusable queries are ordinary functions. Your application controls the `pg` driver,
+connection configuration, and validation.
 
 ```sh
 npm install @kequtech/tenon-orm pg
@@ -33,44 +34,45 @@ const user = await db.query(
 await db.close();
 ```
 
-The example assumes the table exists. Applications should reuse their database
-instance and close it at shutdown. Tenon also provides SQL migration files and a
-CLI to generate TypeScript row types from the database.
+The example assumes the table exists. Reuse a database instance for each database connection and close owned pools at shutdown. Use `returns: 'many'` for an array, `'one'` when a row must
+exist, or omit the option for the driver's full result.
 
-## Query result checking
+Tenon also provides:
 
-A TypeScript annotation describes a query's result; it does not verify the SQL.
-For development-time verification and annotation generation, configure the optional
-SafeQL preset. This requires a development/test database at the intended schema
-checkpoint and an application-owned ESLint configuration:
+- Transactions and affected-row limits that roll back rejected writes.
+- SQL migration files and a CLI to apply, inspect, and roll back migrations.
+- TypeScript table row types generated from your database.
+- SQL fragments for sharing query parts or assembling variable conditions.
 
-```sh
-npm install --save-dev typescript@~6.0.2 @types/node@^24 @types/pg eslint@^10 typescript-eslint@^8 @ts-safeql/eslint-plugin@^5.4.2
-```
+Joins, relationships, aggregates, and upserts use ordinary PostgreSQL SQL. Tenon
+does not introduce model classes or automatically load related records.
 
-```js
-// eslint.config.mjs
-import { tenonSafeql } from '@kequtech/tenon-orm/safeql';
+## Checking query results
 
-export default tenonSafeql({
-  databaseUrl: process.env.DATABASE_URL,
-  tsconfigRootDir: import.meta.dirname,
-});
-```
+The type in `sql<{ id: number; email: string }>` describes what you expect back.
+TypeScript alone cannot verify that your SQL actually selects those columns.
 
-Run `npx eslint "src/**/*.ts" --fix` to generate or repair annotations, then review
-the changes. Run without `--fix` in CI to check without changing files. The preset
-supports static fragment composition and reports runtime-built SQL it cannot check.
-Runtime imports do not load SafeQL or ESLint. Custom pg parsers and array mappings
-may need overrides; see the human guide for the full setup and limits.
+For that, Tenon provides an optional integration with [SafeQL](https://safeql.dev/).
+SafeQL checks SQL against your development database and can write or repair the
+result annotation. ESLint runs the check during development and CI; it is not part
+of query execution.
+
+Tenon's `tenonSafeql` export configures SafeQL with a Tenon-specific adapter. The
+adapter recognizes Tenon queries, resolves constant fragments, and preserves their
+runtime parameter behavior; SafeQL performs the database analysis and annotation
+fixes. The configuration also supplies type mappings for `pg`. Add it to your
+application's existing ESLint setup. See [SQL checking setup](docs/reference.md#sql-checking-with-safeql)
+for installation and configuration.
+
+Checking complements typed inputs and database tests. It does not validate request
+values or arbitrary JSON, and runtime-built query variants need their own tests.
 
 ## Documentation
 
-- **[Human guide](docs/human-guide.md)** — setup, queries, composition, result typing,
-  transactions, and schema changes with explanations.
-- **[Agent guide](docs/agent-guide.md)** — concise API contracts, implementation
-  conventions, and verification workflow.
-- **[Adoption guide](docs/adoption-guide.md)** — move an existing application from another ORM.
+- **[Human guide](docs/human-guide.md)** — learn the workflow through practical examples.
+- **[Agent guide](docs/agent-guide.md)** — self-contained setup, API contracts, and implementation conventions.
+- **[Reference](docs/reference.md)** — complete options, SQL checking setup, type mappings, and limitations.
+- **[Adoption guide](docs/adoption-guide.md)** — replace an existing ORM and, if needed, transfer migration ownership.
 
 The complete `docs/` folder ships with the npm package. Maintainer instructions are
 in [CONTRIBUTING.md](https://github.com/kequtech/tenon-orm/blob/main/CONTRIBUTING.md),

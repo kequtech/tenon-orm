@@ -2,7 +2,8 @@
 
 Use Node.js 24+, npm, PostgreSQL 16+, and a compatible `pg_dump` on PATH. Keep the
 committed lockfile. The public usage documentation is [human-guide.md](docs/human-guide.md),
-[agent-guide.md](docs/agent-guide.md), and [adoption-guide.md](docs/adoption-guide.md).
+[agent-guide.md](docs/agent-guide.md), [reference.md](docs/reference.md), and
+[adoption-guide.md](docs/adoption-guide.md).
 
 ```sh
 npm ci
@@ -32,8 +33,10 @@ packs and installs the actual npm artifact, compiles its API with TypeScript 6
 and 7, exercises application upgrades/adoption/recovery, and checks production
 imports in a fresh production-only installation. It uses npm's offline cache,
 populated by `npm ci`. SafeQL tests use TypeScript 6 for its linting toolchain. They exercise the public
-preset, annotation generation and repair, static fragments, and explicit rejection
-of unsupported dynamic composition. Packed consumers also load and run the preset;
+preset, annotation generation and repair, static fragments, aliases, and explicit
+rejection of unsupported dynamic composition. Generated result annotations are
+also compiled and compared with actual PostgreSQL results. The checker preserves
+runtime parameter placeholders; PostgreSQL owns parameter type inference. Packed consumers also load and run the preset;
 production imports run without linting dependencies.
 
 Test observable behavior and compiler contracts. Keep regression cases focused
@@ -55,7 +58,8 @@ a fresh namespace; do not edit an application's applied history.
 ## Source and release
 
 Public exports are in `src/index.ts`. Runtime execution lives in `client.ts`,
-`connection.ts`, and `transaction.ts`. Generation and migrations each have their
+`connection.ts`, and `transaction.ts`. Query options and result modes live in
+`query-options.ts`; reusable application queries are ordinary functions. Generation and migrations each have their
 own directory for catalog/SQL/file handling. The optional `safeql` export owns ESLint
 configuration; `src/safeql/` contains its conservative composition resolver. Keep
 that tooling out of the runtime entry point. `query.ts` keeps fragment text and

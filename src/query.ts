@@ -1,5 +1,5 @@
 import type { QueryResultRow } from 'pg';
-import { quote } from './sql.js';
+import { joinSeparator, quote } from './sql.js';
 
 // Shared symbols let separately installed copies exchange queries and identifiers.
 const queryTag = Symbol.for('@kequtech/tenon-orm/query');
@@ -90,14 +90,14 @@ function fragment(strings: TemplateStringsArray, ...values: readonly unknown[]):
   return Object.freeze({ __tenonFragment: true as const, [fragmentTag]: parts });
 }
 
-function join(fragments: readonly SqlFragment[], separator: SqlFragment): SqlFragment {
+function join(fragments: readonly SqlFragment[], separator: 'AND' | 'OR' | ','): SqlFragment {
   if (!Array.isArray(fragments) || !fragments.length) {
     throw new Error('sql.join requires at least one fragment; handle an empty list explicitly.');
   }
-  const between = fragmentParts(separator);
+  const between = joinSeparator(separator);
   const parts: Part[] = [];
   for (const [i, item] of fragments.entries()) {
-    if (i) parts.push(...between);
+    if (i) parts.push(between);
     parts.push(...fragmentParts(item));
   }
   return Object.freeze({ __tenonFragment: true as const, [fragmentTag]: Object.freeze(parts) });

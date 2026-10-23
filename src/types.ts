@@ -1,33 +1,20 @@
 import type { QueryResult, QueryResultRow } from 'pg';
-import type {
-  OperationDefinition,
-  OperationOptions,
-  OperationResult,
-  OperationReturnMode,
-} from './operations.js';
+import type { QueryOptions, QueryOutput, QueryReturnMode } from './query-options.js';
 import type { SqlQuery } from './query.js';
 
 export interface QueryClient {
   query<Row extends QueryResultRow>(
     query: SqlQuery<Row>,
-    options?: OperationOptions & { readonly returns?: 'native' },
+    options?: QueryOptions & { readonly returns?: 'native' },
   ): NoInfer<Promise<QueryResult<Row>>>;
-  query<Row extends QueryResultRow, Mode extends OperationReturnMode>(
+  query<Row extends QueryResultRow, Mode extends QueryReturnMode>(
     query: SqlQuery<Row>,
-    options: OperationOptions & { readonly returns: Mode },
-  ): NoInfer<Promise<OperationResult<Row, Mode>>>;
+    options: QueryOptions & { readonly returns: Mode },
+  ): NoInfer<Promise<QueryOutput<Row, Mode>>>;
   query<Row extends QueryResultRow>(
     query: SqlQuery<Row>,
-    options: OperationOptions | undefined,
-  ): NoInfer<Promise<OperationResult<Row, OperationReturnMode>>>;
-  run<
-    Input extends readonly unknown[],
-    Row extends QueryResultRow,
-    Mode extends OperationReturnMode,
-  >(
-    operation: OperationDefinition<Input, Row, Mode>,
-    input: NoInfer<Readonly<Input>>,
-  ): NoInfer<Promise<OperationResult<Row, Mode>>>;
+    options: QueryOptions | undefined,
+  ): NoInfer<Promise<QueryOutput<Row, QueryReturnMode>>>;
 }
 export type Transaction = QueryClient;
 export type Database = Transaction & {
@@ -36,7 +23,7 @@ export type Database = Transaction & {
   close(): Promise<void>;
 };
 
-/** One completed public query/run call, including rollback/commit time for guarded calls. */
+/** One completed public query call, including rollback/commit time for guarded calls. */
 export interface QueryEvent {
   readonly label?: string;
   readonly durationMs: number;

@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import ts from 'typescript';
-import { quote } from '../sql.js';
+import { joinSeparator, quote } from '../sql.js';
 
 export class CompositionError extends Error {
   override readonly name = 'TenonCompositionError';
@@ -12,7 +12,7 @@ export class CompositionError extends Error {
   }
 }
 
-/** Match resolved exports, including import aliases, without claiming another library's sql tag. */
+/** Recognize Tenon's declarations without claiming another library's SQL tags. */
 const tenonModules = new Map<string, boolean>();
 
 function isTenonModule(filename: string): boolean {
@@ -41,16 +41,20 @@ function isTenonModule(filename: string): boolean {
 }
 
 export function isExport(node: ts.Node, checker: ts.TypeChecker, name: string): boolean {
-  let symbol = checker.getSymbolAtLocation(node);
-  if (symbol && symbol.flags & ts.SymbolFlags.Alias) symbol = checker.getAliasedSymbol(symbol);
-  return (
-    symbol?.getName() === name &&
-    Boolean(
-      symbol.declarations?.some((declaration) =>
-        isTenonModule(declaration.getSourceFile().fileName),
-      ),
-    )
-  );
+  // Call signatures retain their declaration through local aliases, object properties,
+  // and typeof annotations. Symbol names alone only recognize direct imports.
+  return checker
+    .getTypeAtLocation(node)
+    .getCallSignatures()
+    .some((signature) => {
+      const declaration = signature.declaration;
+      return (
+        declaration &&
+        ts.isFunctionDeclaration(declaration) &&
+        declaration.name?.text === (name === 'sql' ? 'createQuery' : name) &&
+        isTenonModule(declaration.getSourceFile().fileName)
+      );
+    });
 }
 
 function unwrap(node: ts.Node): ts.Node {
@@ -87,26 +91,19 @@ export function isFragment(type: ts.Type): boolean {
     : type.getProperty('__tenonFragment') !== undefined;
 }
 
-function parameterType(type: ts.Type, checker: ts.TypeChecker): string | undefined {
-  if (type.isUnion()) {
-    const types = type.types.filter(
-      (part) => !(part.flags & (ts.TypeFlags.Null | ts.TypeFlags.Undefined)),
-    );
-    const mapped = types.map((part) => parameterType(part, checker));
-    return mapped.length && mapped.every((part) => part !== undefined && part === mapped[0])
-      ? mapped[0]
-      : undefined;
+/** Follow actual const initializers, never assume a literal type proves a runtime value. */
+function literalString(node: ts.Node, checker: ts.TypeChecker): string | undefined {
+  let value = unwrap(node);
+  const seen = new Set<ts.Node>();
+  while (ts.isIdentifier(value) && !seen.has(value)) {
+    seen.add(value);
+    const next = initializer(value, checker);
+    if (!next) break;
+    value = unwrap(next);
   }
-  if (type.flags & ts.TypeFlags.StringLike) return 'text';
-  if (type.flags & ts.TypeFlags.NumberLike) return 'int';
-  if (type.flags & ts.TypeFlags.BooleanLike) return 'boolean';
-  if (type.flags & ts.TypeFlags.BigIntLike) return 'bigint';
-  if (checker.isArrayType(type)) {
-    const element = checker.getTypeArguments(type as ts.TypeReference)[0];
-    const mapped = element && parameterType(element, checker);
-    if (mapped) return `${mapped}[]`;
-  }
-  return undefined;
+  return ts.isStringLiteral(value) || ts.isNoSubstitutionTemplateLiteral(value)
+    ? value.text
+    : undefined;
 }
 
 /** Reconstruct only immutable fragments and literal join lists. Never execute application code. */
@@ -152,12 +149,21 @@ export function renderFragment(
       node.arguments.length !== 2
     ) {
       throw new CompositionError(
-        'sql.join needs a nonempty literal array and a fragment separator for static checking.',
+        'sql.join needs a nonempty literal array and a separator for static checking.',
       );
     }
-    return list.elements
-      .map((item) => renderFragment(item, checker, visited))
-      .join(renderFragment(separator, checker, visited));
+    const value = literalString(separator, checker);
+    if (value === undefined) {
+      throw new CompositionError('sql.join separators must be literal strings or const strings.');
+    }
+    let between: string;
+    try {
+      between = joinSeparator(value);
+    } catch (error) {
+      if (!(error instanceof Error)) throw error;
+      throw new CompositionError(error.message);
+    }
+    return list.elements.map((item) => renderFragment(item, checker, visited)).join(between);
   }
   throw new CompositionError(
     'Only sql.fragment templates, const fragment references, and sql.join with literal arrays are supported.',
@@ -183,19 +189,16 @@ export function renderIdentifier(
   ) {
     return node.arguments
       .map((part) => {
-        // A string literal type alone is not evidence of the runtime identifier's value.
-        let value: ts.Node = unwrap(part);
-        const names = new Set<ts.Node>();
-        while (ts.isIdentifier(value) && !names.has(value)) {
-          names.add(value);
-          const next = initializer(value, checker);
-          if (!next) break;
-          value = unwrap(next);
-        }
-        if (!ts.isStringLiteral(value) && !ts.isNoSubstitutionTemplateLiteral(value)) {
+        const value = literalString(part, checker);
+        if (value === undefined) {
           throw new CompositionError('Identifier names must be literal strings or const strings.');
         }
-        return quote(value.text);
+        try {
+          return quote(value);
+        } catch (error) {
+          if (!(error instanceof Error)) throw error;
+          throw new CompositionError(error.message);
+        }
       })
       .join('.');
   }
@@ -215,17 +218,15 @@ export function isIdentifierType(type: ts.Type): boolean {
   );
 }
 
-function renderValue(node: ts.Node, checker: ts.TypeChecker, seen: Set<ts.Node>): string {
+export function renderValue(
+  node: ts.Node,
+  checker: ts.TypeChecker,
+  seen = new Set<ts.Node>(),
+): string {
   const type = checker.getTypeAtLocation(node);
   if (isFragment(type)) return renderFragment(node, checker, seen);
   if (isIdentifierType(type)) return renderIdentifier(node, checker, seen);
-  if (type.flags & (ts.TypeFlags.Null | ts.TypeFlags.Undefined)) return '$N';
-  const mapped = parameterType(type, checker);
-  if (!mapped) {
-    throw new CompositionError(
-      `Fragment parameter type ${checker.typeToString(type)} is unsupported; place this parameter in the outer sql template.`,
-    );
-  }
-  // SafeQL's plugin protocol numbers $N tokens while respecting SQL quotes/comments.
-  return `$N::${mapped}`;
+  // Match runtime SQL: PostgreSQL infers parameter types from SQL context, never
+  // from JavaScript types. SafeQL numbers these tokens, respecting quotes/comments.
+  return '$N';
 }

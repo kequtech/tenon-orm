@@ -35,6 +35,7 @@ test('the packed package preserves API contracts under TypeScript 6 and 7', asyn
       'docs/agent-guide.md',
       'docs/adoption-guide.md',
       'docs/human-guide.md',
+      'docs/reference.md',
     ]) {
       assert.ok(paths.includes(required), `Package is missing ${required}`);
     }
@@ -113,7 +114,7 @@ test('the packed package preserves API contracts under TypeScript 6 and 7', asyn
     // ordinary committed application files, as they would in a real consumer.
     for (const filename of [
       'type-contracts.ts',
-      'fixtures/operations.ts',
+      'fixtures/queries.ts',
       'fixtures/generated-schema.ts',
     ]) {
       const source = (await readFile(resolve('test', filename), 'utf8'))
@@ -136,25 +137,25 @@ test('the packed package preserves API contracts under TypeScript 6 and 7', asyn
     await writeFile(
       join(consumer, 'copies.ts'),
       `
-      import { sql, defineOperation, type Database } from '@kequtech/tenon-orm';
+      import { sql, type Database, type QueryClient } from '@kequtech/tenon-orm';
       import * as second from './second-tenon/index.js';
       declare const db: Database;
       declare const other: second.Database;
       type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
       type Assert<T extends true> = T;
       async function check() {
-        const fromSecond = second.defineOperation((id: number) => second.sql<{ id: number }>\`SELECT \${id}::int AS id\`, { returns: 'one' });
-        const fromFirst = defineOperation((id: number) => sql<{ id: number }>\`SELECT \${id}::int AS id\`, { returns: 'one' });
-        const a = await db.run(fromSecond, [1]);
-        const b = await other.run(fromFirst, [1]);
+        const fromSecond = (client: second.QueryClient, { id }: { id: number }) => client.query(second.sql<{ id: number }>\`SELECT \${id}::int AS id\`, { returns: 'one' });
+        const fromFirst = (client: QueryClient, { id }: { id: number }) => client.query(sql<{ id: number }>\`SELECT \${id}::int AS id\`, { returns: 'one' });
+        const a = await fromSecond(db, { id: 1 });
+        const b = await fromFirst(other, { id: 1 });
         const c = await db.query(second.sql<{ id: number }>\`SELECT 1 AS id\`, { returns: 'many' });
         const d = await other.query(sql<{ id: number }>\`SELECT 1 AS id\`, { returns: 'oneOrNone' });
-        const fragments = sql.join([second.sql.fragment\`TRUE\`], sql.fragment\` AND \`);
-        const reverse = second.sql.join([sql.fragment\`TRUE\`], second.sql.fragment\` AND \`);
+        const fragments = sql.join([second.sql.fragment\`TRUE\`], 'AND');
+        const reverse = second.sql.join([sql.fragment\`TRUE\`], 'AND');
         const types: [Assert<Equal<typeof a, { id: number }>>, Assert<Equal<typeof b, { id: number }>>,
           Assert<Equal<typeof c, { id: number }[]>>, Assert<Equal<typeof d, { id: number } | undefined>>] = [true, true, true, true];
         // @ts-expect-error crossing package copies preserves the input contract
-        await db.run(fromSecond, ['wrong']);
+        await fromSecond(db, { id: 'wrong' });
       }
     `,
     );

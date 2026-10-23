@@ -65,7 +65,7 @@ export function validateTransactionSql(sql: string, name: string): void {
     (first === 'PREPARE' && second === 'TRANSACTION' && third !== 'AS' && third !== '(')
   ) {
     throw new Error(
-      `Operation ${name} cannot start or end a transaction; use db.transaction() to manage transaction boundaries.`,
+      `${name} cannot start or end a transaction; use db.transaction() to manage transaction boundaries.`,
     );
   }
 }

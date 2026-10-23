@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "license": "ISC",
   "type": "module",
-  "description": "A PostgreSQL ORM built around SQL, with typed operations, migrations, and generated TypeScript types",
+  "description": "A PostgreSQL ORM built around SQL, with typed queries, migrations, and generated TypeScript types",
   "homepage": "https://github.com/kequtech/tenon-orm#readme",
   "repository": {
     "type": "git",

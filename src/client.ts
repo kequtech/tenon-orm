@@ -1,7 +1,7 @@
 import { checkAffectedRows } from './affected-rows.js';
 import type { QueryExecutor } from './connection.js';
-import type { OperationDefinition, OperationOptions } from './operations.js';
-import { assertOperation, operationResult, validateOptions } from './operations.js';
+import type { QueryOptions } from './query-options.js';
+import { queryOutput, validateOptions } from './query-options.js';
 import type { SqlQuery } from './query.js';
 import { assertQuery } from './query.js';
 import { validateTransactionSql } from './transaction-sql.js';
@@ -12,7 +12,8 @@ export function createClient(
   query: QueryExecutor,
   onQuery?: (event: QueryEvent) => void | Promise<void>,
 ): Transaction {
-  async function execute(statement: SqlQuery, options: OperationOptions) {
+  async function execute(statement: SqlQuery, input?: QueryOptions) {
+    const options = validateOptions(input);
     assertQuery(statement);
     validateTransactionSql(statement.text, options.label ?? 'Query');
     const started = performance.now();
@@ -28,7 +29,7 @@ export function createClient(
           command = result.command;
           rowCount = result.rowCount;
           if (options.affectedRows) checkAffectedRows(options.affectedRows, result);
-          return operationResult(options, result);
+          return queryOutput(options, result);
         },
         options.affectedRows !== undefined,
       );
@@ -60,15 +61,5 @@ export function createClient(
       }
     }
   }
-  return {
-    async query(statement: SqlQuery, options?: OperationOptions) {
-      return execute(statement, validateOptions(options));
-    },
-    async run(operation: OperationDefinition, input: readonly unknown[]) {
-      assertOperation(operation);
-      if (!Array.isArray(input)) throw new Error('Operation input must be an explicit array.');
-      const options = validateOptions(operation.options);
-      return execute(operation.build(...input), options);
-    },
-  } as Transaction;
+  return { query: execute } as Transaction;
 }

@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import type { PoolClient } from 'pg';
 import { Pool } from 'pg';
 import type { Transaction } from '../src/index.js';
-import { createTenon, defineOperation, sql, unsafeSql } from '../src/index.js';
+import { createTenon, sql, unsafeSql } from '../src/index.js';
 
 function gate() {
   let open!: () => void;
@@ -13,9 +13,8 @@ function gate() {
   });
   return { promise, open };
 }
-const operations = { ping: defineOperation(() => sql`SELECT 1`, { returns: 'native' }) };
 
-test('query and run reject direct transaction boundaries before dispatch on root and callback clients', async (t) => {
+test('queries reject direct transaction boundaries before dispatch on root and callback clients', async (t) => {
   const commands = [
     'BEGIN',
     'begin work',
@@ -32,9 +31,6 @@ test('query and run reject direct transaction boundaries before dispatch on root
     "PREPARE /* comment */ TRANSACTION 'name'",
     '; ; -- leading comment\r/* nested /* BEGIN */ comment */ cOmMiT;',
   ];
-  const definitions = Object.fromEntries(
-    commands.map((sql, i) => [`boundary_${i}`, defineOperation(() => unsafeSql(sql, []))]),
-  );
   const pool = new Pool();
   const rootQuery = t.mock.method(pool, 'query', async () => {
     throw new Error('Public SQL reached the pool');
@@ -55,12 +51,8 @@ test('query and run reject direct transaction boundaries before dispatch on root
   );
   const db = createTenon({ connection: pool });
   async function check(client: Transaction) {
-    for (const [i, sql] of commands.entries()) {
+    for (const sql of commands) {
       await assert.rejects(client.query(unsafeSql(sql, [])), {
-        name: 'Error',
-        message: /Query cannot start or end a transaction/,
-      });
-      await assert.rejects(client.run(definitions[`boundary_${i}`]!, []), {
         name: 'Error',
         message: /Query cannot start or end a transaction/,
       });
@@ -127,7 +119,6 @@ for (const boundary of ['COMMIT', 'ROLLBACK'] as const) {
         expired.query(sql`SELECT 1`, { returns: 'many' }),
         /transaction has finished/,
       );
-      await assert.rejects(expired.run(operations.ping, []), /transaction has finished/);
       assert.deepEqual(statements, ['BEGIN', boundary]);
       finish.open();
       assert.deepEqual(

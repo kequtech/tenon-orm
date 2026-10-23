@@ -15,3 +15,17 @@ export function quote(name: string): string {
 export function qualified(namespace: string, table: string): string {
   return `${quote(namespace)}.${quote(table)}`;
 }
+
+/** Shared by query assembly and static checking so separators produce identical SQL. */
+export function joinSeparator(value: unknown): string {
+  switch (value) {
+    case 'AND':
+      return ' AND ';
+    case 'OR':
+      return ' OR ';
+    case ',':
+      return ', ';
+    default:
+      throw new Error('sql.join separator must be "AND", "OR", or ",".');
+  }
+}

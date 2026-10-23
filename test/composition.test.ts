@@ -23,7 +23,7 @@ test('dynamic predicates and ordering execute with bound values and guarded tran
           const direction = descending ? sql.fragment`DESC` : sql.fragment`ASC`;
           return db.query(
             sql<{ id: number }>`SELECT id FROM ${table}
-          WHERE ${sql.join(filters, sql.fragment` AND `)} ORDER BY id ${direction}`,
+          WHERE ${sql.join(filters, 'AND')} ORDER BY id ${direction}`,
             { returns: 'many' },
           );
         }

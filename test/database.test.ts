@@ -1,9 +1,10 @@
+import type { QueryClient } from '../src/index.js';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { after, before, beforeEach, test } from 'node:test';
 import { Pool } from 'pg';
-import type { Transaction, SqlQuery, OperationReturnMode } from '../src/index.js';
-import { createTenon, defineOperation, identifier, migrate, sql, unsafeSql } from '../src/index.js';
+import type { Transaction, SqlQuery, QueryReturnMode } from '../src/index.js';
+import { createTenon, identifier, migrate, sql, unsafeSql } from '../src/index.js';
 import { qualified, quote } from '../src/sql.js';
 import type { User } from './fixtures/generated-schema.js';
 
@@ -105,35 +106,28 @@ test('SQL controls projection, filters, ordering, pagination and batch defaults'
   );
 });
 
-for (const method of ['query', 'run'] as const) {
-  test(`${method}: result modes preserve nulls and enforce returned-row counts`, async () => {
-    type Summary = Pick<User, 'id' | 'email' | 'nickname'>;
-    const query = sql<Summary>`SELECT id, email, nickname FROM ${identifier(namespace, 'User')} ORDER BY id`;
-    const execute = (statement: SqlQuery<Summary>, returns: OperationReturnMode) =>
-      method === 'query'
-        ? db.query(statement, { returns })
-        : db.run(
-            defineOperation(() => statement, { returns }),
-            [],
-          );
+test('result modes preserve nulls and enforce returned-row counts', async () => {
+  type Summary = Pick<User, 'id' | 'email' | 'nickname'>;
+  const query = sql<Summary>`SELECT id, email, nickname FROM ${identifier(namespace, 'User')} ORDER BY id`;
+  const execute = (statement: SqlQuery<Summary>, returns: QueryReturnMode) =>
+    db.query(statement, { returns });
 
-    assert.deepEqual(await execute(query, 'many'), []);
-    assert.equal(await execute(query, 'oneOrNone'), undefined);
-    await assert.rejects(execute(query, 'one'), /exactly one row.*0 rows/);
+  assert.deepEqual(await execute(query, 'many'), []);
+  assert.equal(await execute(query, 'oneOrNone'), undefined);
+  await assert.rejects(execute(query, 'one'), /exactly one row.*0 rows/);
 
-    await db.query(sql`INSERT INTO ${identifier(namespace, 'User')} (email) VALUES ('a')`);
-    const first = { id: 1, email: 'a', nickname: null };
-    assert.deepEqual(await execute(query, 'one'), first);
-    assert.deepEqual(await execute(query, 'oneOrNone'), first);
+  await db.query(sql`INSERT INTO ${identifier(namespace, 'User')} (email) VALUES ('a')`);
+  const first = { id: 1, email: 'a', nickname: null };
+  assert.deepEqual(await execute(query, 'one'), first);
+  assert.deepEqual(await execute(query, 'oneOrNone'), first);
 
-    await db.query(sql`INSERT INTO ${identifier(namespace, 'User')} (email) VALUES ('b')`);
-    assert.deepEqual(await execute(query, 'many'), [first, { id: 2, email: 'b', nickname: null }]);
-    await assert.rejects(execute(query, 'oneOrNone'), /at most one row.*2 rows/);
-    await assert.rejects(execute(query, 'one'), /exactly one row.*2 rows/);
-    const limited = sql<Summary>`SELECT id, email, nickname FROM ${identifier(namespace, 'User')} ORDER BY id LIMIT 1`;
-    assert.deepEqual(await execute(limited, 'oneOrNone'), first);
-  });
-}
+  await db.query(sql`INSERT INTO ${identifier(namespace, 'User')} (email) VALUES ('b')`);
+  assert.deepEqual(await execute(query, 'many'), [first, { id: 2, email: 'b', nickname: null }]);
+  await assert.rejects(execute(query, 'oneOrNone'), /at most one row.*2 rows/);
+  await assert.rejects(execute(query, 'one'), /exactly one row.*2 rows/);
+  const limited = sql<Summary>`SELECT id, email, nickname FROM ${identifier(namespace, 'User')} ORDER BY id LIMIT 1`;
+  assert.deepEqual(await execute(limited, 'oneOrNone'), first);
+});
 
 test('inline command results preserve native fields and explicitly requested RETURNING rows', async () => {
   const inserted = await db.query(
@@ -352,20 +346,20 @@ test('a caught PostgreSQL error cannot make an aborted transaction report succes
 });
 
 test('rejected transaction boundaries cannot commit writes early or abort a caught callback', async () => {
-  const operations = {
-    commit: defineOperation(() => sql`; /* ownership */ COMMIT AND CHAIN`),
-    rollback: defineOperation(() => sql`ROLLBACK TRANSACTION`),
+  const queries = {
+    commit: (client: QueryClient) => client.query(sql`; /* ownership */ COMMIT AND CHAIN`),
+    rollback: (client: QueryClient) => client.query(sql`ROLLBACK TRANSACTION`),
   };
   const client = createTenon({ connection: pool });
   try {
-    for (const entry of ['sql', 'run'] as const) {
+    for (const entry of ['inline', 'function'] as const) {
       await assert.rejects(
         client.transaction(async (tx) => {
           await tx.query(
             sql`INSERT INTO ${identifier(namespace, 'User')} (email) VALUES (${entry})`,
           );
-          if (entry === 'sql') await tx.query(sql`COMMIT`);
-          else await tx.run(operations.commit, []);
+          if (entry === 'inline') await tx.query(sql`COMMIT`);
+          else await queries.commit(tx);
         }),
         /cannot start or end a transaction/,
       );
@@ -377,7 +371,7 @@ test('rejected transaction boundaries cannot commit writes early or abort a caug
     await client.transaction(async (tx) => {
       await tx.query(sql`INSERT INTO ${identifier(namespace, 'User')} (email) VALUES ('kept')`);
       await assert.rejects(tx.query(sql`COMMIT`), /cannot start or end a transaction/);
-      await assert.rejects(tx.run(operations.rollback, []), /cannot start or end a transaction/);
+      await assert.rejects(queries.rollback(tx), /cannot start or end a transaction/);
       await tx.query(
         sql`INSERT INTO ${identifier(namespace, 'User')} (email) VALUES ('after rejection')`,
       );
@@ -392,26 +386,26 @@ test('rejected transaction boundaries cannot commit writes early or abort a caug
   }
 });
 
-test('inline and named isolation and savepoint SQL preserve the callback transaction', async () => {
-  const operations = {
-    isolation: defineOperation(() => sql`SET TRANSACTION ISOLATION LEVEL REPEATABLE READ`),
-    savepoint: defineOperation(() => sql`SAVEPOINT recovery`),
-    rollback_to: defineOperation(
-      () => sql`ROLLBACK /* comment */ TRANSACTION TO SAVEPOINT recovery`,
-    ),
-    release: defineOperation(() => sql`RELEASE SAVEPOINT recovery`),
+test('inline and reusable isolation and savepoint SQL preserve the callback transaction', async () => {
+  const queries = {
+    isolation: (client: QueryClient) =>
+      client.query(sql`SET TRANSACTION ISOLATION LEVEL REPEATABLE READ`),
+    savepoint: (client: QueryClient) => client.query(sql`SAVEPOINT recovery`),
+    rollback_to: (client: QueryClient) =>
+      client.query(sql`ROLLBACK /* comment */ TRANSACTION TO SAVEPOINT recovery`),
+    release: (client: QueryClient) => client.query(sql`RELEASE SAVEPOINT recovery`),
   };
   const client = createTenon({ connection: pool });
   try {
     await client.transaction(async (tx) => {
-      await tx.run(operations.isolation, []);
+      await queries.isolation(tx);
       const settings = await tx.query(
         sql<{ transaction_isolation: string }>`SHOW transaction_isolation`,
         { returns: 'one' },
       );
       assert.equal(settings.transaction_isolation, 'repeatable read');
       await tx.query(sql`INSERT INTO ${identifier(namespace, 'User')} (email) VALUES ('kept')`);
-      await tx.run(operations.savepoint, []);
+      await queries.savepoint(tx);
       // Recover from a real PostgreSQL error without aborting the outer work.
       await assert.rejects(
         tx.query(sql`INSERT INTO ${identifier(namespace, 'User')} (email) VALUES ('kept')`),
@@ -419,8 +413,8 @@ test('inline and named isolation and savepoint SQL preserve the callback transac
           code: '23505',
         },
       );
-      await tx.run(operations.rollback_to, []);
-      await tx.run(operations.release, []);
+      await queries.rollback_to(tx);
+      await queries.release(tx);
       await tx.query(sql`SAVEPOINT "COMMIT"`);
       await tx.query(
         sql`INSERT INTO ${identifier(namespace, 'User')} (email) VALUES ('discarded')`,
@@ -456,11 +450,11 @@ test('inline and named isolation and savepoint SQL preserve the callback transac
 });
 
 test('transaction words in values, identifiers and SQL bodies pass through unchanged', async () => {
-  const operations = {
-    echo: defineOperation(
-      (value: string) => sql<{ COMMIT: string }>`SELECT ${value}::text AS "COMMIT"`,
-    ),
-    body: defineOperation(() => sql`DO $body$ BEGIN RAISE NOTICE 'COMMIT; ROLLBACK;'; END $body$`),
+  const queries = {
+    echo: (client: QueryClient, { value }: { value: string }) =>
+      client.query(sql<{ COMMIT: string }>`SELECT ${value}::text AS "COMMIT"`),
+    body: (client: QueryClient) =>
+      client.query(sql`DO $body$ BEGIN RAISE NOTICE 'COMMIT; ROLLBACK;'; END $body$`),
   };
   const client = createTenon({ connection: pool });
   try {
@@ -473,10 +467,10 @@ test('transaction words in values, identifiers and SQL bodies pass through uncha
           }>`/* COMMIT */ SELECT 'ROLLBACK; COMMIT;' AS "BEGIN", $body$BEGIN; END;$body$ AS "END"`,
         );
         assert.deepEqual(inline.rows, [{ BEGIN: 'ROLLBACK; COMMIT;', END: 'BEGIN; END;' }]);
-        assert.deepEqual((await tx.run(operations.echo, ['PREPARE TRANSACTION'])).rows, [
+        assert.deepEqual((await queries.echo(tx, { value: 'PREPARE TRANSACTION' })).rows, [
           { COMMIT: 'PREPARE TRANSACTION' },
         ]);
-        await tx.run(operations.body, []);
+        await queries.body(tx);
         await tx.query(sql`DO $body$ BEGIN RAISE NOTICE 'END;'; END $body$`);
         for (const prepared of [
           {
@@ -564,10 +558,20 @@ test('invalid queries and options reject before execution', async () => {
   for (const query of ['', 'SELECT 1', null, {}, { text: 'SELECT 1', values: [] }]) {
     await assert.rejects(unchecked(query), /Expected a query/);
   }
-  for (const options of [null, [], { returns: 'first' }, { limit: 1 }]) {
+  for (const options of [
+    null,
+    [],
+    'one',
+    { returns: 'first' },
+    { returns: 'command' },
+    { returns: null },
+    { returns: false },
+    { return: 'one' },
+    { limit: 1 },
+  ]) {
     await assert.rejects(
       unchecked(sql`SELECT 1`, options),
-      /plain object|Unknown operation option|Operation returns/,
+      /plain object|Unknown query option|Query returns/,
     );
   }
 });

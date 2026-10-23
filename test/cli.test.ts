@@ -24,58 +24,55 @@ test('CLI migration and generation remain separate; check mode catches stale fil
   await project(recordMigrations, async (options) => {
     const output = join(options.directory, 'definitions.ts');
     const args = ['--directory', options.directory, '--namespace', options.namespace];
+    const generation = ['--namespace', options.namespace, '--out', output];
     const env = { ...process.env, DATABASE_URL: connection };
     await run(process.execPath, [cli, 'migrate', ...args], { env });
     await assert.rejects(readFile(output), { code: 'ENOENT' });
-    await run(process.execPath, [cli, 'generate', ...args, '--out', output], { env });
+    await run(process.execPath, [cli, 'generate', ...generation], { env });
     const first = await readFile(output, 'utf8');
-    await run(process.execPath, [cli, 'generate', ...args, '--out', output, '--check'], { env });
+    await run(process.execPath, [cli, 'generate', ...generation, '--check'], { env });
     await pool.query(
       `ALTER TABLE ${qualified(options.namespace, 'Record')} ALTER COLUMN name SET DEFAULT 'draft'`,
     );
     await assert.rejects(
-      run(process.execPath, [cli, 'generate', ...args, '--out', output, '--check'], { env }),
+      run(process.execPath, [cli, 'generate', ...generation, '--check'], { env }),
     );
     assert.equal(await readFile(output, 'utf8'), first);
-    await run(process.execPath, [cli, 'generate', ...args, '--out', output], { env });
+    await run(process.execPath, [cli, 'generate', ...generation], { env });
     assert.notEqual(await readFile(output, 'utf8'), first);
     await pool.query(
       `ALTER TABLE ${qualified(options.namespace, 'Record')} ALTER COLUMN name DROP DEFAULT`,
     );
-    await run(process.execPath, [cli, 'generate', ...args, '--out', output], { env });
+    await run(process.execPath, [cli, 'generate', ...generation], { env });
     assert.equal(await readFile(output, 'utf8'), first);
     await writeFile(
       join(options.directory, '0002_column.up.sql'),
       'ALTER TABLE "Record" ADD COLUMN enabled BOOLEAN NOT NULL DEFAULT false;',
     );
-    const pending = await run(process.execPath, [cli, 'generate', ...args, '--out', output], {
-      env,
-    });
-    assert.ok(pending.stderr.trim());
+    // A pending migration changes neither the connected schema nor --check.
+    await run(process.execPath, [cli, 'generate', ...generation, '--check'], { env });
     assert.equal(await readFile(output, 'utf8'), first);
     await run(process.execPath, [cli, 'migrate', ...args], { env });
     await assert.rejects(
-      run(process.execPath, [cli, 'generate', ...args, '--out', output, '--check'], { env }),
+      run(process.execPath, [cli, 'generate', ...generation, '--check'], { env }),
     );
     assert.equal(await readFile(output, 'utf8'), first);
-    await run(process.execPath, [cli, 'generate', ...args, '--out', output], { env });
+    await run(process.execPath, [cli, 'generate', ...generation], { env });
     assert.notEqual(await readFile(output, 'utf8'), first);
     await writeFile(
       join(options.directory, '0003_unsupported.up.sql'),
       'ALTER TABLE "Record" ADD COLUMN amount INTERVAL;',
     );
     await run(process.execPath, [cli, 'migrate', ...args], { env });
-    const unsupported = await run(process.execPath, [cli, 'generate', ...args, '--out', output], {
+    const unsupported = await run(process.execPath, [cli, 'generate', ...generation], {
       env,
     });
     assert.ok(unsupported.stderr.includes('"Record"."amount"'));
     assert.ok(unsupported.stderr.includes('"pg_catalog"."interval"'));
     const withUnknown = await readFile(output, 'utf8');
-    const current = await run(
-      process.execPath,
-      [cli, 'generate', ...args, '--out', output, '--check'],
-      { env },
-    );
+    const current = await run(process.execPath, [cli, 'generate', ...generation, '--check'], {
+      env,
+    });
     assert.ok(current.stderr.trim());
     assert.equal(await readFile(output, 'utf8'), withUnknown);
     await writeFile(
@@ -83,23 +80,39 @@ test('CLI migration and generation remain separate; check mode catches stale fil
       'CREATE TABLE "Partitioned" (id INTEGER) PARTITION BY RANGE (id);',
     );
     await run(process.execPath, [cli, 'migrate', ...args], { env });
-    await run(process.execPath, [cli, 'generate', ...args, '--out', output], { env });
+    await run(process.execPath, [cli, 'generate', ...generation], { env });
     const withPartition = await readFile(output, 'utf8');
-    await run(process.execPath, [cli, 'generate', ...args, '--out', output, '--check'], { env });
+    await run(process.execPath, [cli, 'generate', ...generation, '--check'], { env });
     await pool.query(`CREATE TABLE ${qualified(options.namespace, 'PartitionedDaily')}
       PARTITION OF ${qualified(options.namespace, 'Partitioned')} DEFAULT`);
-    await run(process.execPath, [cli, 'generate', ...args, '--out', output, '--check'], { env });
+    await run(process.execPath, [cli, 'generate', ...generation, '--check'], { env });
     await pool.query(`DROP TABLE ${qualified(options.namespace, 'PartitionedDaily')}`);
-    await run(process.execPath, [cli, 'generate', ...args, '--out', output, '--check'], { env });
+    await run(process.execPath, [cli, 'generate', ...generation, '--check'], { env });
     assert.equal(await readFile(output, 'utf8'), withPartition);
-    // Other generation failures still preserve the last successful output.
+    // Migration file edits do not affect schema introspection.
     await writeFile(
       join(options.directory, '0004_partition.up.sql'),
       'CREATE TABLE "Partitioned" (id INTEGER) PARTITION BY RANGE (id); -- edited after applying',
     );
-    await assert.rejects(
-      run(process.execPath, [cli, 'generate', ...args, '--out', output], { env }),
-    );
+    await run(process.execPath, [cli, 'generate', ...generation, '--check'], { env });
+    // A misspelled namespace must fail without replacing the last good file.
+    for (const check of [[], ['--check']]) {
+      await assert.rejects(
+        run(
+          process.execPath,
+          [
+            cli,
+            'generate',
+            '--namespace',
+            `${options.namespace}_missing`,
+            '--out',
+            output,
+            ...check,
+          ],
+          { env },
+        ),
+      );
+    }
     assert.equal(await readFile(output, 'utf8'), withPartition);
   });
 });

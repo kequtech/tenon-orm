@@ -57,11 +57,11 @@ test('query and run reject direct transaction boundaries before dispatch on root
   async function check(client: Transaction) {
     for (const [i, sql] of commands.entries()) {
       await assert.rejects(client.query(unsafeSql(sql, [])), {
-        name: 'TenonError',
+        name: 'Error',
         message: /Query cannot start or end a transaction/,
       });
       await assert.rejects(client.run(definitions[`boundary_${i}`]!, []), {
-        name: 'TenonError',
+        name: 'Error',
         message: /Query cannot start or end a transaction/,
       });
     }

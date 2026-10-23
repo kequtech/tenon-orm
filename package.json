@@ -32,7 +32,8 @@
   "files": [
     "dist/**/*.js",
     "dist/**/*.d.ts",
-    "docs/*.md"
+    "agent-guide.md",
+    "adoption-guide.md"
   ],
   "engines": {
     "node": ">=24"

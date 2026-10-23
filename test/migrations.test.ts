@@ -45,7 +45,7 @@ async function waitForAdvisoryWaiters(application: string, expected: number): Pr
   assert.fail(`Expected ${expected} waiting advisory locks, observed ${count}.`);
 }
 
-test('generation describes current migration checkpoints and upgrades preserve existing data', async () => {
+test('migration upgrades and rollbacks preserve existing data', async () => {
   await project(recordMigrations, async (options) => {
     await migrate(options);
     await pool.query(
@@ -59,9 +59,6 @@ test('generation describes current migration checkpoints and upgrades preserve e
       join(options.directory, '0002_enabled.down.sql'),
       'ALTER TABLE "Record" DROP COLUMN enabled;',
     );
-    const warnings: string[] = [];
-    await generateDefinitions({ ...options, onWarning: (message) => warnings.push(message) });
-    assert.equal(warnings.length, 1);
     const db = createTenon({ connection: pool });
     const target = qualified(options.namespace, 'Record');
     try {
@@ -163,13 +160,12 @@ test('a failed migration rolls back its schema and data changes without recordin
   );
 });
 
-test('edited or missing applied files and out-of-order additions stop every workflow', async () => {
+test('edited or missing applied files and out-of-order additions stop migration changes', async () => {
   await project(recordMigrations, async (options) => {
     await migrate(options);
     const up = join(options.directory, '0001_records.up.sql');
     await writeFile(up, recordMigrations['0001_records.up.sql'] + '\n-- changed after deployment');
     await assert.rejects(migrate(options), /history differs/);
-    await assert.rejects(generateDefinitions(options), /history differs/);
     await assert.rejects(rollback(options), /history differs/);
     await writeFile(up, recordMigrations['0001_records.up.sql']);
     await writeFile(join(options.directory, '0000_earlier.up.sql'), 'SELECT 1;');
@@ -187,6 +183,59 @@ test('edited or missing applied files and out-of-order additions stop every work
       1,
     );
   });
+});
+
+test('migration parsing stays consistent when the connection uses backslash escapes', async () => {
+  const configured = new Pool({
+    connectionString: connection,
+    max: 1,
+    options: '-c standard_conforming_strings=off',
+  });
+  try {
+    await project(
+      {
+        '0001_escape.up.sql': String.raw`CREATE TABLE escaped_commit (id integer);
+        SELECT 'a\' b'; COMMIT; -- '
+        SELECT nonexistent_column;`,
+      },
+      async (options) => {
+        const migration = { ...options, connection: configured };
+        await assert.rejects(migrate(migration));
+        assert.equal(
+          (
+            await pool.query('SELECT to_regclass($1) AS name', [
+              qualified(options.namespace, 'escaped_commit'),
+            ])
+          ).rows[0].name,
+          null,
+        );
+        assert.deepEqual(await migrationStatus(migration), { applied: [], pending: ['0001'] });
+        assert.equal(
+          (await configured.query('SHOW standard_conforming_strings')).rows[0]
+            .standard_conforming_strings,
+          'off',
+        );
+        // Explicit escape strings remain supported under the normalized setting.
+        await writeFile(
+          join(options.directory, '0001_escape.up.sql'),
+          String.raw`CREATE TABLE escaped_commit (value text); INSERT INTO escaped_commit VALUES (E'a\' b');`,
+        );
+        await migrate(migration);
+        assert.deepEqual(
+          (await pool.query(`SELECT value FROM ${qualified(options.namespace, 'escaped_commit')}`))
+            .rows,
+          [{ value: "a' b" }],
+        );
+        assert.equal(
+          (await configured.query('SHOW standard_conforming_strings')).rows[0]
+            .standard_conforming_strings,
+          'off',
+        );
+      },
+    );
+  } finally {
+    await configured.end();
+  }
 });
 
 test('irreversible migrations reject rollback before any selected down operation runs', async () => {

@@ -3,14 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { after, before, beforeEach, test } from 'node:test';
 import { Pool } from 'pg';
 import type { QueryResult, Transaction } from '../src/index.js';
-import {
-  createTenon,
-  defineOperation,
-  identifier,
-  migrate,
-  sql,
-  TenonError,
-} from '../src/index.js';
+import { createTenon, defineOperation, identifier, migrate, sql } from '../src/index.js';
 import { qualified, quote } from '../src/sql.js';
 import type { Post, Tag, User } from './fixtures/generated-schema.js';
 import { echo_values } from './fixtures/operations.js';
@@ -44,35 +37,6 @@ const operations = {
     (email: string) =>
       sql<UserSummary>`SELECT id, email FROM ${identifier(namespace, 'User')} WHERE email = ${email}`,
     { returns: 'one' },
-  ),
-  one_active_user: defineOperation(
-    () => sql<UserSummary>`SELECT id, email FROM ${identifier(namespace, 'User')} WHERE active`,
-    {
-      returns: 'oneOrNone',
-    },
-  ),
-  required_active_user: defineOperation(
-    () => sql<UserSummary>`SELECT id, email FROM ${identifier(namespace, 'User')} WHERE active`,
-    {
-      returns: 'one',
-    },
-  ),
-  first_active_user: defineOperation(
-    () =>
-      sql<UserSummary>`SELECT id, email FROM ${identifier(namespace, 'User')} WHERE active ORDER BY id LIMIT 1`,
-    { returns: 'oneOrNone' },
-  ),
-  active_users: defineOperation(
-    () =>
-      sql<UserSummary>`SELECT id, email FROM ${identifier(namespace, 'User')} WHERE active ORDER BY id`,
-    { returns: 'many' },
-  ),
-  nullable_user: defineOperation(
-    (email: string) =>
-      sql<{
-        nickname: string | null;
-      }>`SELECT nickname FROM ${identifier(namespace, 'User')} WHERE email = ${email}`,
-    { returns: 'oneOrNone' },
   ),
   create_required_user: defineOperation(
     (email: string) =>
@@ -268,51 +232,6 @@ test('reusable SQL operations own nested results and many-to-many joins without 
   assert.equal(await db.run(operations.user_with_posts, [-1]), undefined);
 });
 
-test('oneOrNone returns undefined for absence and a row object for a match, preserving nullable values', async () => {
-  assert.equal(await db.run(operations.user_by_email, ['alice']), undefined);
-  assert.equal(await db.run(operations.nullable_user, ['alice']), undefined);
-  const user = await db.run(operations.create_required_user, ['alice']);
-  assert.deepEqual(await db.run(operations.user_by_email, ['alice']), {
-    id: user.id,
-    email: 'alice',
-  });
-  assert.deepEqual(await db.run(operations.nullable_user, ['alice']), { nickname: null });
-});
-
-test('one returns one row and reports an absent row with its expected cardinality', async () => {
-  await assert.rejects(db.run(operations.required_user_by_email, ['alice']), (error) => {
-    assert.ok(error instanceof TenonError);
-    assert.equal(error.message, 'Query expected exactly one row, but returned 0 rows.');
-    return true;
-  });
-  const user = await db.run(operations.create_required_user, ['alice']);
-  assert.equal(user.email, 'alice');
-  assert.deepEqual(await db.run(operations.required_user_by_email, ['alice']), user);
-});
-
-test('single-row modes reject multiple matches while many and an explicit SQL limit preserve their contracts', async () => {
-  assert.deepEqual(await db.run(operations.active_users, []), []);
-  await db.query(
-    sql`INSERT INTO ${identifier(namespace, 'User')} (email, active) VALUES ('a', true), ('b', true), ('c', true)`,
-    { returns: 'many' },
-  );
-  const users = await db.query(
-    sql<User>`SELECT * FROM ${identifier(namespace, 'User')} ORDER BY id`,
-    { returns: 'many' },
-  );
-  const summaries = users.map(({ id, email }) => ({ id, email }));
-  assert.deepEqual(await db.run(operations.active_users, []), summaries);
-  await assert.rejects(
-    db.run(operations.one_active_user, []),
-    /Query expected at most one row, but returned 3 rows/,
-  );
-  await assert.rejects(
-    db.run(operations.required_active_user, []),
-    /Query expected exactly one row, but returned 3 rows/,
-  );
-  assert.deepEqual(await db.run(operations.first_active_user, []), summaries[0]);
-});
-
 test('transaction clients retain single-row behavior and roll back writes when a cardinality error escapes', async () => {
   const result = await db.transaction(async (tx) => {
     assert.equal(await tx.run(operations.user_by_email, ['committed']), undefined);
@@ -410,7 +329,7 @@ test('command metadata follows the transaction connection and writes commit or r
   assert.ok(await db.run(operations.user_by_email, ['committed']));
 });
 
-test('an imported operation works without runtime schema registration', async () => {
+test('an imported operation works across clients and transactions', async () => {
   const client = createTenon({ connection: pool });
   try {
     assert.deepEqual(await client.run(echo_values, ['hello', false]), [

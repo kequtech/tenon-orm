@@ -1,15 +1,14 @@
-import { TenonError } from '../errors.js';
 import type { ColumnRow, TableRow } from './catalog.js';
 
 // Every generated table remains accessible through Rows["exact SQL name"].
 const reservedTypeNames = new Set(
   `
-  await break case catch class const continue debugger default delete do else enum
+  as await break case catch class const continue debugger default delete do else enum
   export extends false finally for function if implements import in instanceof
   interface let new null package private protected public return static super
   switch this throw true try typeof var void while with yield any bigint boolean
   intrinsic never number object string symbol undefined unknown
-  Rows migrationHistory globalThis PgArray
+  Rows globalThis PgArray
 `
     .trim()
     .split(/\s+/),
@@ -82,10 +81,7 @@ function columnType(
   if (isSupportedArray(value)) {
     scalar = `PgArray<${arrayTypes[value.oid]!}>`;
   } else if (value.typeKind === 'e') {
-    if (!value.choices?.length) {
-      throw new TenonError(`Empty enum for ${value.name}`);
-    }
-    scalar = value.choices.map((choice) => JSON.stringify(choice)).join(' | ');
+    scalar = value.choices?.map((choice) => JSON.stringify(choice)).join(' | ') || 'never';
   } else {
     const type =
       value.typeSchema === 'pg_catalog' && Object.hasOwn(scalarTypes, value.type)

@@ -1,4 +1,3 @@
-import { TenonError } from './errors.js';
 import type { DatabaseToolOptions } from './migrations/connection.js';
 import { withMigrationLock } from './migrations/connection.js';
 import { readMigrations } from './migrations/files.js';
@@ -32,7 +31,7 @@ async function execute(
   steps: number,
 ): Promise<readonly string[]> {
   if (!Number.isSafeInteger(steps) || steps < 1) {
-    throw new TenonError('Rollback steps must be a positive safe integer.');
+    throw new Error('Rollback steps must be a positive safe integer.');
   }
   const files = await readMigrations(options.directory);
   return withMigrationLock(options, 'exclusive', async (client, namespace) => {
@@ -42,7 +41,7 @@ async function execute(
         ? files.slice(applied.length)
         : files.slice(Math.max(0, applied.length - steps), applied.length).reverse();
     if (direction === 'down' && selected.some((file) => file.down === undefined)) {
-      throw new TenonError('A selected migration has no down SQL and cannot be rolled back.');
+      throw new Error('A selected migration has no down SQL and cannot be rolled back.');
     }
     if (!selected.length) {
       return [];
@@ -53,6 +52,8 @@ async function execute(
     for (const file of selected) {
       try {
         await client.query('BEGIN');
+        // Match the string-literal rules used by the authored migration scanner.
+        await client.query('SET LOCAL standard_conforming_strings TO on');
         await client.query(`SET LOCAL search_path TO ${quote(namespace)}, pg_catalog`);
         await client.query(direction === 'up' ? file.up : file.down!);
         if (direction === 'up') {
@@ -64,12 +65,12 @@ async function execute(
         }
         const result = await client.query('COMMIT');
         if (result.command !== 'COMMIT') {
-          throw new TenonError('The migration transaction was rolled back.');
+          throw new Error('The migration transaction was rolled back.');
         }
         completed.push(file.id);
       } catch (cause) {
         const reason = cause instanceof Error ? cause.message : 'Unknown database error';
-        throw new TenonError(
+        throw new Error(
           `Migration ${file.id}_${file.name} (${direction}) failed: ${reason}. Earlier migrations in this run may have committed.`,
           { cause },
         );

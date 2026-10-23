@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { test, type TestContext } from 'node:test';
 import { Pool, type PoolClient } from 'pg';
-import { createTenon, TenonError, type TenonOptions } from '../src/index.js';
+import { createTenon, type TenonOptions } from '../src/index.js';
 import { withMigrationLock } from '../src/migrations/connection.js';
 
 function mockClient(t: TestContext, query: (sql: string) => Promise<unknown>) {
@@ -19,10 +19,10 @@ test('runtime and tools reject missing or invalid connections before acquiring a
   });
   for (const value of [undefined, null, '', '  ', 42, false, [], new Date()]) {
     const connection = value as TenonOptions['connection'];
-    assert.throws(() => createTenon({ connection }), TenonError);
+    assert.throws(() => createTenon({ connection }), Error);
     await assert.rejects(
       withMigrationLock({ connection }, 'shared', async () => {}),
-      TenonError,
+      Error,
     );
   }
   // Explicit pg configuration retains its normal environment/default behavior.

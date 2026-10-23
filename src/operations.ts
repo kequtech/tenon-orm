@@ -1,11 +1,11 @@
 import type { QueryResult, QueryResultRow } from 'pg';
 import type { AffectedRowsConstraint } from './affected-rows.js';
 import { validateAffectedRows } from './affected-rows.js';
-import { TenonError } from './errors.js';
 import type { SqlQuery, UnknownRow } from './query.js';
 import { plainObject } from './validation.js';
 
 export type OperationReturnMode = 'native' | 'many' | 'oneOrNone' | 'one';
+const operationTag = Symbol.for('@kequtech/tenon-orm/operation');
 export interface OperationOptions {
   readonly returns?: OperationReturnMode;
   readonly affectedRows?: AffectedRowsConstraint;
@@ -31,7 +31,6 @@ export interface OperationDefinition<
   readonly build: (...input: Input) => SqlQuery<Row>;
   readonly options: Readonly<OperationOptions & { returns: Mode }>;
 }
-const definitions = new WeakSet<object>();
 
 /** Input types come from the factory parameters; the query carries its row type. */
 export function defineOperation<Input extends readonly unknown[], Row extends QueryResultRow>(
@@ -54,17 +53,22 @@ export function defineOperation<Input extends readonly unknown[], Row extends Qu
   build: (...input: Input) => SqlQuery<Row>,
   options?: OperationOptions,
 ): OperationDefinition<Input, Row> {
-  if (typeof build !== 'function')
-    throw new TenonError('defineOperation requires a query factory.');
+  if (typeof build !== 'function') throw new Error('defineOperation requires a query factory.');
   const config = validateOptions(options);
-  const result = Object.freeze({ build, options: config });
-  definitions.add(result);
-  return result;
+  return Object.freeze({ [operationTag]: true as const, build, options: config });
 }
 
-export function assertOperation(value: unknown): void {
-  if (!value || typeof value !== 'object' || !definitions.has(value)) {
-    throw new TenonError('run() requires an operation created with defineOperation().');
+export function assertOperation(value: unknown): asserts value is OperationDefinition {
+  if (
+    !value ||
+    typeof value !== 'object' ||
+    !(operationTag in value) ||
+    value[operationTag] !== true ||
+    !('build' in value) ||
+    typeof value.build !== 'function' ||
+    !('options' in value)
+  ) {
+    throw new Error('run() requires an operation created with defineOperation().');
   }
 }
 
@@ -74,19 +78,19 @@ export function validateOptions(
   const config = options === undefined ? {} : plainObject(options, 'Operation options');
   for (const key of Object.keys(config)) {
     if (!['returns', 'affectedRows', 'label'].includes(key))
-      throw new TenonError(`Unknown operation option: ${key}`);
+      throw new Error(`Unknown operation option: ${key}`);
   }
   const returns = config.returns ?? 'native';
   if (
     config.returns === null ||
     !['native', 'many', 'oneOrNone', 'one'].includes(returns as string)
   ) {
-    throw new TenonError('Operation returns must be native, many, oneOrNone, or one.');
+    throw new Error('Operation returns must be native, many, oneOrNone, or one.');
   }
   const affectedRows = validateAffectedRows(config.affectedRows);
   const label = config.label;
   if (label !== undefined && (typeof label !== 'string' || !label.trim())) {
-    throw new TenonError('Operation label must be a nonempty string.');
+    throw new Error('Operation label must be a nonempty string.');
   }
   return Object.freeze({
     returns: returns as OperationReturnMode,
@@ -103,7 +107,7 @@ export function operationResult(
   if (options.returns === 'many') return result.rows;
   const expected = options.returns === 'oneOrNone' ? 'at most one row' : 'exactly one row';
   if (result.rows.length > 1 || (options.returns === 'one' && result.rows.length === 0)) {
-    throw new TenonError(
+    throw new Error(
       `${options.label ?? 'Query'} expected ${expected}, but returned ${result.rows.length} rows.`,
     );
   }

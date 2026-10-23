@@ -1,5 +1,5 @@
 import type { QueryResult } from 'pg';
-import { AffectedRowsError, TenonError } from './errors.js';
+import { AffectedRowsError } from './errors.js';
 import { plainObject } from './validation.js';
 
 /** PostgreSQL's final command count, independent of RETURNING. */
@@ -13,11 +13,11 @@ export function validateAffectedRows(value: unknown): AffectedRowsConstraint | u
   const keys = Object.keys(config);
   const key = keys[0];
   if (keys.length !== 1 || (key !== 'max' && key !== 'exact')) {
-    throw new TenonError('affectedRows must specify exactly one of max or exact.');
+    throw new Error('affectedRows must specify exactly one of max or exact.');
   }
   const count = config[key];
   if (typeof count !== 'number' || !Number.isSafeInteger(count) || count < 0) {
-    throw new TenonError('affectedRows must be a nonnegative safe integer.');
+    throw new Error('affectedRows must be a nonnegative safe integer.');
   }
   return Object.freeze(key === 'max' ? { max: count } : { exact: count });
 }

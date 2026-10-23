@@ -1,7 +1,6 @@
 import { createClient } from './client.js';
 import type { Connection, QueryExecutor } from './connection.js';
 import { createPool, executeSql } from './connection.js';
-import { TenonError } from './errors.js';
 import { withTransaction } from './transaction.js';
 import type { Database, QueryEvent } from './types.js';
 import { plainObject } from './validation.js';
@@ -14,19 +13,19 @@ export interface TenonOptions {
 export function createTenon(options: TenonOptions): Database {
   for (const key of Object.keys(plainObject(options, 'Tenon options'))) {
     if (key !== 'connection' && key !== 'onQuery') {
-      throw new TenonError(`Unknown Tenon option: ${key}`);
+      throw new Error(`Unknown Tenon option: ${key}`);
     }
   }
 
   if (options.onQuery !== undefined && typeof options.onQuery !== 'function') {
-    throw new TenonError('onQuery must be a function.');
+    throw new Error('onQuery must be a function.');
   }
   const { pool, owned } = createPool(options.connection);
   let closed = false;
 
   function checkOpen() {
     if (closed) {
-      throw new TenonError('This database instance is closed.');
+      throw new Error('This database instance is closed.');
     }
   }
 

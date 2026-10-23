@@ -92,10 +92,53 @@ test('ordinary generated row types compose with Pick and indexed access across m
   );
 });
 
+test('generation reads an existing schema without migration files or history', async () => {
+  await project({}, async (options) => {
+    await pool.query(`CREATE SCHEMA ${quote(options.namespace)};
+      CREATE TABLE ${qualified(options.namespace, 'Account')} (id integer PRIMARY KEY);`);
+    const source = await generateDefinitions({ connection: pool, namespace: options.namespace });
+    await checkGeneratedTypes(
+      options,
+      `
+      import type { Account } from './definitions.js';
+      ${typeAssertions}
+      type Row = Assert<Equal<Account, { id: number }>>;
+    `,
+    );
+    // Even an unfinished migration is unrelated to the connected schema.
+    await writeFile(join(options.directory, '0001_draft.up.sql'), '');
+    assert.equal(await generateDefinitions(options), source);
+    await pool.query(`ALTER TABLE ${qualified(options.namespace, 'Account')} ADD COLUMN name text`);
+    assert.notEqual(await generateDefinitions(options), source);
+  });
+});
+
+test('empty enums generate usable types for nullable and required columns', async () => {
+  await project(
+    {
+      '0001_enum.up.sql': `CREATE TYPE empty_enum AS ENUM ();
+      CREATE TABLE "Empty" (optional empty_enum, required empty_enum NOT NULL);`,
+    },
+    async (options) => {
+      await migrate(options);
+      await checkGeneratedTypes(
+        options,
+        `
+      import type { Empty } from './definitions.js';
+      ${typeAssertions}
+      type Optional = Assert<Equal<Empty['optional'], null>>;
+      type Required = Assert<Equal<Empty['required'], never>>;
+    `,
+      );
+    },
+  );
+});
+
 test('generated types preserve unusual SQL names, module-name collisions and date types', async () => {
   const names = [
     'user-details',
     'class',
+    'as',
     'Rows',
     'tables',
     'column',
@@ -226,7 +269,7 @@ test('generation includes ordinary tables and partitioned roots while skipping a
       type Dropped = Events['obsolete'];
     `,
       );
-      // Routine partition maintenance changes neither row contracts nor provenance.
+      // Routine partition maintenance changes neither row types nor schema summaries.
       await pool.query(`CREATE TABLE ${qualified(options.namespace, 'EventsTomorrow')}
       PARTITION OF ${qualified(options.namespace, 'Events')} FOR VALUES FROM (200) TO (300)`);
       assert.equal(await generateDefinitions({ ...options, onWarning: () => {} }), source);
@@ -347,17 +390,7 @@ test('foreign tables use authored types without affecting ordinary table generat
         assert.deepEqual(warnings, []);
         await run(
           process.execPath,
-          [
-            cli,
-            'generate',
-            '--directory',
-            options.directory,
-            '--namespace',
-            options.namespace,
-            '--out',
-            output,
-            '--check',
-          ],
+          [cli, 'generate', '--namespace', options.namespace, '--out', output, '--check'],
           { env: { ...process.env, DATABASE_URL: connection } },
         );
         assert.equal(await readFile(output, 'utf8'), source);

@@ -1,6 +1,5 @@
 import { checkAffectedRows } from './affected-rows.js';
 import type { QueryExecutor } from './connection.js';
-import { TenonError } from './errors.js';
 import type { OperationDefinition, OperationOptions } from './operations.js';
 import { assertOperation, operationResult, validateOptions } from './operations.js';
 import type { SqlQuery } from './query.js';
@@ -67,8 +66,9 @@ export function createClient(
     },
     async run(operation: OperationDefinition, input: readonly unknown[]) {
       assertOperation(operation);
-      if (!Array.isArray(input)) throw new TenonError('Operation input must be an explicit array.');
-      return execute(operation.build(...input), operation.options);
+      if (!Array.isArray(input)) throw new Error('Operation input must be an explicit array.');
+      const options = validateOptions(operation.options);
+      return execute(operation.build(...input), options);
     },
   } as Transaction;
 }

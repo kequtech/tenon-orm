@@ -143,8 +143,8 @@ test('domains use verified base parsers while retaining ordinary row types and S
       assert.match(changed, /CONSTRAINT "small" CHECK \(\(VALUE < 50\)\) NOT VALID/);
       assert.notEqual(changed, source);
       assert.equal(
-        changed.slice(changed.indexOf('export const migrationHistory')),
-        source.slice(source.indexOf('export const migrationHistory')),
+        changed.slice(changed.indexOf('export type ')),
+        source.slice(source.indexOf('export type ')),
       );
     },
   );

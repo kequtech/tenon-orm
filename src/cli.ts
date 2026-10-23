@@ -5,16 +5,15 @@ import { dirname, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import type { CaptureBaselineOptions } from './baseline.js';
 import { adoptBaseline, captureBaseline } from './baseline.js';
-import { TenonError } from './errors.js';
 import { generateDefinitions } from './generate.js';
 import { migrate, migrationStatus, rollback } from './migrations.js';
 import { createMigration } from './migrations/files.js';
 
-const help = `tenon migrate|generate|status|rollback [--directory migrations] [--namespace public]
+const help = `tenon migrate|status|rollback [--directory migrations] [--namespace public]
 tenon baseline capture|adopt [--directory migrations] [--namespace public]
 baseline capture: [--schema name ...] (default: whole database schema)
 tenon new <name> [--directory migrations] (no database required)
-generate: --out src/generated-schema.ts [--check]
+tenon generate [--namespace public] [--out src/generated-schema.ts] [--check]
 rollback: --steps 1
 Connection: DATABASE_URL
 `;
@@ -36,7 +35,7 @@ async function writeDefinitions(source: string, filename: string, check: boolean
       }
     }
     if (existing !== source) {
-      throw new TenonError(
+      throw new Error(
         'Generated definitions are stale or missing; run tenon generate and commit the result.',
       );
     }
@@ -100,7 +99,8 @@ async function main(): Promise<void> {
   const [command, argument] = positionals;
   // Validate explicitly supplied flags, not defaults. Silently ignoring --check
   // on migrate, for example, would turn an intended dry run into a schema change.
-  const allowed = new Set(['directory', 'help']);
+  const allowed = new Set(['help']);
+  if (command !== 'generate') allowed.add('directory');
   if (command !== 'new') {
     allowed.add('namespace');
   }
@@ -116,13 +116,13 @@ async function main(): Promise<void> {
   }
   for (const token of tokens) {
     if (token.kind === 'option' && !allowed.has(token.name)) {
-      throw new TenonError(`--${token.name} is not supported by ${command ?? 'this command'}.`);
+      throw new Error(`--${token.name} is not supported by ${command ?? 'this command'}.`);
     }
   }
 
   if (command === 'new') {
     if (positionals.length !== 2) {
-      throw new TenonError('Use new <name> to create a migration pair.');
+      throw new Error('Use new <name> to create a migration pair.');
     }
     const files = await createMigration({ name: argument!, directory: values.directory });
     process.stdout.write(`Created ${files.upPath}\nCreated ${files.downPath}\n`);
@@ -135,14 +135,14 @@ async function main(): Promise<void> {
     : positionals.length === 1 &&
       ['migrate', 'generate', 'status', 'rollback'].includes(command ?? '');
   if (!valid) {
-    throw new TenonError(
+    throw new Error(
       'Choose new, baseline capture|adopt, migrate, generate, status, or rollback. Use --help for options.',
     );
   }
 
   const connection = process.env.DATABASE_URL;
   if (!connection) {
-    throw new TenonError('DATABASE_URL is required.');
+    throw new Error('DATABASE_URL is required.');
   }
   const options = { connection, directory: values.directory, namespace: values.namespace };
   if (baseline) {
@@ -155,7 +155,11 @@ async function main(): Promise<void> {
 
   switch (command) {
     case 'generate': {
-      const source = await generateDefinitions({ ...options, onWarning: warn });
+      const source = await generateDefinitions({
+        connection,
+        namespace: values.namespace,
+        onWarning: warn,
+      });
       await writeDefinitions(source, values.out, values.check);
       break;
     }

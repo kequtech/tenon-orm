@@ -9,7 +9,6 @@ import {
   defineOperation,
   identifier,
   sql,
-  TenonError,
   unsafeSql,
 } from '../src/index.js';
 import { qualified, quote } from '../src/sql.js';
@@ -294,11 +293,11 @@ test('constraint options are validated before execution and captured immutably',
     assert.throws(
       () =>
         uncheckedDefine(() => sql`DELETE FROM ${identifier(namespace, 'items')}`, { affectedRows }),
-      TenonError,
+      /affectedRows/,
     );
     await assert.rejects(
       uncheckedSql(sql`DELETE FROM ${identifier(namespace, 'items')}`, { affectedRows }),
-      TenonError,
+      /affectedRows/,
     );
   }
   const options = { affectedRows: { max: 1 } } satisfies OperationOptions;

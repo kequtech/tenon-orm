@@ -17,6 +17,7 @@ import {
   captureBaseline,
   adoptBaseline,
 } from '@kequtech/tenon-orm';
+import * as second from './second-tenon/index.js';
 
 // Runs after installing the tarball in an isolated consumer directory.
 const connection = process.env.TENON_TEST_DATABASE_URL;
@@ -48,6 +49,19 @@ try {
     returns: 'one',
   });
   const account = await db.run(createAccount, ['first@example.test']);
+  const copiedLookup = second.defineOperation(
+    (id) => second.sql`SELECT id,email FROM ${identifier(namespace, 'Account')} WHERE id=${id}`,
+    { returns: 'one' },
+  );
+  assert.deepEqual(await db.run(copiedLookup, [account.id]), account);
+  assert.deepEqual(
+    await db.query(
+      sql`SELECT id,email FROM ${second.identifier(namespace, 'Account')} WHERE id=${account.id}`,
+      { returns: 'one' },
+    ),
+    account,
+  );
+  assert.throws(() => sql`SELECT ${second.sql`SELECT 1`}`, /Nested SQL/);
 
   await writeFile(
     join(directory, '0002_active.up.sql'),

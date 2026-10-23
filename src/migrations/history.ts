@@ -1,5 +1,4 @@
 import type { PoolClient } from 'pg';
-import { TenonError } from '../errors.js';
 import { qualified } from '../sql.js';
 import type { SqlMigration } from './files.js';
 
@@ -33,7 +32,7 @@ export async function migrationState(
       file.name !== record.name ||
       file.checksum !== record.checksum
     ) {
-      throw new TenonError(
+      throw new Error(
         `Migration history differs from files at version ${record.id}; restore applied files before continuing.`,
       );
     }

@@ -39,7 +39,7 @@ test('schema comments describe SQL constraints, defaults, identity settings and 
     async (options) => {
       await migrate(options);
       const source = await generateDefinitions({ ...options, onWarning: () => {} });
-      const summary = source.slice(0, source.indexOf('export const migrationHistory'));
+      const summary = source.slice(0, source.indexOf('export type '));
       assert.match(summary, /\/\/ TABLE "Account"\n/);
       assert.match(summary, /\/\/   "code" character varying\(24\)/);
       assert.match(summary, /CONSTRAINT "Account_pkey" PRIMARY KEY \(tenant, id\)/);
@@ -81,8 +81,8 @@ test('schema comments describe SQL constraints, defaults, identity settings and 
       const changed = await generateDefinitions({ ...options, onWarning: () => {} });
       assert.notEqual(changed, source);
       assert.equal(
-        changed.slice(changed.indexOf('export const migrationHistory')),
-        source.slice(source.indexOf('export const migrationHistory')),
+        changed.slice(changed.indexOf('export type ')),
+        source.slice(source.indexOf('export type ')),
       );
       assert.match(changed, /"active" boolean NOT NULL DEFAULT true/);
     },
@@ -149,7 +149,7 @@ test('catalog names and multiline SQL literals always remain comments in generat
     async (options) => {
       await migrate(options);
       const source = await generateDefinitions(options);
-      const summary = source.slice(0, source.indexOf('export const migrationHistory'));
+      const summary = source.slice(0, source.indexOf('export type '));
       for (const line of summary.split(/\r\n|[\n\r\u2028\u2029]/u)) {
         assert.ok(
           line === '' || line.startsWith('//'),

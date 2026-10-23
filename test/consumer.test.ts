@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { access, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { access, cp, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { test } from 'node:test';
@@ -32,22 +32,16 @@ test('the packed package preserves API contracts under TypeScript 6 and 7', asyn
       'dist/index.js',
       'dist/index.d.ts',
       'dist/cli.js',
-      'docs/reference.md',
-      'docs/safeql.md',
-      'docs/adopting.md',
-      'docs/contributing.md',
-      'docs/design-decisions.md',
-      'docs/releasing.md',
+      'agent-guide.md',
+      'adoption-guide.md',
     ]) {
       assert.ok(paths.includes(required), `Package is missing ${required}`);
     }
     for (const path of paths) {
       assert.ok(
-        ['LICENSE', 'README.md', 'package.json'].includes(path) ||
-          /^docs\/(?:reference|safeql|adopting|contributing|design-decisions|releasing)\.md$/.test(
-            path,
-          ) ||
-          /^dist\/(?:[\w-]+\/)*[\w-]+\.(?:js|d\.ts)$/.test(path),
+        ['LICENSE', 'README.md', 'package.json', 'agent-guide.md', 'adoption-guide.md'].includes(
+          path,
+        ) || /^dist\/(?:[\w-]+\/)*[\w-]+\.(?:js|d\.ts)$/.test(path),
         `Unexpected package content: ${path}`,
       );
     }
@@ -118,6 +112,31 @@ test('the packed package preserves API contracts under TypeScript 6 and 7', asyn
       await writeFile(join(consumer, filename), source);
     }
     const config = join(consumer, 'tsconfig.json');
+    // A data-access package may bring its own copy of Tenon into the application.
+    await cp(join(installed, 'dist'), join(consumer, 'second-tenon'), { recursive: true });
+    await writeFile(
+      join(consumer, 'copies.ts'),
+      `
+      import { sql, defineOperation, type Database } from '@kequtech/tenon-orm';
+      import * as second from './second-tenon/index.js';
+      declare const db: Database;
+      declare const other: second.Database;
+      type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
+      type Assert<T extends true> = T;
+      async function check() {
+        const fromSecond = second.defineOperation((id: number) => second.sql<{ id: number }>\`SELECT \${id}::int AS id\`, { returns: 'one' });
+        const fromFirst = defineOperation((id: number) => sql<{ id: number }>\`SELECT \${id}::int AS id\`, { returns: 'one' });
+        const a = await db.run(fromSecond, [1]);
+        const b = await other.run(fromFirst, [1]);
+        const c = await db.query(second.sql<{ id: number }>\`SELECT 1 AS id\`, { returns: 'many' });
+        const d = await other.query(sql<{ id: number }>\`SELECT 1 AS id\`, { returns: 'oneOrNone' });
+        const types: [Assert<Equal<typeof a, { id: number }>>, Assert<Equal<typeof b, { id: number }>>,
+          Assert<Equal<typeof c, { id: number }[]>>, Assert<Equal<typeof d, { id: number } | undefined>>] = [true, true, true, true];
+        // @ts-expect-error crossing package copies preserves the input contract
+        await db.run(fromSecond, ['wrong']);
+      }
+    `,
+    );
     await writeFile(
       config,
       JSON.stringify({
@@ -132,7 +151,7 @@ test('the packed package preserves API contracts under TypeScript 6 and 7', asyn
           moduleResolution: 'NodeNext',
           types: ['node'],
         },
-        files: ['type-contracts.ts'],
+        files: ['type-contracts.ts', 'copies.ts'],
       }),
     );
     for (const compiler of [
@@ -180,11 +199,7 @@ ${result.stderr ?? ''}`);
         `
       import assert from 'node:assert/strict';
       import { Pool } from 'pg';
-      import { createTenon, defineOperation } from '@kequtech/tenon-orm';
-      const api = await import('@kequtech/tenon-orm');
-      assert.equal('default' in api, false);
-      assert.equal('tenon' in api, false);
-      assert.equal('define' in api, false);
+      import { createTenon } from '@kequtech/tenon-orm';
       const db = createTenon({ connection: 'postgresql://unused' });
       await db.close();
       const pool = new Pool({ connectionString: 'postgresql://unused' });

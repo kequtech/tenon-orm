@@ -1,7 +1,6 @@
 import { createHash } from 'node:crypto';
 import { mkdir, open, readdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import { TenonError } from '../errors.js';
 import { baselineHeader } from './baseline-sql.js';
 import { validateMigrationSql } from './sql.js';
 
@@ -34,7 +33,7 @@ export async function withMigrationCreationLock<T>(
   // Serialize local numbering even when two processes choose different names.
   const lock = await open(lockPath, 'wx').catch((error: unknown) => {
     if (error instanceof Error && 'code' in error && error.code === 'EEXIST') {
-      throw new TenonError(
+      throw new Error(
         `Migration creation lock exists at ${lockPath}; another creator may be running. Remove a stale lock only after that process has stopped.`,
       );
     }
@@ -54,9 +53,7 @@ export async function withMigrationCreationLock<T>(
 /** Scaffold empty SQL files offline; authors supply both migration bodies. */
 export async function createMigration(options: CreateMigrationOptions): Promise<CreatedMigration> {
   if (typeof options.name !== 'string' || !/^[A-Za-z0-9_-]+$/.test(options.name)) {
-    throw new TenonError(
-      'Migration names must contain only letters, digits, underscores or hyphens.',
-    );
+    throw new Error('Migration names must contain only letters, digits, underscores or hyphens.');
   }
   return withMigrationCreationLock(options.directory ?? 'migrations', async (directory) => {
     let latest = 0n;
@@ -67,7 +64,7 @@ export async function createMigration(options: CreateMigrationOptions): Promise<
       }
       const match = migrationFilename.exec(file.name);
       if (!match) {
-        throw new TenonError(`Invalid migration filename: ${file.name}`);
+        throw new Error(`Invalid migration filename: ${file.name}`);
       }
       const id = BigInt(match[1]!);
       if (id > latest) {
@@ -102,7 +99,7 @@ export async function readMigrations(directory = 'migrations'): Promise<readonly
     }
     const match = migrationFilename.exec(file.name);
     if (!match) {
-      throw new TenonError(
+      throw new Error(
         `Invalid migration filename: ${file.name}; use 0001_description.up.sql and optional .down.sql.`,
       );
     }
@@ -111,11 +108,11 @@ export async function readMigrations(directory = 'migrations'): Promise<readonly
     const direction = match[3] as 'up' | 'down';
     const group = groups.get(id) ?? { name };
     if (group.name !== name || group[direction] !== undefined) {
-      throw new TenonError(`Duplicate migration version: ${id}`);
+      throw new Error(`Duplicate migration version: ${id}`);
     }
     const sql = await readFile(join(directory, file.name), 'utf8');
     if (!sql.trim()) {
-      throw new TenonError(`Empty migration: ${file.name}`);
+      throw new Error(`Empty migration: ${file.name}`);
     }
     // The filename/header opts into native pg_dump SQL, including SQL-standard
     // function bodies our guard cannot parse. This is an explicit trust convention,
@@ -139,10 +136,10 @@ export async function readMigrations(directory = 'migrations'): Promise<readonly
   });
   return sorted.map(([id, group], i) => {
     if (i && BigInt(sorted[i - 1]![0]) === BigInt(id)) {
-      throw new TenonError(`Duplicate migration version: ${id}`);
+      throw new Error(`Duplicate migration version: ${id}`);
     }
     if (group.up === undefined) {
-      throw new TenonError(`Migration ${id} has a down file without an up file.`);
+      throw new Error(`Migration ${id} has a down file without an up file.`);
     }
     return {
       id,

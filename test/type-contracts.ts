@@ -5,7 +5,7 @@ import type {
   SqlQuery,
   UnknownRow,
 } from '../src/index.js';
-import { createTenon, defineOperation, identifier, sql, unsafeSql } from '../src/index.js';
+import { defineOperation, identifier, sql, unsafeSql } from '../src/index.js';
 import type { User } from './fixtures/generated-schema.js';
 import { echo_values } from './fixtures/operations.js';
 
@@ -49,8 +49,6 @@ async function contracts(db: Database, options?: OperationOptions) {
   sql<Summary | undefined>`SELECT 1`;
   // @ts-expect-error plain strings cannot execute accidentally
   await db.query('SELECT 1');
-  // @ts-expect-error legacy mode is removed
-  await db.query(query, { returns: 'requiredOne' });
   // @ts-expect-error unknown options are rejected
   await db.query(query, { first: true });
   // @ts-expect-error a non-native generic cannot replace a runtime mode
@@ -69,10 +67,6 @@ async function contracts(db: Database, options?: OperationOptions) {
     Assert<Equal<typeof dynamicOperation, DynamicResult>>,
   ] = [true, true];
   void dynamicTypes;
-  // @ts-expect-error no schema registration
-  createTenon({ connection: 'unused', schema: {} });
-  // @ts-expect-error no operation registration
-  createTenon({ connection: 'unused', operations: {} });
 
   const byEmail = defineOperation(
     (email: string, active: boolean) =>

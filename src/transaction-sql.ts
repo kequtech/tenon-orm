@@ -1,5 +1,3 @@
-import { TenonError } from './errors.js';
-
 /** Read only the command prefix, leaving strings, bodies and SQL syntax to pg. */
 function commandPrefix(sql: string): string[] {
   const words: string[] = [];
@@ -66,7 +64,7 @@ export function validateTransactionSql(sql: string, name: string): void {
     // A SQL prepared statement named transaction is not a prepared transaction.
     (first === 'PREPARE' && second === 'TRANSACTION' && third !== 'AS' && third !== '(')
   ) {
-    throw new TenonError(
+    throw new Error(
       `Operation ${name} cannot start or end a transaction; use db.transaction() to manage transaction boundaries.`,
     );
   }

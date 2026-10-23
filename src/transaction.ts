@@ -1,7 +1,6 @@
 import type { Pool } from 'pg';
 import type { QueryExecutor } from './connection.js';
 import { executeSql, watchClient } from './connection.js';
-import { TenonError } from './errors.js';
 
 /** The callback owns one connection and expires before commit or rollback begins. */
 export async function withTransaction<T>(
@@ -17,7 +16,7 @@ export async function withTransaction<T>(
   let recoveryFailure: AggregateError | undefined;
 
   const query: QueryExecutor = async (text, input, readResult, guarded) => {
-    if (!active) throw new TenonError('The transaction has finished.');
+    if (!active) throw new Error('The transaction has finished.');
 
     // Queue whole operations, including savepoint cleanup. Otherwise concurrent
     // calls could place another write inside a savepoint that gets rolled back.
@@ -64,7 +63,7 @@ export async function withTransaction<T>(
     if (recoveryFailure) throw recoveryFailure;
     const committed = await client.query('COMMIT');
     if (committed.command !== 'COMMIT') {
-      throw new TenonError('PostgreSQL rolled back the aborted transaction.');
+      throw new Error('PostgreSQL rolled back the aborted transaction.');
     }
     return result;
   } catch (error) {

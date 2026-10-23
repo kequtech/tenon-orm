@@ -1,5 +1,3 @@
-import { TenonError } from '../errors.js';
-
 /** Find statement starts without splitting quoted strings, DO bodies or comments. */
 export function validateMigrationSql(sql: string, filename: string): void {
   let statement = '';
@@ -14,7 +12,7 @@ export function validateMigrationSql(sql: string, filename: string): void {
         words,
       )
     ) {
-      throw new TenonError(
+      throw new Error(
         `Migration ${filename} must not contain transaction-control statements; Tenon owns the transaction.`,
       );
     }
@@ -91,7 +89,7 @@ export function validateMigrationSql(sql: string, filename: string): void {
     }
   }
   if (quote || commentDepth) {
-    throw new TenonError(`Unterminated SQL string or comment in migration ${filename}.`);
+    throw new Error(`Unterminated SQL string or comment in migration ${filename}.`);
   }
   check();
 }

@@ -1,5 +1,3 @@
-import { TenonError } from './errors.js';
-
 export function validateName(value: string): void {
   if (
     typeof value !== 'string' ||
@@ -7,7 +5,7 @@ export function validateName(value: string): void {
     value.includes('\0') ||
     Buffer.byteLength(value) > 63
   ) {
-    throw new TenonError('Identifiers must contain 1–63 UTF-8 bytes and no NUL character.');
+    throw new Error('Identifiers must contain 1–63 UTF-8 bytes and no NUL character.');
   }
 }
 export function quote(name: string): string {

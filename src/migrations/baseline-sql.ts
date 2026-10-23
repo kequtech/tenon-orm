@@ -1,4 +1,3 @@
-import { TenonError } from '../errors.js';
 import { quote } from '../sql.js';
 
 export const baselineHeader = '-- Tenon baseline captured by pg_dump.\n';
@@ -11,7 +10,7 @@ export function prepareBaselineSql(dump: string, namespace: string): string {
   if (opening) {
     const closing = dump.lastIndexOf(`\\unrestrict ${opening[1]}`);
     if (closing < opening.index) {
-      throw new TenonError('pg_dump output has an incomplete psql wrapper.');
+      throw new Error('pg_dump output has an incomplete psql wrapper.');
     }
     dump =
       dump.slice(0, closing) + dump.slice(closing).replace(/^\\unrestrict [A-Za-z0-9]+\r?\n?/, '');

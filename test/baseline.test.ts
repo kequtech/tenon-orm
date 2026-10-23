@@ -222,12 +222,27 @@ test('baseline CLI captures and adopts without replaying live data or exposing c
     assert.deepEqual((await pool.query(`SELECT * FROM ${table}`)).rows, original);
     await run(
       process.execPath,
-      [cli, 'generate', ...args, '--out', join(options.directory, 'definitions.ts')],
+      [
+        cli,
+        'generate',
+        '--namespace',
+        options.namespace,
+        '--out',
+        join(options.directory, 'definitions.ts'),
+      ],
       { env },
     );
     await run(
       process.execPath,
-      [cli, 'generate', ...args, '--out', join(options.directory, 'definitions.ts'), '--check'],
+      [
+        cli,
+        'generate',
+        '--namespace',
+        options.namespace,
+        '--out',
+        join(options.directory, 'definitions.ts'),
+        '--check',
+      ],
       { env },
     );
     await rm(join(options.directory, '0001_baseline.up.sql'));

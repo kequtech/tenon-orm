@@ -2,7 +2,7 @@ export type { QueryResult } from 'pg';
 export type { AffectedRowsConstraint } from './affected-rows.js';
 export { createTenon } from './database.js';
 export type { TenonOptions } from './database.js';
-export { AffectedRowsError, TenonError } from './errors.js';
+export { AffectedRowsError } from './errors.js';
 export { defineOperation } from './operations.js';
 export type {
   OperationDefinition,

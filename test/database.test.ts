@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { after, before, beforeEach, test } from 'node:test';
 import { Pool } from 'pg';
-import type { Transaction } from '../src/index.js';
+import type { Transaction, SqlQuery, OperationReturnMode } from '../src/index.js';
 import { createTenon, defineOperation, identifier, migrate, sql, unsafeSql } from '../src/index.js';
 import { qualified, quote } from '../src/sql.js';
 import type { User } from './fixtures/generated-schema.js';
@@ -105,40 +105,35 @@ test('SQL controls projection, filters, ordering, pagination and batch defaults'
   );
 });
 
-test('inline oneOrNone and one enforce cardinality without changing SQL', async () => {
-  const text = `SELECT id, email FROM ${target} ORDER BY id`;
-  type Summary = Pick<User, 'id' | 'email'>;
-  assert.equal(await db.query(unsafeSql<Summary>(text, []), { returns: 'oneOrNone' }), undefined);
-  await assert.rejects(
-    db.query(unsafeSql<Summary>(text, []), { returns: 'one' }),
-    /Query.*exactly one row.*0 rows/,
-  );
-  await db.query(sql`INSERT INTO ${identifier(namespace, 'User')} (email) VALUES ('a')`, {
-    returns: 'many',
+for (const method of ['query', 'run'] as const) {
+  test(`${method}: result modes preserve nulls and enforce returned-row counts`, async () => {
+    type Summary = Pick<User, 'id' | 'email' | 'nickname'>;
+    const query = sql<Summary>`SELECT id, email, nickname FROM ${identifier(namespace, 'User')} ORDER BY id`;
+    const execute = (statement: SqlQuery<Summary>, returns: OperationReturnMode) =>
+      method === 'query'
+        ? db.query(statement, { returns })
+        : db.run(
+            defineOperation(() => statement, { returns }),
+            [],
+          );
+
+    assert.deepEqual(await execute(query, 'many'), []);
+    assert.equal(await execute(query, 'oneOrNone'), undefined);
+    await assert.rejects(execute(query, 'one'), /exactly one row.*0 rows/);
+
+    await db.query(sql`INSERT INTO ${identifier(namespace, 'User')} (email) VALUES ('a')`);
+    const first = { id: 1, email: 'a', nickname: null };
+    assert.deepEqual(await execute(query, 'one'), first);
+    assert.deepEqual(await execute(query, 'oneOrNone'), first);
+
+    await db.query(sql`INSERT INTO ${identifier(namespace, 'User')} (email) VALUES ('b')`);
+    assert.deepEqual(await execute(query, 'many'), [first, { id: 2, email: 'b', nickname: null }]);
+    await assert.rejects(execute(query, 'oneOrNone'), /at most one row.*2 rows/);
+    await assert.rejects(execute(query, 'one'), /exactly one row.*2 rows/);
+    const limited = sql<Summary>`SELECT id, email, nickname FROM ${identifier(namespace, 'User')} ORDER BY id LIMIT 1`;
+    assert.deepEqual(await execute(limited, 'oneOrNone'), first);
   });
-  assert.deepEqual(await db.query(unsafeSql<Summary>(text, []), { returns: 'one' }), {
-    id: 1,
-    email: 'a',
-  });
-  await db.query(sql`INSERT INTO ${identifier(namespace, 'User')} (email) VALUES ('b')`, {
-    returns: 'many',
-  });
-  await assert.rejects(
-    db.query(unsafeSql<Summary>(text, []), { returns: 'oneOrNone' }),
-    /at most one row.*2 rows/,
-  );
-  await assert.rejects(
-    db.query(unsafeSql<Summary>(text, []), { returns: 'one' }),
-    /exactly one row.*2 rows/,
-  );
-  assert.deepEqual(
-    await db.query(unsafeSql<Summary>(`${text} LIMIT 1`, []), { returns: 'oneOrNone' }),
-    {
-      id: 1,
-      email: 'a',
-    },
-  );
-});
+}
 
 test('inline command results preserve native fields and explicitly requested RETURNING rows', async () => {
   const inserted = await db.query(
@@ -569,13 +564,7 @@ test('invalid queries and options reject before execution', async () => {
   for (const query of ['', 'SELECT 1', null, {}, { text: 'SELECT 1', values: [] }]) {
     await assert.rejects(unchecked(query), /Expected a query/);
   }
-  for (const options of [
-    null,
-    [],
-    { returns: 'first' },
-    { returns: 'requiredOne' },
-    { limit: 1 },
-  ]) {
+  for (const options of [null, [], { returns: 'first' }, { limit: 1 }]) {
     await assert.rejects(
       unchecked(sql`SELECT 1`, options),
       /plain object|Unknown operation option|Operation returns/,

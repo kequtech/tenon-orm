@@ -1,6 +1,5 @@
 import type { PoolClient, PoolConfig, QueryResult } from 'pg';
 import { Pool } from 'pg';
-import { TenonError } from './errors.js';
 import { plainObject } from './validation.js';
 
 export type Connection = string | PoolConfig | Pool;
@@ -19,7 +18,7 @@ export function createPool(connection: Connection): { pool: Pool; owned: boolean
   // Missing configuration must not silently select pg's environment defaults.
   // An explicit config object (including {}) may still use those defaults.
   if (typeof connection === 'string') {
-    if (!connection.trim()) throw new TenonError('Connection string must not be empty.');
+    if (!connection.trim()) throw new Error('Connection string must not be empty.');
   } else {
     plainObject(connection, 'Connection configuration');
   }

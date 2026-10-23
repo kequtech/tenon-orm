@@ -2,7 +2,6 @@ import { execFile } from 'node:child_process';
 import { link, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { TenonError } from './errors.js';
 import { prepareBaselineSql } from './migrations/baseline-sql.js';
 import type { DatabaseToolOptions } from './migrations/connection.js';
 import { withMigrationLock } from './migrations/connection.js';
@@ -38,7 +37,7 @@ export async function captureBaseline(options: CaptureBaselineOptions): Promise<
   const schemas = options.schemas?.map((schema) => `--schema=${quote(schema)}`) ?? [];
   return withMigrationCreationLock(options.directory ?? 'migrations', async (directory) => {
     if ((await readdir(directory)).some((name) => name.endsWith('.sql'))) {
-      throw new TenonError(
+      throw new Error(
         'Baseline capture requires an empty Tenon migration directory. Existing files were not changed.',
       );
     }
@@ -66,11 +65,11 @@ export async function captureBaseline(options: CaptureBaselineOptions): Promise<
         // execFile's Error includes argv, potentially containing credentials.
         // Do not propagate that Error, its command line, or a credential-bearing cause.
         if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
-          throw new TenonError(
+          throw new Error(
             'Baseline capture requires pg_dump on PATH. Install PostgreSQL client tools.',
           );
         }
-        throw new TenonError(
+        throw new Error(
           'pg_dump failed. Check database access, permissions and PostgreSQL client/server compatibility. No baseline was written.',
         );
       }
@@ -99,7 +98,7 @@ export async function adoptBaseline(options: DatabaseToolOptions): Promise<reado
     baseline.name !== 'baseline' ||
     baseline.down !== undefined
   ) {
-    throw new TenonError(
+    throw new Error(
       'Adoption requires 0001_baseline.up.sql with no down file. Capture and commit a baseline first.',
     );
   }
@@ -112,7 +111,7 @@ export async function adoptBaseline(options: DatabaseToolOptions): Promise<reado
       namespace,
     ]);
     if (!schema.rows.length) {
-      throw new TenonError(
+      throw new Error(
         'The baseline namespace does not exist. Use migrate to initialize a fresh database.',
       );
     }
@@ -121,7 +120,7 @@ export async function adoptBaseline(options: DatabaseToolOptions): Promise<reado
     await recordMigration(client, namespace, baseline);
     const result = await client.query('COMMIT');
     if (result.command !== 'COMMIT') {
-      throw new TenonError('Baseline adoption was rolled back.');
+      throw new Error('Baseline adoption was rolled back.');
     }
     return [baseline.id];
   });

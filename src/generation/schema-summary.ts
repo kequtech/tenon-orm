@@ -1,5 +1,4 @@
 import type { PoolClient } from 'pg';
-import { TenonError } from '../errors.js';
 import { quote } from '../sql.js';
 
 interface NamedDefinition {
@@ -135,7 +134,7 @@ export async function tableSummary(client: PoolClient, oid: string, name: string
       // known prefix, never matching/replacing namespace text inside SQL literals.
       const qualifiedPrefix = index.prefix + index.qualification;
       if (!index.definition.startsWith(qualifiedPrefix)) {
-        throw new TenonError(`Unexpected PostgreSQL index definition for ${quote(name)}.`);
+        throw new Error(`Unexpected PostgreSQL index definition for ${quote(name)}.`);
       }
       const definition = index.prefix + index.definition.slice(qualifiedPrefix.length);
       return `  ${definition}${index.valid ? '' : ' [INVALID]'}${index.ready ? '' : ' [NOT READY]'}`;

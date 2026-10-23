@@ -88,12 +88,19 @@ test('the packed package preserves API contracts under TypeScript 6 and 7', asyn
         },
       }),
     );
-    // npm ci seeds the cache with these dependencies. No registry access, install
-    // scripts or repository sources are available. The application supplies pg
-    // and its own development typings, as required by the public declarations.
+    // npm ci caches tarballs, but not necessarily the registry metadata needed
+    // for a fresh dependency graph. Prefer the cache, fetching anything missing.
+    // Install the packed artifact without lifecycle scripts or repository sources.
     await run(
       'npm',
-      ['install', '--dry-run=false', '--offline', '--ignore-scripts', '--no-audit', '--no-fund'],
+      [
+        'install',
+        '--dry-run=false',
+        '--prefer-offline',
+        '--ignore-scripts',
+        '--no-audit',
+        '--no-fund',
+      ],
       { cwd: consumer, env: npmEnv },
     );
     const installed = join(consumer, 'node_modules/@kequtech/tenon-orm');
@@ -367,7 +374,7 @@ ${result.stderr ?? ''}`);
         'install',
         '--dry-run=false',
         '--omit=dev',
-        '--offline',
+        '--prefer-offline',
         '--ignore-scripts',
         '--no-audit',
         '--no-fund',

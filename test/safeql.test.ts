@@ -35,6 +35,9 @@ test('the composition rule requires type-aware parsing', async () => {
 test('SafeQL file scopes and tag targets select separate connections for inference and SQL errors', async () => {
   const pool = new Pool({ connectionString: testConnection });
   const directory = await mkdtemp(join(tmpdir(), 'tenon-safeql-connections-'));
+  // Exercise CI's single-run parser mode, including SafeQL's repeated autofix passes.
+  const previousSingleRun = process.env.TSESTREE_SINGLE_RUN;
+  process.env.TSESTREE_SINGLE_RUN = 'true';
   try {
     await assertTestDatabase(pool);
     // Separate search paths exercise connection routing using the existing test database.
@@ -65,7 +68,7 @@ test('SafeQL file scopes and tag targets select separate connections for inferen
               files: ['**/*.ts'],
               languageOptions: {
                 parser: tseslint.parser,
-                parserOptions: { project: './tsconfig.json', tsconfigRootDir: directory },
+                parserOptions: { projectService: true, tsconfigRootDir: directory },
               },
               plugins: { tenon: eslintPlugin },
               rules: { 'tenon/check-composition': 'error' },
@@ -192,6 +195,8 @@ test('SafeQL file scopes and tag targets select separate connections for inferen
       },
     );
   } finally {
+    if (previousSingleRun === undefined) delete process.env.TSESTREE_SINGLE_RUN;
+    else process.env.TSESTREE_SINGLE_RUN = previousSingleRun;
     await pool.end();
     await rm(directory, { recursive: true, force: true });
   }
@@ -241,7 +246,7 @@ test('SafeQL checks actual Tenon tags, query functions and schema changes and re
         import { safeqlPlugin, eslintPlugin } from ${JSON.stringify(pathToFileURL(resolve('dist/safeql.js')).href)};
         export default defineConfig({
           files: ['**/*.ts'],
-          languageOptions: { parser: tseslint.parser, parserOptions: { project: './tsconfig.json', tsconfigRootDir: import.meta.dirname } },
+          languageOptions: { parser: tseslint.parser, parserOptions: { projectService: true, tsconfigRootDir: import.meta.dirname } },
           plugins: { tenon: eslintPlugin },
           rules: { 'tenon/check-composition': 'error' },
           extends: [safeql.configs.connections({

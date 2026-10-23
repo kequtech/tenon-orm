@@ -99,11 +99,13 @@ export async function tableSummary(client: PoolClient, oid: string, name: string
     ORDER BY a.attnum`,
     [oid],
   );
+  // Column definitions already describe NOT NULL; PostgreSQL 18 also stores it
+  // as a table constraint, which would duplicate every required column here.
   const constraints = await client.query<NamedDefinition>(
     `
     SELECT conname AS name, pg_catalog.pg_get_constraintdef(oid, false) AS definition
     FROM pg_catalog.pg_constraint
-    WHERE conrelid = $1::oid AND conparentid = 0 AND contype IN ('p', 'u', 'f', 'c', 'x', 'n')
+    WHERE conrelid = $1::oid AND conparentid = 0 AND contype IN ('p', 'u', 'f', 'c', 'x')
     ORDER BY conname COLLATE "C"`,
     [oid],
   );

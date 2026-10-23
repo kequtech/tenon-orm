@@ -10,6 +10,3 @@ trim_trailing_whitespace = true
 
 [*.md]
 trim_trailing_whitespace = false
-
-[.github/workflows/synchronize-documentation.yml]
-indent_size = 4

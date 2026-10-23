@@ -49,6 +49,7 @@ test('schema comments describe SQL constraints, defaults, identity settings and 
         /"id" integer NOT NULL GENERATED ALWAYS AS IDENTITY \(START WITH 11 INCREMENT BY 3 MINVALUE 1 MAXVALUE 2147483647 CACHE 4 NO CYCLE\)/,
       );
       assert.match(summary, /"active" boolean NOT NULL DEFAULT false/);
+      assert.doesNotMatch(summary, /CONSTRAINT "[^"]+" NOT NULL/);
       assert.match(summary, /"upper_label" text GENERATED ALWAYS AS \(upper\(label\)\) STORED/);
       assert.match(
         summary,

@@ -31,7 +31,7 @@ not load `.env` automatically.
 CI tests PostgreSQL 16 and 18 with matching `pg_dump` clients. The consumer test packs and installs
 the actual npm artifact, compiles its API with TypeScript 6 and 7, exercises application
 upgrades/adoption/recovery, and checks production imports in a fresh production-only installation.
-It uses npm's offline cache, populated by `npm ci`. SafeQL tests use TypeScript 6 for its linting
+It prefers npm's cache and downloads missing dependencies or metadata. SafeQL tests use TypeScript 6 for its linting
 toolchain. They exercise normal SafeQL configuration and the companion ESLint rule, annotation
 generation and repair, static fragments, aliases, and explicit rejection of unsupported dynamic
 composition. Generated result annotations are also compiled and compared with actual PostgreSQL
@@ -78,9 +78,7 @@ npm artifact. Update package version and lockfile together. Publishing is a sepa
 action; `prepublishOnly` runs the full suite and requires the test database.
 
 The npm package is `@kequtech/tenon-orm`; the Git repository is
-`git@github.com:kequtech/tenon-orm.git`. Kequtech documentation synchronization uses the `tenon-orm`
-source identity and the `SITE_EDITORIAL_INGEST_TOKEN` Actions secret. Entire CLI is not required for
-development, CI, or publishing.
+`git@github.com:kequtech/tenon-orm.git`. Entire CLI is not required for development, CI, or publishing.
 
 Rehearse migration and recovery in the application's actual database/proxy environment. The tests do
 not establish physical backup or PITR recovery. `npm run benchmark` measures sequential calls on the

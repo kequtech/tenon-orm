@@ -1,13 +1,23 @@
-# Using Tenon
+# Using Tenon: a human guide
 
 Tenon provides SQL execution, SQL migrations, and generated TypeScript row types.
 It uses `pg` without transforming its values. There are no model classes,
 automatic relation loaders, or schema synchronization.
 
-When working in an existing project, read its database connection setup, generated
-schema, relevant operations, migrations, and test commands first. Reuse its pool,
-SQL conventions, and environment setup. Keep application validation and business
-rules in the application. See [adoption](adoption-guide.md) when replacing another ORM.
+You write PostgreSQL queries directly. Tenon binds input values, executes queries,
+controls transactions, and gives you explicit choices about returned rows. Your
+application supplies the database connection and owns validation and business rules.
+
+There are three separate kinds of checking:
+
+- **Generated row types** describe full table rows at a database checkpoint.
+- **Query annotations** describe the actual selected columns, joins, or expressions.
+  SafeQL can generate and check those annotations during development.
+- **Runtime checks** enforce returned-row counts and optional affected-row limits.
+  Type annotations do not validate arbitrary JSON or replace application validation.
+
+Start with this guide. The [agent guide](agent-guide.md) is a compact implementation
+reference; [adoption](adoption-guide.md) covers replacing an existing ORM.
 
 ## Install and connect
 
@@ -76,32 +86,49 @@ an empty scaffold file. A down migration is not a backup.
 
 ## Queries and reusable operations
 
+An ordinary function is enough for most application queries:
+
 ```ts
-import { defineOperation, sql } from '@kequtech/tenon-orm';
+import { sql } from '@kequtech/tenon-orm';
 import type { User } from './generated-schema.js';
 import { db } from './db.js';
 
 type UserSummary = Pick<User, 'id' | 'email'>;
 
-export const userByEmail = defineOperation(
+export async function userByEmail(email: string) {
+  return db.query(sql<UserSummary>`SELECT id, email FROM public."User" WHERE email = ${email}`, {
+    returns: 'oneOrNone',
+  });
+}
+
+const user = await userByEmail('reader@example.test');
+```
+
+The `sql` tag binds the email as a parameter. The row annotation describes one row;
+`returns: 'oneOrNone'` makes the result `UserSummary | undefined` and rejects more
+than one row. You can also omit the handwritten annotation and let the
+[SafeQL workflow](#result-typing-with-safeql) generate it.
+
+Use `defineOperation` when a reusable query definition should carry its execution
+options and be run on either a database or transaction:
+
+```ts
+import { defineOperation, sql } from '@kequtech/tenon-orm';
+
+export const userByEmailQuery = defineOperation(
   (email: string) => sql<UserSummary>`
     SELECT id, email FROM public."User" WHERE email = ${email}
   `,
   { returns: 'oneOrNone' },
 );
 
-const user = await db.run(userByEmail, ['agent@example.test']);
-const users = await db.query(sql<UserSummary>`SELECT id, email FROM public."User" ORDER BY id`, {
-  returns: 'many',
-});
+const user = await db.run(userByEmailQuery, ['reader@example.test']);
 ```
 
-Export operations from ordinary modules and import them where needed. A factory
-runs when called and must synchronously return a query. Inputs come from its
-function parameters; result types come from `sql<Row>`. For several related
-inputs, use one typed object: `(input: { email: string; active: boolean }) => ...`
-and `db.run(operation, [{ email, active }])`. `run` always takes an input array,
-including `[]` for a parameterless factory. Options belong to the definition.
+Factories return queries synchronously. Inputs come from their function parameters;
+results come from `sql<Row>` and the return mode. For related inputs, use a typed
+object and `db.run(operation, [{ email, active }])`. `run` always takes an input
+array, including `[]` for a parameterless factory. Options belong to the definition.
 
 | `returns`          | Result                | Returned rows allowed |
 | ------------------ | --------------------- | --------------------- |
@@ -124,7 +151,9 @@ returned JSON; use SQL checking and application validation where appropriate.
 
 The `sql` tag binds interpolations as `$1`, `$2`, etc. Do not quote interpolations
 or mix manual `$n` placeholders into a tagged query. Values use pg's conversions,
-including arrays, JSON, dates, and `undefined` becoming SQL null.
+including arrays, JSON, dates, and `undefined` becoming SQL null. Cast standalone
+parameter expressions in projections (for example, select a bound value with
+`::integer`) so PostgreSQL determines the intended result type.
 
 ```ts
 const ids = [1, 2, 3];
@@ -155,10 +184,66 @@ import { identifier, unsafeSql } from '@kequtech/tenon-orm';
 await db.query(sql`SELECT count(*) FROM ${identifier('public', 'User')}`);
 ```
 
-Nested query tokens and raw fragments are unsupported. For SQL loaded from a file
+Executable query tokens cannot be nested; use fragments for composition. For SQL loaded from a file
 or another trusted source, use `unsafeSql<Row>(text, values)`, with an explicit
 array even when empty. Never concatenate application input into SQL text.
 Each public query executes one statement, including parameterless queries.
+
+## Composing queries
+
+`sql.fragment` creates a reusable piece of authored SQL. `sql.join` combines a
+nonempty list of fragments with an explicit fragment separator. Neither declares
+a result type or executes by itself.
+
+```ts
+const tenant = sql.fragment`tenant_id = ${tenantId}`;
+const active = sql.fragment`active = ${true}`;
+const query = sql<UserSummary>`
+  SELECT id, email FROM public."User"
+  WHERE ${sql.join([tenant, active], sql.fragment` AND `)}
+  ORDER BY id LIMIT ${limit}
+`;
+```
+
+This example assumes your table has a `tenant_id` column. The checker can resolve
+these constant fragments and the literal join list. Parenthesize groups explicitly:
+
+```ts
+const group = sql.fragment`(${left} OR ${right})`;
+```
+
+SQL operator precedence is unchanged.
+
+You can also build lists at runtime:
+
+```ts
+const filters = [sql.fragment`tenant_id = ${tenantId}`];
+if (email !== undefined) filters.push(sql.fragment`email = ${email}`);
+
+const query = sql<UserSummary>`
+  SELECT id, email FROM public."User"
+  WHERE ${sql.join(filters, sql.fragment` AND `)}
+`;
+```
+
+Values remain bound parameters, even when they contain SQL-looking text. Strings
+such as `'DESC'` also bind as values. For ordering, choose fragments containing
+`DESC` or `ASC` from application-controlled alternatives. `identifier()` quotes
+application-approved names; it does not authorize access.
+
+The SafeQL preset deliberately reports runtime-built lists and conditional
+fragments as unsupported. Prefer a static SQL predicate such as
+`(${email}::text IS NULL OR email = ${email})` when it fits the query. Otherwise,
+retain an explicit result annotation and use a narrow, explained ESLint suppression
+with database tests covering each variant. Parameter safety alone does not verify
+the selected columns or the correctness of every branch.
+
+Empty fragments and `sql.join([], separator)` throw. Decide explicitly what an
+empty filter list means; Tenon will not silently remove a condition. Separators
+must be fragments, and full `sql`/`unsafeSql` queries cannot be inserted as fragments.
+Each use receives correctly ordered parameters; literal `$1` text inside SQL
+strings and comments is left intact. Do not author manual parameter placeholders
+inside templates.
 
 ## Transactions and guarded writes
 
@@ -245,55 +330,97 @@ cast to text[] for exact values. Enum arrays and arrays of domains are unverifie
 Finite dates and timestamps without time zone use Node's local timezone.
 Custom pg parsers need matching application types.
 
-## Optional SQL checking with SafeQL
+## Result typing with SafeQL
 
-SafeQL checks SQL and declared projections against a database during linting.
-It is development tooling; Tenon does not load it at runtime. The tested setup
-uses TypeScript 6, SafeQL 5.4, ESLint 10, and typescript-eslint 8:
+Recommended for TypeScript projects: generate and check query annotations against
+your development/test database. This is optional development tooling, configured
+by the application. The runtime does not import ESLint or SafeQL, contact a schema
+service, or run a checker before executing queries.
+
+The supported tooling setup uses TypeScript 6, SafeQL 5.4.2+, ESLint 10, and
+typescript-eslint 8. Runtime consumer types are also tested with TypeScript 7;
+the linting preset is tested with TypeScript 6.
 
 ```sh
-npm install --save-dev typescript@~6.0.2 eslint typescript-eslint @ts-safeql/eslint-plugin
+npm install --save-dev typescript@~6.0.2 eslint@^10 typescript-eslint@^8 @ts-safeql/eslint-plugin@^5.4.2
 ```
 
-Merge this configuration into the application's `eslint.config.mjs`:
+Add this to `eslint.config.mjs`, merging with your existing configuration:
 
 ```js
-import safeql from '@ts-safeql/eslint-plugin/config';
-import tseslint from 'typescript-eslint';
+import { tenonSafeql } from '@kequtech/tenon-orm/safeql';
 
 export default [
-  tseslint.configs.base,
-  { files: ['src/**/*.ts'], languageOptions: { parserOptions: { project: './tsconfig.json' } } },
-  {
-    ...safeql.configs.connections({
-      databaseUrl: process.env.DATABASE_URL,
-      targets: [{ tag: 'sql' }],
-      inferLiterals: false,
-      overrides: {
-        types: {
-          int8: 'string',
-          numeric: 'string',
-          json: 'unknown',
-          jsonb: 'unknown',
-          date: 'Date | number',
-          timestamp: 'Date | number',
-          timestamptz: 'Date | number',
-        },
-      },
-    }),
-    files: ['src/**/*.ts'],
-  },
+  ...tenonSafeql({
+    databaseUrl: process.env.DATABASE_URL,
+    tsconfigRootDir: import.meta.dirname,
+  }),
 ];
 ```
 
-Run `npx eslint "src/**/*.ts"` against the intended development/test schema.
-Factories work with the same `sql` target; aliases need a matching target name.
-For a generated array, add a column override such as
-`columns: { 'User.tags': 'PgArray<string>' }` and import `PgArray` in the query file.
-Keys use `Table.column`, so duplicate table names across schemas need care.
-Custom parsers require corresponding overrides. SafeQL does not inspect
-`unsafeSql` or generally resolve runtime identifiers. Database tests still need
-to verify application behavior.
+Supply `DATABASE_URL` using your application's environment setup. The preset
+requires an explicit URL and does not load `.env`. Apply migrations to the intended
+development/test database before checking. It defaults to `src/**/*.ts` and
+`./tsconfig.json`; override `files` and `project` if needed. Use the Tenon preset in
+place of a separate SafeQL configuration for those same files.
+
+Add scripts to the application:
+
+```json
+{
+  "scripts": {
+    "sql:check": "eslint \"src/**/*.ts\"",
+    "sql:fix": "eslint \"src/**/*.ts\" --fix"
+  }
+}
+```
+
+Write a query without its result annotation:
+
+```ts
+const query = sql`SELECT id, email FROM public."User" WHERE id = ${id}`;
+```
+
+Run `npm run sql:fix`. SafeQL writes an annotation such as
+`sql<{ id: number; email: string }>` based on the connected schema. It can also
+repair an incorrect annotation. Review the changes, run TypeScript and application
+tests, and commit the result. Without an annotation, Tenon's fields remain `unknown`.
+
+Use `npm run sql:check` in CI without `--fix`: missing/incorrect annotations,
+invalid SQL, and unsupported composition fail the check without rewriting files.
+ESLint's fix command can apply other enabled rules too. After a schema change,
+first inspect why a query fails rather than automatically accepting a new type.
+
+The preset recognizes Tenon's `sql` export, including import aliases and namespace
+imports. It checks constant fragments and `sql.join` with literal arrays, including
+nested fragments. Literal `identifier()` names and const string names are supported.
+Fragments bind string, number, boolean, bigint, null/undefined values and supported
+primitive arrays during static analysis; more complex parameter types should go in
+the outer `sql` template. Mutable references, runtime lists, conditional fragments,
+function-generated fragments, and dynamic identifiers produce explicit diagnostics.
+An imported fragment must have an inspectable source initializer; declarations alone
+cannot describe its SQL. It does not execute application code to discover SQL.
+
+The preset supplies scalar mappings for bigint/numeric strings, unknown JSON, and
+`Date | number` temporal values (including infinities). For recursive arrays, use
+column overrides matching generated types, for example:
+
+```js
+tenonSafeql({
+  databaseUrl: process.env.DATABASE_URL,
+  overrides: {
+    columns: { 'User.tags': 'PgArray<string>', 'User.amounts': 'PgArray<number>' },
+  },
+});
+```
+
+Import `PgArray` from generated definitions in files using that annotation. Numeric
+arrays use numbers with pg's default parser, even though numeric scalars use strings.
+Array dimensions/null elements, custom parsers, and unverified PostgreSQL types need
+appropriate overrides and database tests; a checker cannot infer your parser policy.
+Column keys are `Table.column`, so duplicate table names across schemas need care.
+Type overrides merge with the preset's defaults. `unsafeSql` is outside static
+checking, and arbitrary JSON still needs application validation.
 
 ## Command reference
 

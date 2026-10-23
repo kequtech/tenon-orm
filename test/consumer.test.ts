@@ -32,19 +32,21 @@ test('the packed package preserves API contracts under TypeScript 6 and 7', asyn
       'dist/index.js',
       'dist/index.d.ts',
       'dist/cli.js',
-      'agent-guide.md',
-      'adoption-guide.md',
+      'docs/agent-guide.md',
+      'docs/adoption-guide.md',
+      'docs/human-guide.md',
     ]) {
       assert.ok(paths.includes(required), `Package is missing ${required}`);
     }
     for (const path of paths) {
       assert.ok(
-        ['LICENSE', 'README.md', 'package.json', 'agent-guide.md', 'adoption-guide.md'].includes(
-          path,
-        ) || /^dist\/(?:[\w-]+\/)*[\w-]+\.(?:js|d\.ts)$/.test(path),
+        ['LICENSE', 'README.md', 'package.json'].includes(path) ||
+          /^docs\/(?:[\w-]+\/)*[\w-]+\.md$/.test(path) ||
+          /^dist\/(?:[\w-]+\/)*[\w-]+\.(?:js|d\.ts)$/.test(path),
         `Unexpected package content: ${path}`,
       );
     }
+    assert.ok(!paths.includes('CONTRIBUTING.md'));
     const consumer = join(temporary, 'consumer');
     await mkdir(join(consumer, 'fixtures'), { recursive: true });
     const nodeTypes = JSON.parse(
@@ -59,6 +61,13 @@ test('the packed package preserves API contracts under TypeScript 6 and 7', asyn
     const minimum = JSON.parse(
       await readFile(resolve('node_modules/typescript/package.json'), 'utf8'),
     ) as { version: string };
+    const tooling: Record<string, string> = {};
+    for (const name of ['eslint', 'typescript-eslint', '@ts-safeql/eslint-plugin']) {
+      const metadata = JSON.parse(
+        await readFile(resolve('node_modules', name, 'package.json'), 'utf8'),
+      ) as { version: string };
+      tooling[name] = metadata.version;
+    }
     await writeFile(
       join(consumer, 'package.json'),
       JSON.stringify({
@@ -70,6 +79,7 @@ test('the packed package preserves API contracts under TypeScript 6 and 7', asyn
           typescript: minimum.version,
           '@types/node': nodeTypes.version,
           '@types/pg': pgTypes.version,
+          ...tooling,
         },
       }),
     );
@@ -111,6 +121,15 @@ test('the packed package preserves API contracts under TypeScript 6 and 7', asyn
         .replaceAll("'../../src/index.js'", "'@kequtech/tenon-orm'");
       await writeFile(join(consumer, filename), source);
     }
+    await writeFile(
+      join(consumer, 'safeql-config.ts'),
+      `
+      import { tenonSafeql } from '@kequtech/tenon-orm/safeql';
+      const config = tenonSafeql({ databaseUrl: 'postgresql://unused', overrides: { types: { numeric: 'string' } } });
+      // @ts-expect-error a database address must be supplied explicitly
+      tenonSafeql({});
+    `,
+    );
     const config = join(consumer, 'tsconfig.json');
     // A data-access package may bring its own copy of Tenon into the application.
     await cp(join(installed, 'dist'), join(consumer, 'second-tenon'), { recursive: true });
@@ -130,6 +149,8 @@ test('the packed package preserves API contracts under TypeScript 6 and 7', asyn
         const b = await other.run(fromFirst, [1]);
         const c = await db.query(second.sql<{ id: number }>\`SELECT 1 AS id\`, { returns: 'many' });
         const d = await other.query(sql<{ id: number }>\`SELECT 1 AS id\`, { returns: 'oneOrNone' });
+        const fragments = sql.join([second.sql.fragment\`TRUE\`], sql.fragment\` AND \`);
+        const reverse = second.sql.join([sql.fragment\`TRUE\`], second.sql.fragment\` AND \`);
         const types: [Assert<Equal<typeof a, { id: number }>>, Assert<Equal<typeof b, { id: number }>>,
           Assert<Equal<typeof c, { id: number }[]>>, Assert<Equal<typeof d, { id: number } | undefined>>] = [true, true, true, true];
         // @ts-expect-error crossing package copies preserves the input contract
@@ -151,9 +172,34 @@ test('the packed package preserves API contracts under TypeScript 6 and 7', asyn
           moduleResolution: 'NodeNext',
           types: ['node'],
         },
-        files: ['type-contracts.ts', 'copies.ts'],
+        files: ['type-contracts.ts', 'copies.ts', 'safeql-config.ts', 'checked.ts'],
       }),
     );
+    await writeFile(
+      join(consumer, 'checked.ts'),
+      `
+      import { sql, type Database } from '@kequtech/tenon-orm';
+      declare const db: Database;
+      const predicate = sql.fragment\`1 = \${1}\`;
+      const row = await db.query(sql\`SELECT 1 AS id WHERE \${predicate}\`, { returns: 'one' });
+      const id: number = row.id;
+    `,
+    );
+    await writeFile(
+      join(consumer, 'eslint.config.mjs'),
+      `
+      import { tenonSafeql } from '@kequtech/tenon-orm/safeql';
+      export default tenonSafeql({ databaseUrl: process.env.TENON_TEST_DATABASE_URL, files: ['checked.ts'] });
+    `,
+    );
+    await run(join(consumer, 'node_modules/.bin/eslint'), ['checked.ts', '--fix'], {
+      cwd: consumer,
+      env: { ...process.env, TENON_TEST_DATABASE_URL: testConnection },
+    });
+    await run(join(consumer, 'node_modules/.bin/eslint'), ['checked.ts'], {
+      cwd: consumer,
+      env: { ...process.env, TENON_TEST_DATABASE_URL: testConnection },
+    });
     for (const compiler of [
       join(consumer, 'node_modules/typescript/bin/tsc'),
       resolve('node_modules/typescript-next/bin/tsc'),
@@ -182,15 +228,35 @@ test('the packed package preserves API contracts under TypeScript 6 and 7', asyn
 ${result.stdout ?? ''}
 ${result.stderr ?? ''}`);
     }
-    // Production JavaScript needs only the application-owned driver. Tenon's
-    // typings must not turn the application's development typings into runtime
-    // dependencies through a peer declaration.
+    // Start without the development dependency graph: npm can retain installed
+    // optional peers during prune even when they are unnecessary at runtime.
+    const production = join(temporary, 'production');
+    await mkdir(production);
+    await writeFile(
+      join(production, 'package.json'),
+      JSON.stringify({
+        name: 'tenon-production-check',
+        private: true,
+        type: 'module',
+        dependencies: { '@kequtech/tenon-orm': `file:${join(temporary, tarball)}`, pg: pg.version },
+      }),
+    );
     await run(
       'npm',
-      ['prune', '--omit=dev', '--offline', '--ignore-scripts', '--no-audit', '--no-fund'],
-      { cwd: consumer },
+      ['install', '--omit=dev', '--offline', '--ignore-scripts', '--no-audit', '--no-fund'],
+      { cwd: production },
     );
-    await assert.rejects(access(join(consumer, 'node_modules/@types/pg')), { code: 'ENOENT' });
+    await cp(join(installed, 'dist'), join(production, 'second-tenon'), { recursive: true });
+    for (const name of [
+      '@types/pg',
+      '@ts-safeql/eslint-plugin',
+      'eslint',
+      'typescript-eslint',
+      'typescript',
+    ]) {
+      await assert.rejects(access(join(production, 'node_modules', name)), { code: 'ENOENT' });
+    }
+    await run(join(production, 'node_modules/.bin/tenon'), ['--help'], { cwd: production });
     await run(
       process.execPath,
       [
@@ -199,7 +265,11 @@ ${result.stderr ?? ''}`);
         `
       import assert from 'node:assert/strict';
       import { Pool } from 'pg';
-      import { createTenon } from '@kequtech/tenon-orm';
+      import { createTenon, sql } from '@kequtech/tenon-orm';
+      import * as second from './second-tenon/index.js';
+      const composed = sql\`SELECT \${second.sql.fragment\`\${7}::int\`} AS id\`;
+      assert.equal(composed.text, 'SELECT $1::int AS id');
+      assert.deepEqual(composed.values, [7]);
       const db = createTenon({ connection: 'postgresql://unused' });
       await db.close();
       const pool = new Pool({ connectionString: 'postgresql://unused' });
@@ -209,7 +279,7 @@ ${result.stderr ?? ''}`);
       await pool.end();
     `,
       ],
-      { cwd: consumer },
+      { cwd: production },
     );
   } finally {
     await rm(temporary, { recursive: true, force: true });

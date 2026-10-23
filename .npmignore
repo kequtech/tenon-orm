@@ -1,7 +1,6 @@
 # package.json files is the primary allowlist. These exclusions also keep
 # development and local files out if that list is expanded later.
 src/
-docs/
 test/
 config/
 scripts/
@@ -25,3 +24,4 @@ tsconfig*.json
 .gitignore
 .npmignore
 .prettierignore
+CONTRIBUTING.md

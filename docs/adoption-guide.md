@@ -1,6 +1,7 @@
 # Adopting Tenon from another ORM
 
-Read the [agent guide](agent-guide.md) for the query API. Preserve the existing
+Read the [human guide](human-guide.md) for the query API, or the
+[agent guide](agent-guide.md) for a compact implementation reference. Preserve the existing
 schema, connection configuration, data, and application behavior while replacing
 the old ORM. Tenon does not need to own migrations to execute queries or generate
 types; keep the existing migration runner if that is the intended scope.
@@ -23,7 +24,8 @@ types; keep the existing migration runner if that is the intended scope.
    Preserve each caller's projection, null handling, ordering, and transaction
    behavior. Generated types describe pg values: check bigint/numeric strings,
    dates, JSON, and arrays when the old ORM transformed them.
-4. Run tests against a dedicated test database. Verify writes and rollback,
+4. Configure the [SafeQL preset](human-guide.md#result-typing-with-safeql), generate
+   query annotations, and check them against the intended schema. Run tests against a dedicated test database. Verify writes and rollback,
    relationships, validation, and any hooks you moved into application code or SQL.
    A schema-preserving first release makes application rollback easier.
 5. Remove the old runtime dependency and unused generated code after its callers

@@ -32,6 +32,53 @@ test('templates bind values, preserve order and quote identifiers explicitly', (
   assert.deepEqual(external.values, [1]);
 });
 
+test('fragments compose nested predicates with stable parameters and literal SQL', () => {
+  const malicious = "x'); DELETE FROM users; --";
+  const email = sql.fragment`email = ${malicious}`;
+  const grouped = sql.fragment`(${email} OR id = ${7})`;
+  const query = sql`SELECT '$1', $$literal $2$$, ${9} FROM ${identifier('User')}
+    WHERE ${sql.join([grouped, sql.fragment`active = ${true}`], sql.fragment` AND `)}
+    AND ${email} -- $10 stays a comment
+    LIMIT ${3}`;
+  assert.equal(
+    query.text,
+    `SELECT '$1', $$literal $2$$, $1 FROM "User"
+    WHERE (email = $2 OR id = $3) AND active = $4
+    AND email = $5 -- $10 stays a comment
+    LIMIT $6`,
+  );
+  assert.deepEqual(query.values, [9, malicious, 7, true, malicious, 3]);
+  assert.ok(Object.isFrozen(email));
+  assert.ok(Object.isFrozen(query));
+  assert.ok(Object.isFrozen(query.values));
+  assert.equal(sql`SELECT ${'DESC'}`.text, 'SELECT $1');
+  assert.equal(sql`SELECT 1 ORDER BY 1 ${sql.fragment`DESC`}`.text, 'SELECT 1 ORDER BY 1 DESC');
+  const inputs = [email];
+  const joined = sql.join(inputs, sql.fragment` AND `);
+  inputs.push(sql.fragment`FALSE`);
+  assert.equal(sql`SELECT 1 WHERE ${joined}`.text, 'SELECT 1 WHERE email = $1');
+});
+
+test('composition rejects empty lists, raw separators, executable queries and direct fragment execution', async () => {
+  assert.throws(() => sql.join([], sql.fragment` AND `), /at least one/);
+  assert.throws(() => sql.fragment`  `, /must not be empty/);
+  // @ts-expect-error separators must be authored fragments
+  assert.throws(() => sql.join([sql.fragment`TRUE`], ' AND '), /Expected a fragment/);
+  // @ts-expect-error values must be explicit fragments
+  assert.throws(() => sql.join(['TRUE'], sql.fragment` AND `), /Expected a fragment/);
+  // @ts-expect-error executable statements cannot be used as fragments
+  assert.throws(() => sql.join([sql`SELECT 1`], sql.fragment`, `), /Expected a fragment/);
+  assert.throws(() => sql.fragment`${sql`SELECT 1`}`, /Nested SQL/);
+  assert.throws(() => sql.fragment`${unsafeSql('SELECT $1', [1])}`, /Nested SQL/);
+  const db = createTenon({ connection: 'postgresql://unused' });
+  try {
+    // @ts-expect-error fragments cannot execute on their own
+    await assert.rejects(db.query(sql.fragment`DELETE FROM users`), /Expected a query/);
+  } finally {
+    await db.close();
+  }
+});
+
 test('query factories are lazy and errors in factories propagate without dispatch', async (t) => {
   const pool = new Pool();
   const query = t.mock.method(pool, 'query', async () => {

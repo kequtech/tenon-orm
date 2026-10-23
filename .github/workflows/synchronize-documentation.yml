@@ -6,8 +6,6 @@ on:
             - 'main'
         paths:
             - '**/docs/**'
-            - 'agent-guide.md'
-            - 'adoption-guide.md'
             - 'README.md'
 
 permissions:

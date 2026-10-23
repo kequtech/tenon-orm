@@ -11,7 +11,7 @@ export type {
   OperationReturnMode,
 } from './operations.js';
 export { identifier, sql, unsafeSql } from './query.js';
-export type { SqlQuery, UnknownRow } from './query.js';
+export type { SqlFragment, SqlQuery, UnknownRow } from './query.js';
 export type { Database, QueryClient, QueryEvent, Transaction } from './types.js';
 
 export { adoptBaseline, captureBaseline } from './baseline.js';

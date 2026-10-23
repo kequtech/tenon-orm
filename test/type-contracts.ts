@@ -116,6 +116,21 @@ async function contracts(db: Database, options?: OperationOptions) {
   await db.query(query, { affectedRows: { exact: 2 }, returns: 'many' });
   await db.query(sql`SELECT * FROM ${identifier('public', 'User')}`);
   await db.query(unsafeSql<Summary>('SELECT id, email FROM public."User" WHERE id = $1', [1]));
+  const predicate = sql.fragment`id = ${1}`;
+  const composed = await db.query(
+    sql<Summary>`SELECT id, email FROM public."User" WHERE ${predicate}`,
+    { returns: 'many' },
+  );
+  const compositionType: Assert<Equal<typeof composed, Summary[]>> = true;
+  void compositionType;
+  // @ts-expect-error fragments do not declare returned rows
+  sql.fragment<Summary>`id = 1`;
+  // @ts-expect-error fragments are not executable
+  await db.query(predicate);
+  // @ts-expect-error separators cannot be raw strings
+  sql.join([predicate], ' AND ');
+  // @ts-expect-error a query's row type does not describe a fragment or enclosing SELECT
+  sql.join([query], sql.fragment`, `);
   // @ts-expect-error unsafe SQL still requires an explicit array
   unsafeSql('SELECT 1');
   const contextual = sql`SELECT id FROM public."User"` satisfies SqlQuery<UnknownRow>;

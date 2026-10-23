@@ -25,23 +25,43 @@ export function identifier(...names: string[]): Identifier {
   return Object.freeze({ [identifierTag]: true as const, names: Object.freeze([...names]) });
 }
 
-/** Each interpolation is a value parameter, except an explicitly quoted identifier. */
-export function sql<Row extends QueryResultRow = UnknownRow>(
-  strings: TemplateStringsArray,
-  ...values: readonly unknown[]
-): NoInfer<SqlQuery<Row>> {
+const fragmentTag = Symbol.for('@kequtech/tenon-orm/fragment');
+
+type Part = string | Readonly<{ value: unknown }>;
+
+/** A composable piece of SQL, not an executable query or a result-type declaration. */
+export interface SqlFragment {
+  /** Stable across separately installed copies; runtime identity uses a shared symbol. */
+  readonly __tenonFragment: true;
+}
+
+function fragmentParts(value: unknown): readonly Part[] {
+  if (
+    !value ||
+    typeof value !== 'object' ||
+    !(fragmentTag in value) ||
+    !Array.isArray(value[fragmentTag])
+  ) {
+    throw new Error('Expected a fragment created with sql.fragment or sql.join.');
+  }
+  return value[fragmentTag] as readonly Part[];
+}
+
+/** Preserve SQL text separately from parameters; never rewrite dollar placeholders. */
+function templateParts(strings: TemplateStringsArray, values: readonly unknown[]): readonly Part[] {
   if (
     !Array.isArray(strings) ||
     !Array.isArray(strings.raw) ||
     strings.length !== values.length + 1 ||
     strings.some((chunk) => typeof chunk !== 'string')
   ) {
-    throw new Error('sql must be used as a template tag.');
+    throw new Error('sql and sql.fragment must be used as template tags.');
   }
-  const parameters: unknown[] = [];
-  let text = strings[0]!;
+  const parts: Part[] = [strings[0]!];
   for (const [i, value] of values.entries()) {
-    if (
+    if (value && typeof value === 'object' && fragmentTag in value) {
+      parts.push(...fragmentParts(value));
+    } else if (
       value &&
       typeof value === 'object' &&
       identifierTag in value &&
@@ -50,18 +70,58 @@ export function sql<Row extends QueryResultRow = UnknownRow>(
       if (!('names' in value) || !Array.isArray(value.names) || !value.names.length) {
         throw new Error('An identifier needs at least one name.');
       }
-      text += value.names.map(quote).join('.');
+      parts.push(value.names.map(quote).join('.'));
     } else {
       if (value && typeof value === 'object' && queryTag in value && value[queryTag] === true) {
-        throw new Error('Nested SQL queries are not supported; interpolate values or identifiers.');
+        throw new Error('Nested SQL queries are not supported; use sql.fragment for composition.');
       }
-      parameters.push(value);
+      parts.push(Object.freeze({ value }));
+    }
+    parts.push(strings[i + 1]!);
+  }
+  return Object.freeze(parts);
+}
+
+function fragment(strings: TemplateStringsArray, ...values: readonly unknown[]): SqlFragment {
+  const parts = templateParts(strings, values);
+  if (!parts.some((part) => typeof part !== 'string' || part.trim())) {
+    throw new Error('SQL fragments must not be empty.');
+  }
+  return Object.freeze({ __tenonFragment: true as const, [fragmentTag]: parts });
+}
+
+function join(fragments: readonly SqlFragment[], separator: SqlFragment): SqlFragment {
+  if (!Array.isArray(fragments) || !fragments.length) {
+    throw new Error('sql.join requires at least one fragment; handle an empty list explicitly.');
+  }
+  const between = fragmentParts(separator);
+  const parts: Part[] = [];
+  for (const [i, item] of fragments.entries()) {
+    if (i) parts.push(...between);
+    parts.push(...fragmentParts(item));
+  }
+  return Object.freeze({ __tenonFragment: true as const, [fragmentTag]: Object.freeze(parts) });
+}
+
+function createQuery<Row extends QueryResultRow = UnknownRow>(
+  strings: TemplateStringsArray,
+  ...values: readonly unknown[]
+): NoInfer<SqlQuery<Row>> {
+  const parameters: unknown[] = [];
+  let text = '';
+  for (const part of templateParts(strings, values)) {
+    if (typeof part === 'string') {
+      text += part;
+    } else {
+      parameters.push(part.value);
       text += '$' + parameters.length;
     }
-    text += strings[i + 1]!;
   }
   return unsafeSql<Row>(text, parameters);
 }
+
+/** Values bind parameters; identifiers quote names; fragments compose authored SQL. */
+export const sql = Object.assign(createQuery, { fragment, join });
 
 /** Escape hatch for externally authored SQL. Never concatenate application input into text. */
 export function unsafeSql<Row extends QueryResultRow = UnknownRow>(

@@ -6,6 +6,7 @@ import { parseArgs } from 'node:util';
 import type { CaptureBaselineOptions } from './baseline.js';
 import { adoptBaseline, captureBaseline } from './baseline.js';
 import { generateDefinitions } from './generate.js';
+import { definitionDiff } from './generation/diff.js';
 import { migrate, migrationStatus, rollback } from './migrations.js';
 import { createMigration } from './migrations/files.js';
 
@@ -26,17 +27,20 @@ function warn(message: string): void {
 async function writeDefinitions(source: string, filename: string, check: boolean): Promise<void> {
   const output = resolve(filename);
   if (check) {
-    let existing: string | undefined;
+    let existing: string;
     try {
       existing = await readFile(output, 'utf8');
     } catch (error) {
       if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) {
         throw error;
       }
+      throw new Error(
+        `Generated definitions file is missing: ${output}\nRun tenon generate with the same options, omitting --check, then commit the result.`,
+      );
     }
     if (existing !== source) {
       throw new Error(
-        'Generated definitions are stale or missing; run tenon generate and commit the result.',
+        `Generated definitions differ: ${output}\n${definitionDiff(existing, source)}\nRun tenon generate with the same options, omitting --check, then commit the result.`,
       );
     }
     process.stdout.write('Generated definitions are current.\n');
@@ -179,7 +183,7 @@ async function main(): Promise<void> {
 }
 
 main().catch((error: unknown) => {
-  // Do not print connection configuration or raw SQL/parameter payloads.
+  // Report diagnostics without connection configuration or query parameter payloads.
   process.stderr.write(`${error instanceof Error ? error.message : 'Database command failed.'}\n`);
   process.exitCode = 1;
 });

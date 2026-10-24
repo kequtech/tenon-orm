@@ -68,7 +68,7 @@ migrations and table type generation are independent conveniences.
 
 For object-based writes, `sql.insertValues(rows)` preserves database defaults across heterogeneous
 rows and `sql.assignments(patch)` omits undefined fields. Keep the surrounding SQL explicit. Both
-support selected columns and [SafeQL checking](docs/reference.md#object-based-mutation-fragments).
+support selected columns and [SafeQL checking](docs/reference.md#checking-mutation-fragments).
 Use [generated input types](docs/reference.md#insert-and-update-inputs) to check those objects
 against your schema.
 

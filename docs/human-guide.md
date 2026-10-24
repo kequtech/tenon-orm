@@ -184,9 +184,9 @@ Generated insert types distinguish required fields from defaults and nullable fi
 make writable fields optional; use `Pick` to limit what an action may edit. See the
 [input-type reference](reference.md#insert-and-update-inputs) for write-value mappings.
 
-Keep expressions, authorization, conflict handling and `RETURNING` in SQL. The selected column lists
-above also let the optional SQL checker inspect runtime-built inputs. They select fields rather
-than validate the complete object. See the [mutation cookbook](mutations.md) for batches and upserts.
+Keep expressions, authorization, conflict handling and `RETURNING` in SQL. Selected column lists
+choose which fields to write; they do not validate the complete object. See the
+[mutation cookbook](mutations.md) for batches and upserts.
 
 ## Check your SQL and result types
 
@@ -215,6 +215,12 @@ an incorrect declared result type before the query runs.
 Input validation and database tests still matter. Checking a query does not prove that a request is
 authorized, that its values are valid, or that returned JSON has an application-specific shape.
 
+The checker supports constant fragments and `sql.join` with inline arrays. Runtime-built lists and
+fragment-returning functions remain outside static analysis. Keep result annotations and database
+tests for those queries; when using the checker, suppress `tenon/check-composition` only on the
+tested query with a reason. Runtime-built mutation inputs need inline selected columns for SQL
+checking. See the [checking reference](reference.md#supported-sql-and-limitations) for details.
+
 ## Reuse or assemble parts of SQL when needed
 
 For fixed conditions, write them directly:
@@ -239,37 +245,26 @@ const count = sql<{ count: string }>`SELECT count(*) AS count FROM public."User"
 ```
 
 Here `pattern` is an application-supplied search pattern and `limit` is a validated page size.
-Execute each query with `db.query`. A fragment cannot execute alone; the complete query supplies the
-result type. The checker can inspect these constant fragments.
+Execute each query with `db.query`. The complete query supplies the result type.
 
-For a simple optional filter, a fixed SQL predicate often suffices:
-
-```ts
-// email is string | null; null means no email filter.
-const query = sql<UserSummary>`SELECT id, email FROM public."User"
-  WHERE active = ${true} AND (${email}::text IS NULL OR email = ${email})`;
-```
-
-If you need a variable list of conditions, `sql.join` combines fragments using `'AND'`, `'OR'`, or
-`','`. **SafeQL cannot check runtime-built lists.** Keep an explicit result type and test each
-variant; if you use SafeQL, suppress only this query with an explanation. Parameter binding still
-works, but it does not prove that every variant is valid SQL or returns the declared columns.
+Use `sql.join` when the number of fragments varies, such as one search condition per word or a set
+of optional filters. It combines fragments with `'AND'`, `'OR'`, or `','` and preserves their bound
+values:
 
 ```ts
+const terms = ['reader', 'example'];
 const filters = [sql.fragment`active = ${true}`];
-if (email !== undefined) filters.push(sql.fragment`email = ${email}`);
+for (const term of terms) {
+  filters.push(sql.fragment`email ILIKE ${'%' + term + '%'}`);
+}
 
-/* eslint-disable tenon/check-composition -- Runtime filters are covered by database tests. */
 const query = sql<UserSummary>`SELECT id, email FROM public."User"
   WHERE ${sql.join(filters, 'AND')} ORDER BY id`;
-/* eslint-enable tenon/check-composition */
 ```
 
-The initial condition keeps this list nonempty. Empty lists throw so that missing filters cannot
-silently remove a condition. `join` adds separators, not parentheses; wrap groups explicitly when
-mixing `AND` and `OR`. Full queries cannot be used as fragments. See the
-[composition reference](reference.md#sql-fragments-and-joins) for static checking rules and other
-details.
+This matches active users whose email contains every term. With no terms, the active condition
+still applies. The list must be nonempty; `join` inserts separators, so use parentheses as usual
+when mixing `AND` and `OR`. See the [composition reference](reference.md#sql-fragments-and-joins).
 
 For arrays, identifiers, type mappings, CLI options, and error behavior, use the
 [reference](reference.md). You do not need fragments or a query builder to use PostgreSQL joins,

@@ -88,11 +88,9 @@ is an optional nonempty diagnostic string.
   as `'DESC'` remain bound values, not SQL syntax.
 - `sql.fragment` carries SQL and bound values without a row type. Use it for shared predicates or
   partial SQL. Fragments cannot execute alone; full `sql` and `unsafeSql` queries cannot be nested.
-- `sql.join(fragments, separator)` requires a nonempty array of fragments and exactly `'AND'`,
-  `'OR'`, or `','`. No fragment or arbitrary-string separator is accepted. Empty lists and blank
-  fragments throw. Choose empty-filter behavior explicitly.
-- Joins add no parentheses. Group mixed `AND`/`OR` predicates explicitly and preserve authorization
-  conditions when adding optional filters.
+- `sql.join(fragments, separator)` combines a variable-length list of fragments using `'AND'`,
+  `'OR'`, or `','`. Use it for optional filters, search terms, or lists of SQL expressions. The list
+  must be nonempty; group mixed `AND`/`OR` predicates with parentheses.
 - `unsafeSql<Row>(text, values)` accepts trusted external SQL with an explicit values array. Never
   concatenate request input into its text. Each query executes one statement.
 
@@ -106,13 +104,8 @@ const count = sql<{ count: string }>`SELECT count(*) AS count FROM public."User"
   WHERE ${search}`;
 ```
 
-`pattern` and `limit` are validated application inputs. To compose existing predicates, use
-`sql.join([first, second], 'AND')`. The checker supports literal join arrays, constant fragments,
-literal/const-string separators, and [official mutation helpers](reference.md#object-based-mutation-fragments).
-It rejects mutable or runtime-dependent SQL structure. Prefer fixed SQL for simple optional filters, e.g.
-`(${email}::text IS NULL OR email = ${email})`. If runtime composition is required, retain an
-explicit result type, suppress `tenon/check-composition` only on that query with a reason, and test
-each branch. Parameter binding alone does not establish result correctness.
+`pattern` and `limit` are validated application inputs. See the
+[composition reference](reference.md#sql-fragments-and-joins) for grouping and list examples.
 
 ## Object-based writes
 
@@ -129,11 +122,9 @@ narrow editable fields with `Pick`. They account for defaults, nullability, doma
 columns. Write mappings differ from returned rows: timestamps use `Date | string`, bigint uses
 `string | bigint`, and JSON uses serialized text. See the [input types](reference.md#insert-and-update-inputs).
 
-SafeQL reads inline object/array literals directly. Runtime inputs, spreads and data-builder results
-need explicit inline selected columns, e.g. `sql.insertValues(rows, ['name', 'score'])`. Checking
-uses all selected columns conservatively, without interpreting application JavaScript. It verifies
-SQL and result annotations, not input values, constraints, or nonempty runtime input. See the
-[mutation contract](reference.md#object-based-mutation-fragments) and [cookbook](mutations.md).
+Selected columns choose and order fields, e.g. `sql.insertValues(rows, ['name', 'score'])`. Unlisted
+fields are ignored. See the [mutation contract](reference.md#object-based-mutation-fragments) and
+[cookbook](mutations.md).
 
 ## Configure and run SQL checking
 
@@ -204,6 +195,15 @@ Reuse existing lint scripts or add:
 
 SQL and annotation errors come from `@ts-safeql/check-sql`; unsupported composition errors come from
 `tenon/check-composition`. Keep both rules enabled.
+
+The checker supports constant fragments and `sql.join` with inline nonempty arrays and literal or
+const-string separators. It does not follow runtime-built lists or fragment-returning functions.
+For tested runtime variants, keep an explicit result type and suppress `tenon/check-composition`
+only on the particular query with a reason.
+
+Mutation helpers accept inline object literals for checking. Runtime inputs, spreads, and
+data-builder results need inline selected columns, e.g. `sql.insertValues(rows, ['name', 'score'])`.
+The check uses all selected columns; it does not validate runtime input values or omission decisions.
 
 For existing applications, use the [incremental audit workflow](adoption-guide.md#adopt-sql-checking-incrementally)
 to preview fixes and review database types versus application refinements.

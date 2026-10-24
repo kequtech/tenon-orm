@@ -86,22 +86,22 @@ const query = sql<{ id: number }>`SELECT id FROM public."User"
 NUL, and fit PostgreSQL's 63-byte identifier limit. Choose names from application-approved
 alternatives; quoting does not authorize access. Ordinary strings such as `'DESC'` are bound values,
 not SQL syntax. For ordering, use complete query alternatives or application-selected fragments
-containing `ASC` or `DESC`; runtime-selected fragments need checker exclusions and tests.
+containing `ASC` or `DESC`.
 
 `unsafeSql<Row>(text, values)` accepts externally authored, trusted SQL and an explicit values
-array, including `[]` when empty. It bypasses static SQL checking. Never concatenate request input
-into its text. Full `sql` or `unsafeSql` queries cannot be inserted into other queries; use
+array, including `[]` when empty. Never concatenate request input into its text.
+Full `sql` or `unsafeSql` queries cannot be inserted into other queries; use
 fragments for partial SQL.
 
 ## SQL fragments and joins
 
 `sql.fragment` creates an immutable piece of SQL with bound values. It has no row type and cannot
-execute alone. Insert it into a complete `sql<Row>` query. Constant fragments can share a predicate
-between, for example, a list query and a count query. Ordinary fixed conditions are usually clearer
-directly in the query.
+execute alone. Insert it into a complete `sql<Row>` query. Use fragments to share predicates or
+other SQL expressions between queries. Blank fragments throw.
 
-`sql.join(fragments, separator)` combines a nonempty array of fragments into a new fragment.
-Separators are exactly:
+`sql.join(fragments, separator)` combines fragments into a new fragment. Use it when the number of
+parts varies: optional filters, a condition for each search term, or a list of SQL expressions.
+Write fixed structure directly in SQL. Supported separators are:
 
 | Argument | Inserted SQL | Typical use                |
 | -------- | ------------ | -------------------------- |
@@ -109,34 +109,21 @@ Separators are exactly:
 | `'OR'`   | `OR`         | Any condition may hold     |
 | `','`    | `, `         | Projections or assignments |
 
-No default, arbitrary string, or fragment separator is accepted. Runtime validation also protects
-JavaScript callers. A single item is returned as a new fragment without extra separators. Empty
-lists and blank fragments throw; choose empty-list behavior explicitly in application code.
-
-Joins do not add parentheses or alter SQL precedence. Group alternatives before combining them with
-other conditions:
-
 ```ts
-const alternatives = sql.join(
-  [sql.fragment`email = ${primary}`, sql.fragment`email = ${secondary}`],
-  'OR',
-);
-const conditions = sql.join(
-  [sql.fragment`(${alternatives})`, sql.fragment`active = ${true}`],
-  'AND',
-);
-const query = sql<{ id: number }>`SELECT id FROM public."User" WHERE ${conditions}`;
+const conditions = [sql.fragment`active = ${true}`];
+if (email !== undefined) conditions.push(sql.fragment`email = ${email}`);
+if (afterId !== undefined) conditions.push(sql.fragment`id > ${afterId}`);
+
+const query = sql<{ id: number }>`SELECT id FROM public."User"
+  WHERE ${sql.join(conditions, 'AND')} ORDER BY id`;
 ```
+
+The list must be nonempty; the example keeps the active condition even when both optional filters
+are absent. Joins insert separators without adding parentheses or changing SQL precedence. Group
+mixed AND/OR expressions with parentheses, as in ordinary SQL.
 
 Each fragment use receives correctly ordered parameters, including repeated and nested uses. SQL
 strings and comments containing literal `$1` text are left intact.
-
-Static checking supports constant fragments, literal join arrays, literal or const-string
-separators, and [official mutation helpers](#object-based-mutation-fragments). Runtime-built lists
-and selected fragments execute safely with respect to parameter binding, but the checker cannot
-verify their SQL or result types. Prefer fixed SQL when it fits.
-Otherwise keep an explicit result annotation, use a narrow explained lint suppression, and test
-every variant.
 
 ## Object-based mutation fragments
 
@@ -188,8 +175,7 @@ intended update consists only of those expressions.
 An optional nonempty column list selects and orders fields. It does not validate that the input
 object has no additional keys. Unlisted fields are ignored; missing insert cells use `DEFAULT`,
 while missing update fields are omitted. Duplicate or invalid column
-names throw. TypeScript checks selected names against the input's known keys. The list is also the
-way to make runtime objects and batches available to static SQL checking:
+names throw. TypeScript checks selected names against the input's known keys:
 
 ```ts
 const rows: { name: string; bio?: string | null }[] = buildRows();
@@ -211,24 +197,8 @@ Tenon rejects larger queries and does not split them automatically. Choose batch
 transaction boundaries in the caller. Helper validation errors identify invalid rows/columns
 without printing cell values.
 
-### Checking mutation fragments
-
-SafeQL recognizes these official helpers directly through their Tenon function declarations,
-including aliases. It never analyzes their implementation or executes application data builders.
-Without an explicit column list, checking accepts inline object literals and inline insert arrays
-of object literals. Keys must be literal names; object spreads, computed keys, methods, accessors,
-and objects stored in variables require an explicit inline column list. Existing constant string
-resolution works for entries of that list; column arrays stored in variables are unsupported.
-
-For runtime inputs with explicit columns, the checker analyzes a representative nonempty insert
-row or assignment list containing **all selected columns**. This checks column references, SQL
-composition, conflict clauses, and `RETURNING` annotations. Runtime omission/default decisions and
-batch length do not require interpreting JavaScript. The check is conservative: an optional
-selected column is checked even when a particular runtime call omits it. It does not establish
-nonempty input, valid runtime values, successful constraints, or every default's behavior; runtime
-validation and database tests cover those contracts. Unknown inputs without explicit columns
-produce `tenon/check-composition` diagnostics. See the [mutation cookbook](mutations.md) for
-empty patches, conditional upserts, arrays, and batching.
+See the [mutation cookbook](mutations.md) for common patterns and
+[checking mutation fragments](#checking-mutation-fragments) for optional SQL checking.
 
 ## Transactions, guarded writes, and errors
 
@@ -285,7 +255,8 @@ the existing file without rewriting it:
 npx tenon generate --out src/generated-schema.d.ts --check
 ```
 
-`--check` compares the generated representation with the current database. Pending migration files
+`--check` reports a missing file or shows a short text diff when the saved output differs from the
+current database. It never rewrites the file. Pending migration files
 are a separate concern. The representation includes table columns, constraints, indexes, and
 referenced domains, not every PostgreSQL object.
 
@@ -511,7 +482,7 @@ the intended relation is explicit in both checking and execution.
 
 Within the configured targets, the adapter recognizes Tenon's `sql` export through imports, local
 aliases, namespace imports, and object properties that retain its TypeScript type. It checks
-constant fragments and `sql.join` with nonempty literal arrays, including nested fragments.
+constant fragments and `sql.join` with inline nonempty array literals, including nested fragments.
 Separators and `identifier()` names must resolve to literal strings or const string initializers.
 Values use the same parameter placeholders in static checking and execution, inside or outside
 fragments. PostgreSQL infers their types from SQL context; Tenon does not add casts based on
@@ -521,7 +492,8 @@ The checker follows const fragment initializers, including imported constants wi
 source. It does not inspect function bodies, substitute helper arguments/defaults, or choose
 JavaScript conditional branches. Function-generated fragments and conditional SQL structure are
 unsupported even when a particular helper appears simple or a condition is a literal. Mutable
-references, runtime filter lists, and dynamic identifiers are also unsupported. Ordinary value
+fragment references and dynamic identifiers are also unsupported. Arrays stored in variables or
+assembled in loops are valid `sql.join` inputs at runtime but are not analyzed. Ordinary value
 expressions remain bound parameters; calls that produce data for an official mutation helper can
 use its explicit column-list contract.
 
@@ -579,6 +551,25 @@ elements, custom parsers, and unverified PostgreSQL types need appropriate overr
 tests; a checker cannot infer your parser policy. Column keys are `Table.column`, so duplicate table
 names across schemas need care. Type overrides merge with the adapter's defaults. `unsafeSql` is
 outside static checking, and arbitrary JSON still needs application validation.
+
+### Checking mutation fragments
+
+SafeQL recognizes these official helpers directly through their Tenon function declarations,
+including aliases. It never analyzes their implementation or executes application data builders.
+Without an explicit column list, checking accepts inline object literals and inline insert arrays
+of object literals. Keys must be literal names; object spreads, computed keys, methods, accessors,
+and objects stored in variables require an explicit inline column list. Existing constant string
+resolution works for entries of that list; column arrays stored in variables are unsupported.
+
+For runtime inputs with explicit columns, the checker analyzes a representative nonempty insert
+row or assignment list containing **all selected columns**. This checks column references, SQL
+composition, conflict clauses, and `RETURNING` annotations. Runtime omission/default decisions and
+batch length do not require interpreting JavaScript. The check is conservative: an optional
+selected column is checked even when a particular runtime call omits it. It does not establish
+nonempty input, valid runtime values, successful constraints, or every default's behavior; runtime
+validation and database tests cover those contracts. Unknown inputs without explicit columns
+produce `tenon/check-composition` diagnostics. See the [mutation cookbook](mutations.md) for
+empty patches, conditional upserts, arrays, and batching.
 
 ## Command reference
 

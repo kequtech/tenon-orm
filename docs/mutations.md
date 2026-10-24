@@ -19,7 +19,7 @@ The first row uses the score default. The second uses the bio default. Explicit 
 row stays null. Columns are aligned across rows. Omit generated columns and let PostgreSQL enforce
 required fields and constraints.
 
-For runtime-built rows, supply an inline column list for SafeQL:
+Use a column list to select and order fields in runtime-built rows:
 
 ```ts
 import type { Rows } from './generated-schema.js';
@@ -97,8 +97,7 @@ if (patch.name !== undefined || patch.bio !== undefined) {
 
 ## Preserve an omitted field during an upsert
 
-Use complete query variants when an option changes conflict behavior. Both templates can be
-checked independently; the checker need not choose a JavaScript branch:
+Use separate queries when an option changes conflict behavior:
 
 ```ts
 if (email !== undefined) {
@@ -151,7 +150,3 @@ calls for empty input. The query-wide limit is 65,535 bound parameters, includin
 the mutation fragment. An oversized query reports its actual count, for example
 `at most 65535 bound parameters; received 65536`. Defaults consume no parameters. Account for the
 selected columns and surrounding query when choosing a batch size; Tenon never splits queries automatically.
-
-Reusable authorization fragments remain valid at runtime. Keep shared policy in application
-functions and test it rather than duplicating it for static coverage. Function-generated SQL,
-conditional fragments, and dynamic filter lists remain outside static checking.

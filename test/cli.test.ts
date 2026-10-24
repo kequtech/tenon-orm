@@ -22,20 +22,62 @@ const cli = fileURLToPath(new URL('../src/cli.js', import.meta.url));
 
 test('CLI migration and .d.ts generation remain separate; check mode catches stale files without rewriting', async () => {
   await project(recordMigrations, async (options) => {
-    const output = join(options.directory, 'definitions.d.ts');
+    const output = join(options.directory, 'generated', 'definitions.d.ts');
     const args = ['--directory', options.directory, '--namespace', options.namespace];
     const generation = ['--namespace', options.namespace, '--out', output];
     const env = { ...process.env, DATABASE_URL: connection };
     await run(process.execPath, [cli, 'migrate', ...args], { env });
     await assert.rejects(readFile(output), { code: 'ENOENT' });
+    await assert.rejects(
+      run(process.execPath, [cli, 'generate', ...generation, '--check'], { env }),
+      (error: unknown) => {
+        assert.ok(error instanceof Error && 'stderr' in error);
+        assert.ok('code' in error && error.code === 1);
+        const diagnostic = String(error.stderr);
+        assert.ok(diagnostic.includes(`Generated definitions file is missing: ${output}`));
+        assert.ok(diagnostic.includes('tenon generate'));
+        assert.ok(!diagnostic.includes('Diff excerpt'));
+        return true;
+      },
+    );
+    await assert.rejects(readFile(join(options.directory, 'generated')), { code: 'ENOENT' });
     await run(process.execPath, [cli, 'generate', ...generation], { env });
     const first = await readFile(output, 'utf8');
-    await run(process.execPath, [cli, 'generate', ...generation, '--check'], { env });
+    const unchanged = await run(process.execPath, [cli, 'generate', ...generation, '--check'], {
+      env,
+    });
+    assert.equal(unchanged.stdout, 'Generated definitions are current.\n');
+    assert.equal(unchanged.stderr, '');
+    await assert.rejects(
+      run(
+        process.execPath,
+        [cli, 'generate', '--namespace', options.namespace, '--out', options.directory, '--check'],
+        { env },
+      ),
+      (error: unknown) => {
+        assert.ok(error instanceof Error && 'stderr' in error);
+        assert.ok(String(error.stderr).includes('EISDIR'));
+        assert.ok(!String(error.stderr).includes('file is missing'));
+        assert.ok(!String(error.stderr).includes('definitions differ'));
+        return true;
+      },
+    );
     await pool.query(
       `ALTER TABLE ${qualified(options.namespace, 'Record')} ALTER COLUMN name SET DEFAULT 'draft'`,
     );
     await assert.rejects(
       run(process.execPath, [cli, 'generate', ...generation, '--check'], { env }),
+      (error: unknown) => {
+        assert.ok(error instanceof Error && 'stderr' in error);
+        assert.ok('code' in error && error.code === 1);
+        const diagnostic = String(error.stderr);
+        assert.ok(diagnostic.includes(`Generated definitions differ: ${output}`));
+        assert.ok(diagnostic.includes('Diff excerpt from line'));
+        assert.match(diagnostic, /^- .*"name" text NOT NULL$/m);
+        assert.match(diagnostic, /^\+ .*"name" text NOT NULL DEFAULT 'draft'::text$/m);
+        assert.ok(diagnostic.includes('tenon generate'));
+        return true;
+      },
     );
     assert.equal(await readFile(output, 'utf8'), first);
     await run(process.execPath, [cli, 'generate', ...generation], { env });

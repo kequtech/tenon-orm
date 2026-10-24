@@ -108,11 +108,27 @@ const count = sql<{ count: string }>`SELECT count(*) AS count FROM public."User"
 
 `pattern` and `limit` are validated application inputs. To compose existing predicates, use
 `sql.join([first, second], 'AND')`. The checker supports literal join arrays, constant fragments,
-and literal/const-string separators. It rejects mutable, conditional, function-generated, or
-runtime-built composition. Prefer fixed SQL for simple optional filters, e.g.
+literal/const-string separators, and [official mutation helpers](reference.md#object-based-mutation-fragments).
+It rejects mutable or runtime-dependent SQL structure. Prefer fixed SQL for simple optional filters, e.g.
 `(${email}::text IS NULL OR email = ${email})`. If runtime composition is required, retain an
 explicit result type, suppress `tenon/check-composition` only on that query with a reason, and test
 each branch. Parameter binding alone does not establish result correctness.
+
+## Object-based writes
+
+Use official `sql.insertValues(rowOrRows, columns?)` and `sql.assignments(patch, columns?)` fragments
+instead of application helpers that enumerate object keys. Keep tables, authorization predicates,
+expressions, conflict behavior and `RETURNING` visible in SQL. Insert missing/undefined fields use
+PostgreSQL defaults; update missing/undefined fields are omitted. Explicit null stays null. Empty
+batches/updates throw; a single default-only insert works. Omit generated columns and batch large
+writes explicitly below the query-wide limit of 65,535 parameters. Expressions and queries are
+rejected as cell values; write arithmetic, `DEFAULT`, and `excluded.column` in the surrounding SQL.
+
+SafeQL reads inline object/array literals directly. Runtime inputs, spreads and data-builder results
+need explicit inline selected columns, e.g. `sql.insertValues(rows, ['name', 'score'])`. Checking
+uses all selected columns conservatively, without interpreting application JavaScript. It verifies
+SQL and result annotations, not input values, constraints, or nonempty runtime input. See the
+[mutation contract](reference.md#object-based-mutation-fragments) and [cookbook](mutations.md).
 
 ## Configure and run SQL checking
 
@@ -205,10 +221,15 @@ the wrong type for an unqualified table despite the connection's `search_path`; 
 names avoid that ambiguity.
 
 The checker recognizes Tenon imports, aliases, and typed object properties. It resolves constant
-fragments and literal/const identifier names without executing application code. Imported fragments
-need inspectable source initializers. Use literal newlines and bound string values: outer-template
-JavaScript escapes are rejected because SafeQL reads raw text while Tenon executes decoded text.
-Bound values and constant fragments are decoded consistently.
+fragments and literal/const identifier names without executing application code. Imported
+fragments need inspectable source initializers. It recognizes the official mutation helpers
+directly; it never inspects function bodies or substitutes helper arguments/defaults. Conditional
+fragments, function-generated fragments, and runtime filter lists require narrow explained
+suppressions and database tests. Ordinary functions containing complete `sql` templates remain
+checkable. Keep reusable authorization policy centralized even when it is test-owned rather than
+statically checked. Use literal newlines and bound string values: outer-template JavaScript escapes
+are rejected because SafeQL reads raw text while Tenon executes decoded text. Bound values and
+constant fragments are decoded consistently.
 
 Checking verifies SQL and result annotations, not JavaScript input compatibility, authorization, or
 JSON contents. PostgreSQL owns parameter inference; the checker adds no casts based on JavaScript

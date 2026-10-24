@@ -162,6 +162,24 @@ outside a callback transaction. The guard checks a count; you still need the cor
 and application authorization. Checking returned rows with `returns` alone does not undo an
 autocommitted write.
 
+## Write objects without building column lists by hand
+
+Use `sql.insertValues(rowOrRows)` inside an authored `INSERT` and `sql.assignments(patch)` after
+`SET`. Inserts use database defaults for missing/undefined fields; updates omit those fields.
+Explicit `null` stays null. Empty batches and updates throw. Heterogeneous insert rows remain
+aligned, with `DEFAULT` for missing cells.
+
+```ts
+await db.query(sql`INSERT INTO users ${sql.insertValues({ email, active: true })}`);
+await db.query(sql`UPDATE users SET ${sql.assignments({ email, active })} WHERE id = ${id}`);
+```
+
+These helpers bind values only. Keep expressions, authorization, conflict handling and `RETURNING`
+in SQL. For SafeQL checking of runtime-built objects or batches, supply literal selected columns,
+for example `sql.assignments(patch, ['email', 'active'])`. The checker validates all selected columns
+without inspecting the code that built the patch. See the
+[mutation contract and checking limits](reference.md#object-based-mutation-fragments).
+
 ## Check your SQL and result types
 
 There are three different jobs here:
@@ -171,8 +189,8 @@ There are three different jobs here:
 - SafeQL checks the SQL against your database and verifies or generates those types.
 
 SafeQL is optional development tooling run by ESLint. Configure it normally, with Tenon's
-`safeqlPlugin` adapter to translate queries and constant fragments. A small companion ESLint rule,
-`tenon/check-composition`, flags queries that cannot be checked statically. SafeQL performs the
+`safeqlPlugin` adapter to translate queries, constant fragments, and official mutation helpers. A small
+companion ESLint rule, `tenon/check-composition`, flags queries that cannot be checked statically. SafeQL performs the
 database analysis and annotation fixes. Your application's ESLint configuration imports these tools;
 Tenon's database runtime does not need them. Generated table types are a separate convenience and
 are not required by SafeQL. Follow the one-time

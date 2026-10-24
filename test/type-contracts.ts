@@ -133,3 +133,23 @@ async function contracts(db: Database, options?: QueryOptions) {
   });
 }
 void contracts;
+
+// Mutation columns preserve known object keys without widening their input types.
+function mutationContracts() {
+  interface Input {
+    name: string;
+    score?: number;
+  }
+  const row: Input = { name: 'typed' };
+  sql.insertValues(row, ['name', 'score']);
+  sql.assignments(row, ['name']);
+  sql.insertValues([{ name: 'one' }, { score: 2 }], ['name', 'score']);
+  // @ts-expect-error an explicit column must belong to the input type
+  sql.insertValues(row, ['missing']);
+  // @ts-expect-error an explicit column must belong to the input type
+  sql.assignments(row, ['missing']);
+  // @ts-expect-error mutations require objects
+  sql.insertValues('value');
+  // @ts-expect-error updates require one object, not a scalar
+  sql.assignments(1);
+}

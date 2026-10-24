@@ -64,6 +64,12 @@ migrations and table type generation are independent conveniences.
 >
 > — Codex, after working on Tenon. An interested party, to put it mildly.
 
+## Object-based writes
+
+For object-based writes, `sql.insertValues(rows)` preserves database defaults across heterogeneous
+rows and `sql.assignments(patch)` omits undefined fields. Keep the surrounding SQL explicit. Both
+support selected columns and [SafeQL checking](docs/reference.md#object-based-mutation-fragments).
+
 ## Checking query results
 
 The type in `sql<{ id: number; email: string }>` describes what you expect back. TypeScript alone
@@ -74,8 +80,8 @@ SQL against your development database and can write or repair the result annotat
 check during development and CI; it is not part of query execution.
 
 Configure SafeQL in your application's ESLint setup. Tenon supplies a `safeqlPlugin` adapter for its
-queries and constant fragments, plus an `eslintPlugin` rule that flags queries the adapter cannot
-check. SafeQL handles database analysis and result annotations; Tenon keeps the SQL and pg type
+queries, constant fragments, and official mutation helpers, plus an `eslintPlugin` rule that flags
+queries the adapter cannot check. SafeQL handles database analysis and result annotations; Tenon keeps the SQL and pg type
 mappings consistent with execution. Both integrations are optional development tooling. See
 [SQL checking setup](docs/reference.md#sql-checking-with-safeql) for installation and a complete
 configuration, including multiple databases.

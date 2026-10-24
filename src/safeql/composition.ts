@@ -3,14 +3,9 @@ import { basename, dirname, join } from 'node:path';
 import ts from 'typescript';
 import { joinSeparator, quote } from '../sql.js';
 
-export class CompositionError extends Error {
-  override readonly name = 'TenonCompositionError';
-  constructor(detail: string) {
-    super(
-      `Tenon cannot statically check this composition: ${detail} Use a static query/fragment, or an explicit lint suppression with database tests for every runtime variant.`,
-    );
-  }
-}
+import { renderMutation } from './mutations.js';
+import { CompositionError, initializer, literalString, unwrap } from './static.js';
+export { CompositionError } from './static.js';
 
 /** Recognize Tenon's declarations without claiming another library's SQL tags. */
 const tenonModules = new Map<string, boolean>();
@@ -57,53 +52,10 @@ export function isExport(node: ts.Node, checker: ts.TypeChecker, name: string): 
     });
 }
 
-function unwrap(node: ts.Node): ts.Node {
-  while (
-    ts.isParenthesizedExpression(node) ||
-    ts.isAsExpression(node) ||
-    ts.isSatisfiesExpression(node) ||
-    ts.isNonNullExpression(node) ||
-    ts.isTypeAssertionExpression(node)
-  ) {
-    node = node.expression;
-  }
-  return node;
-}
-
-function initializer(node: ts.Identifier, checker: ts.TypeChecker): ts.Expression | undefined {
-  let symbol = checker.getSymbolAtLocation(node);
-  if (symbol && symbol.flags & ts.SymbolFlags.Alias) symbol = checker.getAliasedSymbol(symbol);
-  const declaration = symbol?.valueDeclaration;
-  if (
-    declaration &&
-    ts.isVariableDeclaration(declaration) &&
-    ts.isVariableDeclarationList(declaration.parent) &&
-    declaration.parent.flags & ts.NodeFlags.Const
-  ) {
-    return declaration.initializer;
-  }
-  return undefined;
-}
-
 export function isFragment(type: ts.Type): boolean {
   return type.isUnion()
     ? type.types.some(isFragment)
     : type.getProperty('__tenonFragment') !== undefined;
-}
-
-/** Follow actual const initializers, never assume a literal type proves a runtime value. */
-function literalString(node: ts.Node, checker: ts.TypeChecker): string | undefined {
-  let value = unwrap(node);
-  const seen = new Set<ts.Node>();
-  while (ts.isIdentifier(value) && !seen.has(value)) {
-    seen.add(value);
-    const next = initializer(value, checker);
-    if (!next) break;
-    value = unwrap(next);
-  }
-  return ts.isStringLiteral(value) || ts.isNoSubstitutionTemplateLiteral(value)
-    ? value.text
-    : undefined;
 }
 
 /** Reconstruct only immutable fragments and literal join lists. Never execute application code. */
@@ -132,6 +84,11 @@ export function renderFragment(
       text += renderValue(span.expression, checker, visited) + span.literal.text;
     }
     return text;
+  }
+  if (ts.isCallExpression(node)) {
+    for (const kind of ['insertValues', 'assignments'] as const) {
+      if (isExport(node.expression, checker, kind)) return renderMutation(kind, node, checker);
+    }
   }
   if (
     ts.isCallExpression(node) &&
@@ -166,7 +123,7 @@ export function renderFragment(
     return list.elements.map((item) => renderFragment(item, checker, visited)).join(between);
   }
   throw new CompositionError(
-    'Only sql.fragment templates, const fragment references, and sql.join with literal arrays are supported.',
+    'Only constant sql.fragment templates, literal sql.join arrays, and official mutation helpers are supported. Function-generated fragments and conditional SQL structure are not analyzed.',
   );
 }
 

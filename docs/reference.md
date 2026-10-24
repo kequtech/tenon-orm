@@ -131,11 +131,104 @@ const query = sql<{ id: number }>`SELECT id FROM public."User" WHERE ${condition
 Each fragment use receives correctly ordered parameters, including repeated and nested uses. SQL
 strings and comments containing literal `$1` text are left intact.
 
-Static checking supports constant fragments, literal join arrays, and literal or const-string
-separators. Runtime-built lists and selected fragments execute safely with respect to parameter
-binding, but the checker cannot verify their SQL or result types. Prefer fixed SQL when it fits.
+Static checking supports constant fragments, literal join arrays, literal or const-string
+separators, and [official mutation helpers](#object-based-mutation-fragments). Runtime-built lists
+and selected fragments execute safely with respect to parameter binding, but the checker cannot
+verify their SQL or result types. Prefer fixed SQL when it fits.
 Otherwise keep an explicit result annotation, use a narrow explained lint suppression, and test
 every variant.
+
+## Object-based mutation fragments
+
+`sql.insertValues(input, columns?)` and `sql.assignments(input, columns?)` return fragments. Keep the
+operation, table, authorization predicate, conflict policy, expressions, and `RETURNING` in SQL:
+
+```ts
+const created = await db.query(
+  sql<{ id: number }>`
+  INSERT INTO profiles ${sql.insertValues([
+    { name: 'Ada', bio: null },
+    { name: 'Lin', score: 4 },
+  ])}
+  ON CONFLICT (name) DO NOTHING
+  RETURNING id
+`,
+  { returns: 'many' },
+);
+
+await db.query(sql`
+  UPDATE profiles SET ${sql.assignments({ name: input.name, bio: input.bio })},
+    revision = revision + 1
+  WHERE id = ${id} AND owner_id = ${viewer}
+`);
+```
+
+Both helpers accept plain objects (including null-prototype objects), quote each column as one
+identifier, and bind cell values as data. Inputs are read when the fragment is created; replacing a
+field afterward does not change its captured value. Nested values retain the driver's usual
+serialization behavior. Only own data properties are read; accessors are rejected.
+
+| Input                                        | Insert behavior                    | Assignment behavior                     |
+| -------------------------------------------- | ---------------------------------- | --------------------------------------- |
+| Missing or `undefined` field                 | PostgreSQL `DEFAULT` for that cell | Omitted; the stored column is unchanged |
+| Explicit `null`                              | Bound SQL null                     | Bound SQL null                          |
+| Other value                                  | Bound parameter                    | Bound parameter                         |
+| SQL fragment, identifier, or query as a cell | Rejected                           | Rejected                                |
+
+Without `columns`, inserts infer the union of enumerable keys with defined values across all rows,
+in first-seen order. Heterogeneous rows stay aligned; missing cells use `DEFAULT`. One object or a
+one-row batch with no defined fields emits `DEFAULT VALUES`. An empty batch throws. A multi-row
+batch with no inferred columns throws; supply explicit columns to emit multiple default rows.
+
+Assignments infer enumerable keys and omit undefined values. An empty object or a selection with
+no defined values throws, so the helper never emits an empty `SET` clause. This also applies when
+the surrounding statement contains arithmetic or other assignments: branch explicitly when the
+intended update consists only of those expressions.
+
+An optional nonempty column list selects and orders fields. It does not validate that the input
+object has no additional keys. Unlisted fields are ignored; missing insert cells use `DEFAULT`,
+while missing update fields are omitted. Duplicate or invalid column
+names throw. TypeScript checks selected names against the input's known keys. The list is also the
+way to make runtime objects and batches available to static SQL checking:
+
+```ts
+const rows: { name: string; bio?: string | null }[] = buildRows();
+const insert = sql`INSERT INTO profiles ${sql.insertValues(rows, ['name', 'bio'])} RETURNING id`;
+
+const patch: { name?: string; bio?: string | null } = readPatch();
+const update = sql`UPDATE profiles SET ${sql.assignments(patch, ['name', 'bio'])} WHERE id = ${id}`;
+```
+
+The helpers have no schema metadata. Omit generated columns; PostgreSQL enforces identity,
+generation, required-column, and constraint rules. They do not generate insert/update input types
+or prove that the JavaScript input values match database column types. Retain application input
+contracts and validation. To reset an update field to its default, write `column = DEFAULT` in the
+surrounding SQL. Put arithmetic and `excluded.column` expressions there too; these helpers accept
+values only, with no expression/default sentinel.
+
+A compiled query, including surrounding interpolations, is limited to 65,535 bound parameters.
+Tenon rejects larger queries and does not split them automatically. Choose batch sizes and
+transaction boundaries in the caller. Helper validation errors identify invalid rows/columns
+without printing cell values.
+
+### Checking mutation fragments
+
+SafeQL recognizes these official helpers directly through their Tenon function declarations,
+including aliases. It never analyzes their implementation or executes application data builders.
+Without an explicit column list, checking accepts inline object literals and inline insert arrays
+of object literals. Keys must be literal names; object spreads, computed keys, methods, accessors,
+and objects stored in variables require an explicit inline column list. Existing constant string
+resolution works for entries of that list; column arrays stored in variables are unsupported.
+
+For runtime inputs with explicit columns, the checker analyzes a representative nonempty insert
+row or assignment list containing **all selected columns**. This checks column references, SQL
+composition, conflict clauses, and `RETURNING` annotations. Runtime omission/default decisions and
+batch length do not require interpreting JavaScript. The check is conservative: an optional
+selected column is checked even when a particular runtime call omits it. It does not establish
+nonempty input, valid runtime values, successful constraints, or every default's behavior; runtime
+validation and database tests cover those contracts. Unknown inputs without explicit columns
+produce `tenon/check-composition` diagnostics. See the [mutation cookbook](mutations.md) for
+empty patches, conditional upserts, arrays, and batching.
 
 ## Transactions, guarded writes, and errors
 
@@ -230,8 +323,8 @@ Configure [SafeQL normally](https://safeql.dev/api/). Tenon's optional `safeql` 
 two objects:
 
 - `safeqlPlugin` is a SafeQL plugin descriptor. Add it to each Tenon connection's `plugins` list. It
-  translates constant fragments and identifiers, preserves runtime parameter behavior, and supplies
-  pg result mappings. SafeQL owns database analysis and annotation fixes.
+  translates constant fragments, official mutation helpers, and identifiers, preserves parameter
+  behavior, and supplies pg result mappings. SafeQL owns database analysis and annotation fixes.
 - `eslintPlugin` supplies `tenon/check-composition`. Register it in ESLint and enable the rule to
   report queries that the adapter cannot resolve, including runtime-built fragments and escaped
   outer templates.
@@ -381,16 +474,35 @@ avoid that ambiguity.
 
 Within the configured targets, the adapter recognizes Tenon's `sql` export through imports, local
 aliases, namespace imports, and object properties that retain its TypeScript type. It checks
-constant fragments and `sql.join` with literal arrays, including nested fragments. Separators must
-be literal strings or const strings. Literal `identifier()` names and const string names are
-supported. Values use the same parameter placeholders in static checking and execution, inside or
-outside fragments. PostgreSQL infers their types from the SQL context; Tenon does not add casts
-based on JavaScript types. Mutable references, runtime lists, conditional fragments,
-function-generated fragments, and dynamic identifiers produce `tenon/check-composition` diagnostics.
-Suppress only that rule on the particular query when runtime variants have database tests. SQL and
-annotation errors still come from `@ts-safeql/check-sql`. An imported fragment must have an
-inspectable source initializer; declarations alone cannot describe its SQL. It does not execute
-application code to discover SQL.
+constant fragments and `sql.join` with nonempty literal arrays, including nested fragments.
+Separators and `identifier()` names must resolve to literal strings or const string initializers.
+Values use the same parameter placeholders in static checking and execution, inside or outside
+fragments. PostgreSQL infers their types from SQL context; Tenon does not add casts based on
+JavaScript types.
+
+The checker follows const fragment initializers, including imported constants with inspectable
+source. It does not inspect function bodies, substitute helper arguments/defaults, or choose
+JavaScript conditional branches. Function-generated fragments and conditional SQL structure are
+unsupported even when a particular helper appears simple or a condition is a literal. Mutable
+references, runtime filter lists, and dynamic identifiers are also unsupported. Ordinary value
+expressions remain bound parameters; calls that produce data for an official mutation helper can
+use its explicit column-list contract.
+
+Reusable authorization and other application policy can still live in fragment-returning functions
+at runtime. Keep that policy centralized and cover its behavior with database tests. Suppress
+`tenon/check-composition` only on the particular query, with a reason, when its variants are tested.
+Do not duplicate policy merely to obtain static coverage. SQL and annotation errors in checkable
+queries continue to come from `@ts-safeql/check-sql`.
+
+Ordinary functions containing complete `sql` templates remain checkable. Each template is analyzed
+where it is written, including constant fragments defined in that function:
+
+```ts
+function findUsers(email: string) {
+  const predicate = sql.fragment`email = ${email}`;
+  return sql`SELECT id FROM users WHERE ${predicate}`;
+}
+```
 
 Use literal line breaks in `sql` templates and bind string values with `${value}`. The composition
 rule rejects JavaScript escapes such as `\n` or `\'` in the outer template: SafeQL reads raw

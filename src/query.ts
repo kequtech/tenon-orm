@@ -1,5 +1,11 @@
 import type { QueryResultRow } from 'pg';
 import { joinSeparator, quote } from './sql.js';
+import {
+  assignmentParts,
+  insertParts,
+  type MutationColumns,
+  type MutationPart,
+} from './mutations.js';
 
 // Shared symbols let separately installed copies exchange queries and identifiers.
 const queryTag = Symbol.for('@kequtech/tenon-orm/query');
@@ -27,7 +33,7 @@ export function identifier(...names: string[]): Identifier {
 
 const fragmentTag = Symbol.for('@kequtech/tenon-orm/fragment');
 
-type Part = string | Readonly<{ value: unknown }>;
+type Part = MutationPart;
 
 /** A composable piece of SQL, not an executable query or a result-type declaration. */
 export interface SqlFragment {
@@ -60,7 +66,7 @@ function templateParts(strings: TemplateStringsArray, values: readonly unknown[]
   const parts: Part[] = [strings[0]!];
   for (const [i, value] of values.entries()) {
     if (value && typeof value === 'object' && fragmentTag in value) {
-      parts.push(...fragmentParts(value));
+      for (const part of fragmentParts(value)) parts.push(part);
     } else if (
       value &&
       typeof value === 'object' &&
@@ -98,9 +104,31 @@ function join(fragments: readonly SqlFragment[], separator: 'AND' | 'OR' | ','):
   const parts: Part[] = [];
   for (const [i, item] of fragments.entries()) {
     if (i) parts.push(between);
-    parts.push(...fragmentParts(item));
+    for (const part of fragmentParts(item)) parts.push(part);
   }
   return Object.freeze({ __tenonFragment: true as const, [fragmentTag]: Object.freeze(parts) });
+}
+
+/** Object fields become bound values; absent insert cells use PostgreSQL defaults. */
+function insertValues<Row extends object>(
+  input: Row | readonly Row[],
+  columns?: readonly NoInfer<MutationColumns<Row>>[],
+): SqlFragment {
+  return Object.freeze({
+    __tenonFragment: true as const,
+    [fragmentTag]: Object.freeze(insertParts(input, columns)),
+  });
+}
+
+/** Omit undefined fields; null remains a value. Empty assignments reject. */
+function assignments<Row extends object>(
+  input: Row,
+  columns?: readonly NoInfer<MutationColumns<Row>>[],
+): SqlFragment {
+  return Object.freeze({
+    __tenonFragment: true as const,
+    [fragmentTag]: Object.freeze(assignmentParts(input, columns)),
+  });
 }
 
 function createQuery<Row extends QueryResultRow = UnknownRow>(
@@ -121,7 +149,7 @@ function createQuery<Row extends QueryResultRow = UnknownRow>(
 }
 
 /** Values bind parameters; identifiers quote names; fragments compose authored SQL. */
-export const sql = Object.assign(createQuery, { fragment, join });
+export const sql = Object.assign(createQuery, { fragment, join, insertValues, assignments });
 
 /** Escape hatch for externally authored SQL. Never concatenate application input into text. */
 export function unsafeSql<Row extends QueryResultRow = UnknownRow>(
@@ -130,6 +158,10 @@ export function unsafeSql<Row extends QueryResultRow = UnknownRow>(
 ): NoInfer<SqlQuery<Row>> {
   if (typeof text !== 'string' || !text.trim()) throw new Error('SQL must be a nonempty string.');
   if (!Array.isArray(values)) throw new Error('SQL input must be an explicit array.');
+  if (values.length > 65535)
+    throw new Error(
+      'A PostgreSQL query supports at most 65535 bound parameters; split large batches explicitly.',
+    );
   return Object.freeze({ [queryTag]: true as const, text, values: Object.freeze([...values]) });
 }
 

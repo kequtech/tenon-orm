@@ -618,6 +618,119 @@ import { sql, type QueryClient } from ${JSON.stringify(resolve('dist/index.js'))
         for (const query of [escapes.newline, escapes.tail]) {
           await assert.rejects(pool.query(query.text, [...query.values]), { code: '42804' });
         }
+        await writeFile(
+          join(directory, 'fragment-factories.ts'),
+          `
+          import { sql } from ${JSON.stringify(resolve('dist/index.js'))};
+          export const simple = () => sql.fragment\`TRUE\`;
+          export function sideEffect(enabled = true) {
+            const ignored = (enabled = false);
+            return enabled ? sql.fragment\`TRUE\` : sql.fragment\`missing_column = 1\`;
+          }
+        `,
+        );
+        await writeFile(
+          join(directory, 'unsupported-factories.ts'),
+          `
+          import { sql } from ${JSON.stringify(resolve('dist/index.js'))};
+          import { simple, sideEffect } from './fragment-factories.js';
+          const constantFactory = sql<{id: number}>\`SELECT id FROM ${table} WHERE \${simple()}\`;
+          const wrongBranch = sql<{id: number}>\`SELECT id FROM ${table} WHERE \${sideEffect()}\`;
+          const staticCondition = sql<{id: number}>\`SELECT id FROM ${table} WHERE \${true ? sql.fragment\`TRUE\` : sql.fragment\`FALSE\`}\`;
+          // Complete queries inside ordinary functions still receive normal SQL analysis.
+          export function complete(email: string) {
+            const predicate = sql.fragment\`email = \${email}\`;
+            return sql\`SELECT id FROM ${table} WHERE \${predicate}\`;
+          }
+        `,
+        );
+        const factoryErrors = (await lint('unsupported-factories.ts', true))[0]!.messages;
+        assert.equal(factoryErrors.length, 3, JSON.stringify(factoryErrors));
+        assert.ok(factoryErrors.every((error) => error.ruleId === 'tenon/check-composition'));
+        const factorySource = await readFile(join(directory, 'unsupported-factories.ts'), 'utf8');
+        assert.match(factorySource, /return sql<\{\s*id: number\s*\}>/);
+        await writeFile(
+          join(directory, 'mutations.ts'),
+          `
+          import { sql, type SqlQuery } from ${JSON.stringify(resolve('dist/index.js'))};
+          const insert = sql.insertValues;
+          const setters = { assign: sql.assignments };
+          function buildRows() {
+            return [11].map(id => ({ id, email: 'runtime@example.test', kind: 'person',
+              amount: '2', payload: {}, created: new Date('2026-01-01'), tags: [] as string[] }));
+          }
+          const patch = { email: 'patched@example.test', amount: undefined };
+          export const queries = {
+            inserted: sql\`INSERT INTO ${table} \${sql.insertValues({id: 10, email: 'new@example.test',
+              kind: 'person', amount: '1', payload: {}, created: new Date('2026-01-01'), tags: []})}
+              ON CONFLICT (id) DO UPDATE SET email = excluded.email RETURNING id, email, amount\`,
+            updated: sql\`UPDATE ${table} SET \${sql.assignments({email: 'updated@example.test', amount: undefined})}
+              WHERE id = \${10} RETURNING id, email, amount\`,
+            runtimeRows: sql\`INSERT INTO ${table} \${insert(buildRows(), ['id', 'email', 'kind', 'amount', 'payload', 'created', 'tags'])}
+              RETURNING id, email, amount\`,
+            runtimePatch: sql\`UPDATE ${table} SET \${setters.assign(patch, ['email', 'amount'])}
+              WHERE id = \${11} RETURNING id, email, amount\`,
+          };
+          const checked: Record<string, SqlQuery<{id: number; email: string; amount: string}>> = queries;
+        `,
+        );
+        assert.deepEqual((await lint('mutations.ts', true))[0]!.messages, []);
+        assert.deepEqual((await lint('mutations.ts'))[0]!.messages, []);
+        await writeFile(
+          join(directory, 'mutation-errors.ts'),
+          `
+          import { sql } from ${JSON.stringify(resolve('dist/index.js'))};
+          const wrongColumn = sql\`UPDATE ${table} SET \${sql.assignments({missing: 1})}\`;
+          const wrongInsert = sql\`INSERT INTO ${table} \${sql.insertValues({missing: 1})}\`;
+          const annotation = sql<{id: string}>\`INSERT INTO ${table} \${sql.insertValues({id: 12})} RETURNING id\`;
+          declare const patch: {missing?: string};
+          const explicitColumn = sql\`UPDATE ${table} SET \${sql.assignments(patch, ['missing'])}\`;
+        `,
+        );
+        const mutationErrors = (await lint('mutation-errors.ts'))[0]!.messages;
+        assert.equal(mutationErrors.length, 4, JSON.stringify(mutationErrors));
+        assert.ok(mutationErrors.every((error) => error.ruleId === '@ts-safeql/check-sql'));
+        assert.equal(mutationErrors.filter((error) => /missing/.test(error.message)).length, 3);
+        await writeFile(
+          join(directory, 'mutation-unsupported.ts'),
+          `
+          import { sql } from ${JSON.stringify(resolve('dist/index.js'))};
+          declare const patch: {email?: string};
+          const opaque = sql\`UPDATE ${table} SET \${sql.assignments(patch)}\`;
+          const spread = sql\`UPDATE ${table} SET \${sql.assignments({...patch})}\`;
+          const dynamicRows = sql\`INSERT INTO ${table} \${sql.insertValues([1].map(id => ({id})))}\`;
+          const duplicate = sql\`UPDATE ${table} SET \${sql.assignments(patch, ['email', 'email'])}\`;
+        `,
+        );
+        const mutationUnsupported = (await lint('mutation-unsupported.ts'))[0]!.messages;
+        assert.equal(mutationUnsupported.length, 4, JSON.stringify(mutationUnsupported));
+        assert.ok(mutationUnsupported.every((error) => error.ruleId === 'tenon/check-composition'));
+        await writeFile(
+          join(directory, 'tsconfig.mutations.json'),
+          JSON.stringify({
+            extends: './tsconfig.json',
+            compilerOptions: { noEmit: false, outDir: './mutation-compiled' },
+            include: ['mutations.ts'],
+          }),
+        );
+        await run(
+          process.execPath,
+          [resolve('node_modules/typescript/bin/tsc'), '-p', 'tsconfig.mutations.json'],
+          { cwd: directory },
+        );
+        const mutationRuntime = (await import(
+          pathToFileURL(join(directory, 'mutation-compiled/mutations.js')).href
+        )) as { queries: Record<string, SqlQuery> };
+        const mutationRows: Record<string, unknown> = {};
+        for (const [name, query] of Object.entries(mutationRuntime.queries)) {
+          mutationRows[name] = (await pool.query(query.text, [...query.values])).rows;
+        }
+        assert.deepEqual(mutationRows, {
+          inserted: [{ id: 10, email: 'new@example.test', amount: '1' }],
+          updated: [{ id: 10, email: 'updated@example.test', amount: '1' }],
+          runtimeRows: [{ id: 11, email: 'runtime@example.test', amount: '2' }],
+          runtimePatch: [{ id: 11, email: 'patched@example.test', amount: '2' }],
+        });
         await pool.query(`ALTER TABLE ${table} RENAME COLUMN email TO address`);
         assert.ok((await lint('valid.ts'))[0]!.messages.some((m) => /email/.test(m.message)));
       },

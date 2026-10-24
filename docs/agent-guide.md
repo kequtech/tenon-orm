@@ -1,7 +1,7 @@
 # Tenon agent guide
 
 Tenon executes PostgreSQL SQL through `pg`, with parameter binding, transactions, optional write
-limits, SQL migrations, and generated table row types. Use ordinary functions for reusable queries.
+limits, SQL migrations, and generated row and mutation input types. Use ordinary functions for reusable queries.
 This guide contains the setup and contracts needed for routine implementation; the
 [reference](reference.md) covers additional options.
 
@@ -124,6 +124,11 @@ batches/updates throw; a single default-only insert works. Omit generated column
 writes explicitly below the query-wide limit of 65,535 parameters. Expressions and queries are
 rejected as cell values; write arithmetic, `DEFAULT`, and `excluded.column` in the surrounding SQL.
 
+Use generated `Rows.Insert['table']` and `Rows.Update['table']` for mutation inputs when available;
+narrow editable fields with `Pick`. They account for defaults, nullability, domains, and generated
+columns. Write mappings differ from returned rows: timestamps use `Date | string`, bigint uses
+`string | bigint`, and JSON uses serialized text. See the [input types](reference.md#insert-and-update-inputs).
+
 SafeQL reads inline object/array literals directly. Runtime inputs, spreads and data-builder results
 need explicit inline selected columns, e.g. `sql.insertValues(rows, ['name', 'score'])`. Checking
 uses all selected columns conservatively, without interpreting application JavaScript. It verifies
@@ -140,10 +145,8 @@ Configure it normally and add both exports from `@kequtech/tenon-orm/safeql`:
 - `eslintPlugin` goes in ESLint's `plugins`, with `tenon/check-composition` enabled. It reports
   unsupported forms that the adapter skips. It does not wrap SafeQL's rule.
 
-These tools are optional development tooling; the database runtime does not import them. SafeQL,
-ESLint, and TypeScript are optional peers. The application owns the TypeScript parser configuration
-and imports SafeQL and typescript-eslint itself. Use a TypeScript version supported by the lint
-toolchain. Generated table types are optional and not required by SafeQL.
+These tools run during development and CI. Reuse the application's TypeScript parser settings and
+use a TypeScript version supported by the lint toolchain. Generated table types are optional.
 
 Reuse existing configuration and scripts. For a new setup:
 
@@ -203,9 +206,7 @@ SQL and annotation errors come from `@ts-safeql/check-sql`; unsupported composit
 `tenon/check-composition`. Keep both rules enabled.
 
 For existing applications, use the [incremental audit workflow](adoption-guide.md#adopt-sql-checking-incrementally)
-to preview fixes and review raw database types versus application refinements. It also documents
-reported nullable-temporal fix loops and an indexed-access annotation workaround. Do not repeatedly
-apply a non-converging fix or weaken driver mappings to silence it.
+to preview fixes and review database types versus application refinements.
 
 1. Run the development `db:migrate` script below against the intended development/test database.
 2. Run `npm run lint`. Fix SQL mistakes before accepting generated types.
@@ -214,38 +215,14 @@ apply a non-converging fix or weaken driver mappings to silence it.
    enabled ESLint rules may also fix files.
 4. Run the application's typecheck and database tests. CI runs `lint` without `--fix`.
 
-For multiple databases, replace the connection object with an array. Each connection has its own
-URL, `plugins: [safeqlPlugin]`, and distinct `targets`, for example `{ tag: 'usersSql' }` and
-`{ tag: 'billingSql' }`. Import `sql as usersSql` and `sql as billingSql` to select them, even
-within one file. Alternatively, scope separate SafeQL configurations with non-overlapping ESLint
-`files` patterns and keep the `sql` tag. Runtime connections remain independent: execute each query
-with the right database instance. The checker does not trace `db.query` destinations.
+For multiple databases, give each connection distinct tag targets or ESLint file scopes. Qualify
+same-named tables with their schemas. See the [connection reference](reference.md#configuration-choices-and-multiple-databases).
 
-Qualify tables with their schema when names repeat across schemas in a database. SafeQL can infer
-the wrong type for an unqualified table despite the connection's `search_path`; explicit schema
-names avoid that ambiguity.
-
-The checker recognizes Tenon imports, aliases, and typed object properties. It resolves constant
-fragments and literal/const identifier names without executing application code. Imported
-fragments need inspectable source initializers. It recognizes the official mutation helpers
-directly; it never inspects function bodies or substitutes helper arguments/defaults. Conditional
-fragments, function-generated fragments, and runtime filter lists require narrow explained
-suppressions and database tests. Ordinary functions containing complete `sql` templates remain
-checkable. Keep reusable authorization policy centralized even when it is test-owned rather than
-statically checked. Use literal newlines and bound string values: outer-template JavaScript escapes
-are rejected because SafeQL reads raw text while Tenon executes decoded text. Bound values and
-constant fragments are decoded consistently.
-
-Checking verifies SQL and result annotations, not JavaScript input compatibility, authorization, or
-JSON contents. PostgreSQL owns parameter inference; the checker adds no casts based on JavaScript
-types. `unsafeSql` is unchecked. Never use `any` to hide an unsupported query.
-
-Default scalar mappings: bigint/numeric are strings; JSON is `unknown`; temporal values are
-`Date | number` because infinities are numbers. Generated `PgArray<T>` supports recursive dimensions
-and null elements. Numeric arrays contain numbers and can lose precision. Custom pg parsers and
-recursive array projections need matching checker overrides and tests, for example
-`overrides: { columns: { 'User.tags': 'PgArray<string>' } }` on the SafeQL connection. Import
-`PgArray` from the generated definitions when using that annotation.
+Checking verifies SQL and result annotations. Input validation, authorization, JSON contents, and
+runtime query variants still need application checks and database tests. Keep shared policy in
+ordinary functions even when its fragments cannot be checked statically. Use literal newlines in
+SQL templates and bind string values. The [reference](reference.md#supported-sql-and-limitations)
+covers supported composition and parser overrides.
 
 ## Transactions and writes
 
@@ -278,7 +255,7 @@ development script in `package.json`:
 ```json
 {
   "scripts": {
-    "db:migrate": "tenon migrate && tenon generate --out src/generated-schema.ts"
+    "db:migrate": "tenon migrate && tenon generate --out src/generated-schema.d.ts"
   }
 }
 ```
@@ -287,7 +264,7 @@ development script in `package.json`:
 npx tenon new create_users
 # Fill the generated up/down SQL before migrating.
 npm run db:migrate
-npx tenon generate --out src/generated-schema.ts --check
+npx tenon generate --out src/generated-schema.d.ts --check
 npx tenon status
 npx tenon rollback --steps 1
 ```

@@ -140,6 +140,8 @@ test('generated types preserve unusual SQL names, module-name collisions and dat
     'class',
     'as',
     'Rows',
+    'Inserts',
+    'Updates',
     'tables',
     'column',
     'index',
@@ -165,11 +167,15 @@ test('generated types preserve unusual SQL names, module-name collisions and dat
     await checkGeneratedTypes(
       options,
       `
-      import type { Rows, Date as DateRow, 東京 } from './definitions.js';
+      import type { Rows, Inserts, Updates, Date as DateRow, 東京 } from './definitions.js';
       ${typeAssertions}
       type Expected = { id: number; 'created at': globalThis.Date | number; 'nullable-value': string | null; '__proto__': string };
       type Matches = { [Name in keyof Rows]: Equal<Rows[Name], Expected> };
       type AllRows = Assert<Equal<Matches[keyof Rows], true>>;
+      type NamedInserts = Assert<Equal<Inserts, Rows['Inserts']>>;
+      type NamedUpdates = Assert<Equal<Updates, Rows['Updates']>>;
+      type ReservedInsert = Assert<Equal<Rows.Insert['Inserts']['id'], number>>;
+      type ReservedUpdate = Assert<Equal<Rows.Update['Updates']['id'], number | undefined>>;
       type UnicodeAlias = Assert<Equal<東京, Expected>>;
       type DateAlias = Assert<Equal<DateRow['created at'], globalThis.Date | number>>;
       type ExactName = Assert<Equal<Pick<Rows['user-details'], 'nullable-value'>, { 'nullable-value': string | null }>>;
@@ -496,6 +502,10 @@ test('a schema containing only views generates an empty table type map', async (
       import type { Rows } from './definitions.js';
       ${typeAssertions}
       type NoTables = Assert<Equal<keyof Rows, never>>;
+      type NoInserts = Assert<Equal<Rows.Insert[keyof Rows], never>>;
+      type NoUpdates = Assert<Equal<Rows.Update[keyof Rows], never>>;
+      // @ts-expect-error views do not have generated mutation input types
+      type ViewInput = Rows.Insert['ManualView'];
     `,
       );
       assert.deepEqual(await migrationStatus(options), { applied: ['0001'], pending: [] });

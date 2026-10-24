@@ -11,10 +11,10 @@ queries or generate types; keep the existing migration runner if that is the int
 1. Locate the old ORM's connection setup, schema, migrations, and call sites. Identify behavior
    supplied by the ORM: validation, IDs, timestamps, hooks, defaults, relation loading,
    serialization, and transaction boundaries.
-2. If table row types will help your application, generate them from the existing database:
+2. If row and mutation input types will help your application, generate them from the existing database:
 
    ```sh
-   npx tenon generate --out src/generated-schema.ts
+   npx tenon generate --out src/generated-schema.d.ts
    ```
 
    Use `--namespace name` for a non-public schema. Generation reads the actual database and requires
@@ -34,39 +34,21 @@ queries or generate types; keep the existing migration runner if that is the int
    migration tooling until the migration transition below is complete, if that transition is part of
    the work.
 
-## Upgrade object-write helpers from 0.1.0 to 0.1.1
+## Replace local write helpers
 
-Version 0.1.1 adds `sql.insertValues` and `sql.assignments`. Replace local utilities that render
-object values with the official helpers after comparing their contracts:
-
-```ts
-// Before: application-owned SQL rendering.
-import { sql } from '@kequtech/tenon-orm';
-import { insertValues, assignments } from './sql.js';
-
-const insert = sql`INSERT INTO profiles ${insertValues(rows)} RETURNING id`;
-const update = sql`UPDATE profiles SET ${assignments(patch)} WHERE id = ${id}`;
-```
+Use `sql.insertValues(rows)` and `sql.assignments(patch)` in place of local object-to-SQL utilities:
 
 ```ts
-// After: no local object-write utility import.
 import { sql } from '@kequtech/tenon-orm';
 
 const insert = sql`INSERT INTO profiles ${sql.insertValues(rows)} RETURNING id`;
 const update = sql`UPDATE profiles SET ${sql.assignments(patch)} WHERE id = ${id}`;
 ```
 
-Missing/undefined insert cells use database defaults; undefined update fields are omitted; null
-remains null. Check heterogeneous batches and callers that previously allowed empty inputs or SQL
-expressions inside objects: empty batches/updates and SQL-valued cells now throw. Keep expressions
-in the surrounding SQL. See the [complete contract](reference.md#object-based-mutation-fragments)
-and [mutation cookbook](mutations.md).
-
-Run the application's typecheck and database workflows, including defaults, upserts, and rollback.
-Delete the obsolete local module once all its callers have moved and any unrelated exports have
-been preserved. This upgrade requires no schema or migration-ownership change. Existing result
-annotations and input contracts still need their own verification. When adopting SafeQL, add
-explicit inline selected columns to runtime-built inputs as described in the cookbook.
+Compare omission, defaults, nulls, and empty-input behavior with the old helpers. Keep expressions
+in SQL and remove the local utilities after their callers move. Generated `Rows.Insert` and
+`Rows.Update` types can replace handwritten table inputs; retain application-specific refinements
+and validation. Run the existing write and rollback workflows. See the [mutation cookbook](mutations.md).
 
 ## Adopt SQL checking incrementally
 
@@ -140,23 +122,9 @@ JSON from `unknown`, and justify CHECK-constrained string refinements with match
 or a reviewed column override. Do not globally map timestamps to `Date`: pg can return numeric
 infinities. See [checker mappings](reference.md#supported-sql-and-limitations).
 
-Known annotation limitations were reported with Tenon 0.1.1 and SafeQL 5.4.2:
-
-- Nullable temporal annotations such as `Date | number | null` can be rejected even when expected
-  and actual text match, and fixes can fail to converge. Preserve the driver-accurate type and
-  isolate a reproduction rather than repeatedly applying fixes or narrowing it to `Date`.
-- Direct indexed-access annotations such as `sql<Rows['profiles']>` can be rejected despite matching
-  fields. A named alias, `type Profile = Rows['profiles']`, used as `sql<Profile>` passed the reported
-  reproduction. It does not resolve separate temporal or JSON disagreements.
-- Function nullability and catalog types can be inferred conservatively or incorrectly. Review
-  advisory-lock and catalog-name projections separately rather than broadening every `unknown`.
-
-Track accepted templates, annotation findings, and unsupported templates separately. An accepted
-write without a returned projection says little about input values; an unsupported query has not
-had its SQL verified. Counts cover only the selected files/templates, excluding `unsafeSql`, direct
-driver calls, and runtime variants. Keep the audit's nonzero exit visible while findings remain;
-promote it to a required CI check once its scope is intentionally resolved. Annotation fixes can
-also invoke other inherited ESLint rules.
+Unsupported queries have not had their SQL verified. Keep database tests for their runtime variants
+and use explained suppressions only where appropriate. Once the intended scope passes, make SQL
+checking a required CI step. Fix commands can also apply other enabled ESLint rules.
 
 ## Move migration ownership to Tenon
 

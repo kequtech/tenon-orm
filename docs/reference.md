@@ -199,10 +199,10 @@ const patch: { name?: string; bio?: string | null } = readPatch();
 const update = sql`UPDATE profiles SET ${sql.assignments(patch, ['name', 'bio'])} WHERE id = ${id}`;
 ```
 
-The helpers have no schema metadata. Omit generated columns; PostgreSQL enforces identity,
-generation, required-column, and constraint rules. They do not generate insert/update input types
-or prove that the JavaScript input values match database column types. Retain application input
-contracts and validation. To reset an update field to its default, write `column = DEFAULT` in the
+The helpers have no runtime schema metadata. Use [generated input types](#insert-and-update-inputs)
+or application-owned contracts to check JavaScript values; PostgreSQL enforces identity,
+generation, required-column, and constraint rules. Retain application validation.
+To reset an update field to its default, write `column = DEFAULT` in the
 surrounding SQL. Put arithmetic and `excluded.column` expressions there too; these helpers accept
 values only, with no expression/default sentinel.
 
@@ -277,41 +277,83 @@ transaction has committed.
 
 `generateDefinitions({ connection, namespace?, onWarning? })` returns TypeScript source for the
 connected schema. It does not need migration files or history. Table type generation is optional.
-SafeQL reads the database directly and does not require these generated files; they are useful when
-reusing table row shapes. The CLI writes that source atomically. This command checks the existing
-file without rewriting it:
+SafeQL reads the database directly and does not require these generated files; they provide
+reusable row and mutation input types. The CLI writes that source atomically. This command checks
+the existing file without rewriting it:
 
 ```sh
-npx tenon generate --out src/generated-schema.ts --check
+npx tenon generate --out src/generated-schema.d.ts --check
 ```
 
 `--check` compares the generated representation with the current database. Pending migration files
 are a separate concern. The representation includes table columns, constraints, indexes, and
 referenced domains, not every PostgreSQL object.
 
-Generation reads a consistent snapshot of ordinary tables and partitioned roots. Use the generated
-named type in queries, for example `sql<User>`. For other table names, define an alias such as
-`type AuditRow = Rows['audit-log']` and use `sql<AuditRow>`; SafeQL resolves named aliases but not
-indexed access directly in `sql<Rows['audit-log']>`. Views, foreign tables, and attached partitions
-use query-specific types. A missing namespace fails; an existing empty schema is valid.
+Generation reads a consistent snapshot of ordinary tables and partitioned roots. `Rows['User']`
+describes one returned row; the generated `User` alias means the same thing. Use `sql<User>` for a
+full row or `Pick<User, 'id' | 'email'>` for a projection. Table keys preserve exact SQL names;
+`type AuditRow = Rows['audit-log']` works for names that cannot be exported as identifiers.
+Views, foreign tables, and attached partitions use query-specific types. A missing namespace
+fails; an existing empty schema is valid.
 
-| PostgreSQL type                                | Default pg value                                |
-| ---------------------------------------------- | ----------------------------------------------- |
-| smallint, integer, oid, real, double precision | `number`                                        |
-| bigint, numeric                                | `string`                                        |
-| boolean                                        | `boolean`                                       |
-| text, varchar, char, uuid, time, timetz        | `string`                                        |
-| date, timestamp, timestamptz                   | `Date \| number` (numbers represent infinities) |
-| enum                                           | String literal union; `never` for an empty enum |
-| json, jsonb                                    | `unknown`                                       |
-| bytea                                          | `Buffer`                                        |
+| PostgreSQL type                                | Returned value                                | Generated write input                 |
+| ---------------------------------------------- | --------------------------------------------- | ------------------------------------- |
+| smallint, integer, oid, real, double precision | `number`                                      | `number`                              |
+| bigint                                         | `string`                                      | `string \| bigint`                    |
+| numeric                                        | `string`                                      | `string \| number`                    |
+| boolean                                        | `boolean`                                     | `boolean`                             |
+| text, name, varchar, char, uuid, time, timetz  | `string`                                      | `string`                              |
+| date, timestamp, timestamptz                   | `Date \| number` (numbers include infinities) | `Date \| string`                      |
+| enum                                           | String literal union                          | Same union; `never` for an empty enum |
+| json, jsonb                                    | `unknown`                                     | Serialized JSON text (`string`)       |
+| bytea                                          | `Buffer`                                      | `Buffer`                              |
 
-Nullable columns add null. Domains use verified underlying mappings and the column's own
-nullability. Unverified types warn and become `unknown`. Verified arrays use
+For returned rows, nullable columns add null. Domains use verified underlying mappings and the
+column's own nullability. Unverified types warn and become `unknown`. Verified arrays use
 `PgArray<T> = (T | null | PgArray<T>)[]` for null elements and multiple dimensions. Numeric arrays
 contain numbers and can lose precision; cast to text[] for exact values. Enum arrays and arrays of
 domains are unverified. Finite dates and timestamps without time zone use Node's local timezone.
 Custom pg parsers need matching application types.
+
+### Insert and update inputs
+
+The same file provides `Rows.Insert['table']` and `Rows.Update['table']` for bound write inputs.
+These are ordinary TypeScript types. `--out` accepts `.ts` or `.d.ts`; the examples use `.d.ts`
+because the file contains only declarations.
+
+```ts
+import type { Rows } from './generated-schema.js';
+
+type NewProfile = Rows.Insert['profiles'];
+type ProfilePatch = Pick<Rows.Update['profiles'], 'name' | 'bio'>;
+
+const profile: NewProfile = { name: 'Ada' };
+const patch: ProfilePatch = { name: undefined, bio: null };
+sql.insertValues(profile, ['name', 'bio', 'score']);
+sql.assignments(patch, ['name', 'bio']);
+```
+
+Insert fields are required when nonnullable and without a default. Other writable insert fields
+are optional; every writable update field is optional. `undefined` requests a default on insert
+and omits an assignment on update. Explicit `null` is accepted only when the column and its domain
+chain permit it. Domain defaults count; column defaults take precedence.
+
+Computed columns and `GENERATED ALWAYS` identity columns cannot receive values. Serial and
+`GENERATED BY DEFAULT` identity columns are optional on insert and writable on update. Other
+primary keys remain writable. Use `Pick` or `Omit` for application-specific restrictions and keep
+expressions, `DEFAULT`, and special identity overrides in SQL.
+
+Write representations in the table above also apply to verified array elements. Serialize JSON
+with `JSON.stringify`, including JSON arrays; a JSON string containing `null` differs from SQL null.
+Use timestamp strings for infinities. Unverified non-null write values use `never` and warn;
+nullable fields still accept null. Supply an application-owned replacement when needed, for example
+`Omit<Rows.Insert['events'], 'delay'> & { delay: string }` for a reviewed interval-text input.
+
+Apply these types through annotations, `satisfies`, or helper generic arguments such as
+`sql.insertValues<NewProfile>(input)`. They check shapes and representations, not authorization,
+constraints, JSON contents, or nonempty inputs. Optional fields accept explicit `undefined`,
+including with `exactOptionalPropertyTypes`. Selected columns can discard required fields; see
+the [cookbook example](mutations.md#input-types-sql-checking-and-runtime-validation).
 
 ## SQL checking with SafeQL
 
@@ -341,11 +383,8 @@ existing TypeScript installation:
 npm install --save-dev eslint typescript-eslint @ts-safeql/eslint-plugin
 ```
 
-SafeQL and ESLint are the integration's hosts, and the adapter imports TypeScript to inspect query
-expressions. They are optional peers because Tenon's database runtime does not need them.
-`typescript-eslint` is an application-owned parser dependency, not a Tenon peer. Your ESLint
-configuration imports SafeQL and the parser explicitly. Use a TypeScript version supported by that
-lint toolchain. The `pg` driver remains Tenon's required runtime peer.
+These are development dependencies. Reuse your existing type-aware parser configuration and a
+TypeScript version supported by the lint toolchain. Tenon's database runtime does not load them.
 
 For a project with `src/**/*.ts` and a `tsconfig.json`:
 
@@ -382,9 +421,6 @@ configuration. `projectService` uses the nearest TypeScript project for each fil
 `DATABASE_URL` through your application's environment setup and point it at a development/test
 database with migrations applied. This example does not load `.env` files.
 
-The `.mjs` example avoids a current declaration mismatch between SafeQL's configuration helper and
-ESLint's `defineConfig`. This affects configuration typechecking, not query result types.
-
 `targets` selects the SQL tag spelling. If you alias `sql`, add the alias to the targets. For a
 single database, `targets: [{ tag: { regex: '.*' } }]` selects all tags; Tenon's adapter filters
 that down to actual Tenon queries, including aliases and object properties. Neither the adapter nor
@@ -405,8 +441,7 @@ They run all enabled ESLint rules, and `lint:fix` can change non-SQL code too:
 ### Generate and check annotations
 
 For an existing persistence layer, start with the [incremental audit workflow](adoption-guide.md#adopt-sql-checking-incrementally).
-It covers a separate SQL lint command, fix previews, application refinements, and reported annotation
-limitations. Review findings before bulk fixes; an annotation disagreement is not always a SQL bug.
+It covers a separate SQL lint command, fix previews, and application refinements.
 
 Write a query without a result annotation:
 
@@ -469,10 +504,8 @@ file group, each extending its own `safeql.configs.connections({ ... })`. Use no
 `files` patterns when database settings differ. Normal SafeQL configurations for other libraries can
 coexist; add Tenon's adapter only to connections checking Tenon queries.
 
-If a database has same-named tables in different schemas, qualify them in SQL, for example
-`SELECT id FROM billing.accounts`. SafeQL can infer the wrong type for an unqualified table even
-when the connection's `search_path` selects the correct table at execution. Explicit schema names
-avoid that ambiguity.
+Qualify same-named tables with their schemas, for example `SELECT id FROM billing.accounts`, so
+the intended relation is explicit in both checking and execution.
 
 ### Supported SQL and limitations
 
@@ -558,7 +591,7 @@ tenon new <name> [--directory migrations]
 tenon migrate [--directory migrations] [--namespace public]
 tenon status [--directory migrations] [--namespace public]
 tenon rollback [--directory migrations] [--namespace public] [--steps 1]
-tenon generate [--namespace public] [--out src/generated-schema.ts] [--check]
+tenon generate [--namespace public] [--out path] [--check]
 tenon baseline capture|adopt [--directory migrations] [--namespace public]
 ```
 

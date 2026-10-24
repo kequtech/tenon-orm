@@ -20,9 +20,9 @@ after(() => pool.end());
 const run = promisify(execFile);
 const cli = fileURLToPath(new URL('../src/cli.js', import.meta.url));
 
-test('CLI migration and generation remain separate; check mode catches stale files without rewriting', async () => {
+test('CLI migration and .d.ts generation remain separate; check mode catches stale files without rewriting', async () => {
   await project(recordMigrations, async (options) => {
-    const output = join(options.directory, 'definitions.ts');
+    const output = join(options.directory, 'definitions.d.ts');
     const args = ['--directory', options.directory, '--namespace', options.namespace];
     const generation = ['--namespace', options.namespace, '--out', output];
     const env = { ...process.env, DATABASE_URL: connection };

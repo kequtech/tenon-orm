@@ -11,6 +11,9 @@ export interface ColumnRow {
   declaredType: string;
   declaredSchema: string;
   nullable: boolean;
+  writeNullable: boolean;
+  hasDefault: boolean;
+  writable: boolean;
   choices: string[] | null;
 }
 export interface TableRow {
@@ -35,16 +38,19 @@ export async function readTables(client: PoolClient, namespace: string): Promise
     const columns = await client.query<ColumnRow>(
       `
         WITH RECURSIVE resolved AS (
-          SELECT a.attnum, t.oid, t.typbasetype
+          SELECT a.attnum, t.oid, t.typbasetype, t.typnotnull AS domain_not_null
           FROM pg_catalog.pg_attribute a JOIN pg_catalog.pg_type t ON t.oid = a.atttypid
           WHERE a.attrelid = $1::oid AND a.attnum > 0 AND NOT a.attisdropped
           UNION ALL
-          SELECT r.attnum, t.oid, t.typbasetype
+          SELECT r.attnum, t.oid, t.typbasetype, r.domain_not_null OR t.typnotnull
           FROM resolved r JOIN pg_catalog.pg_type t ON t.oid = r.typbasetype
         )
         SELECT a.attname AS name, t.oid::text AS oid, t.typname AS type, tn.nspname AS "typeSchema", t.typtype AS "typeKind",
           declared.oid::text AS "declaredOid", declared.typname AS "declaredType", dn.nspname AS "declaredSchema",
           NOT a.attnotnull AS nullable,
+          NOT (a.attnotnull OR r.domain_not_null) AS "writeNullable",
+          (a.atthasdef OR declared.typdefaultbin IS NOT NULL OR a.attidentity <> '') AS "hasDefault",
+          (a.attgenerated = '' AND a.attidentity <> 'a') AS writable,
           (SELECT array_agg(e.enumlabel::text ORDER BY e.enumsortorder) FROM pg_catalog.pg_enum e WHERE e.enumtypid = t.oid) AS choices
         FROM pg_catalog.pg_attribute a
           JOIN resolved r ON r.attnum = a.attnum AND r.typbasetype = 0

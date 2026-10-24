@@ -3,7 +3,7 @@
 A PostgreSQL ORM designed for coding agents. Built for Node.js and TypeScript.
 
 Your coding agent already knows SQL. Tenon gives it a small API for parameterized queries,
-transactions, and migrations, with optional tooling to check SQL and generate result types. Queries
+transactions, and migrations, with optional tooling to check SQL and generate database types. Queries
 stay readable, reusable operations are ordinary functions, and humans can review exactly what will
 run against the database.
 
@@ -47,7 +47,7 @@ Tenon also provides:
 
 - Transactions and affected-row limits that roll back rejected writes.
 - SQL migration files and a CLI to apply, inspect, and roll back migrations.
-- TypeScript table row types generated from your database.
+- TypeScript row, insert, and update types generated from your database.
 - SQL fragments for sharing query parts or assembling variable conditions.
 
 Joins, relationships, aggregates, and upserts use ordinary PostgreSQL SQL. Tenon does not introduce
@@ -69,6 +69,8 @@ migrations and table type generation are independent conveniences.
 For object-based writes, `sql.insertValues(rows)` preserves database defaults across heterogeneous
 rows and `sql.assignments(patch)` omits undefined fields. Keep the surrounding SQL explicit. Both
 support selected columns and [SafeQL checking](docs/reference.md#object-based-mutation-fragments).
+Use [generated input types](docs/reference.md#insert-and-update-inputs) to check those objects
+against your schema.
 
 ## Checking query results
 
@@ -79,13 +81,10 @@ For that, Tenon provides an optional integration with [SafeQL](https://safeql.de
 SQL against your development database and can write or repair the result annotation. ESLint runs the
 check during development and CI; it is not part of query execution.
 
-Configure SafeQL in your application's ESLint setup. Tenon supplies a `safeqlPlugin` adapter for its
-queries, constant fragments, and official mutation helpers, plus an `eslintPlugin` rule that flags
-queries the adapter cannot check. SafeQL handles database analysis and result annotations; Tenon
-keeps the SQL and pg type mappings consistent with execution. Both integrations are optional
-development tooling. See
-[SQL checking setup](docs/reference.md#sql-checking-with-safeql) for installation and a complete
-configuration, including multiple databases.
+Configure SafeQL in your application's ESLint setup with Tenon's `safeqlPlugin` adapter and
+`eslintPlugin` companion rule. The adapter supports queries, constant fragments, and mutation
+helpers; the rule reports queries it cannot inspect. See the
+[SQL checking setup](docs/reference.md#sql-checking-with-safeql).
 
 Checking complements typed inputs and database tests. It does not validate request values or
 arbitrary JSON, and runtime-built query variants need their own tests.

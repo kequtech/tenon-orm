@@ -298,6 +298,13 @@ test('unmapped columns generate unknown with actionable warnings while verified 
       };
       type Complete = Assert<Equal<Mixed, Expected>>;
       type Mapped = Assert<Equal<Rows['Mixed'], Expected>>;
+      type UnsupportedWrite = Assert<Equal<Rows.Insert['Mixed']['duration'], never>>;
+      type NullableWrite = Assert<Equal<Rows.Insert['Mixed']['optional_duration'], null | undefined>>;
+      type UnsupportedArray = Assert<Equal<Rows.Update['Mixed']['kinds'], null | undefined>>;
+      type Refined = Omit<Rows.Insert['Mixed'], 'duration'> & { duration: string };
+      const input: Refined = { id: 1, name: 'test', duration: '1 day', kind: 'a' };
+      // @ts-expect-error an unknown read mapping does not establish a non-null write representation
+      const unverified: Rows.Update['Mixed'] = { duration: '1 day' };
       const row = {} as Mixed;
       // @ts-expect-error unknown values require narrowing or an explicit contract
       row.duration.days;

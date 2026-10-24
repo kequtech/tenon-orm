@@ -110,9 +110,9 @@ function join(fragments: readonly SqlFragment[], separator: 'AND' | 'OR' | ','):
 }
 
 /** Object fields become bound values; absent insert cells use PostgreSQL defaults. */
-function insertValues<Row extends object>(
-  input: Row | readonly Row[],
-  columns?: readonly NoInfer<MutationColumns<Row>>[],
+function insertValues<Input extends object>(
+  input: Input | readonly Input[],
+  columns?: readonly NoInfer<MutationColumns<Input>>[],
 ): SqlFragment {
   return Object.freeze({
     __tenonFragment: true as const,
@@ -121,9 +121,9 @@ function insertValues<Row extends object>(
 }
 
 /** Omit undefined fields; null remains a value. Empty assignments reject. */
-function assignments<Row extends object>(
-  input: Row,
-  columns?: readonly NoInfer<MutationColumns<Row>>[],
+function assignments<Input extends object>(
+  input: Input,
+  columns?: readonly NoInfer<MutationColumns<Input>>[],
 ): SqlFragment {
   return Object.freeze({
     __tenonFragment: true as const,

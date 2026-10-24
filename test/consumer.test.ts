@@ -11,7 +11,7 @@ import { assertTestDatabase, migrationProject, testConnection } from './helpers/
 
 const run = promisify(execFile);
 
-test('the packed package preserves API contracts under TypeScript 6 and 7', async () => {
+test('the packed package preserves API contracts and consumes generated .d.ts schemas under TypeScript 6 and 7', async () => {
   const temporary = await mkdtemp(join(tmpdir(), 'tenon-consumer-'));
   const pool = new Pool({ connectionString: testConnection });
   // npm publish --dry-run passes this setting into its lifecycle tests. Exercise
@@ -222,10 +222,12 @@ test('the packed package preserves API contracts under TypeScript 6 and 7', asyn
         const generateUser = () =>
           run(
             cli,
-            ['generate', '--namespace', options.namespace, '--out', 'generated-user.ts'],
+            ['generate', '--namespace', options.namespace, '--out', 'generated-user.d.ts'],
             commandOptions,
           );
         await generateUser();
+        await access(join(consumer, 'generated-user.d.ts'));
+        await assert.rejects(access(join(consumer, 'generated-user.js')), { code: 'ENOENT' });
         await writeFile(
           join(consumer, 'checked.ts'),
           `
@@ -242,6 +244,15 @@ test('the packed package preserves API contracts under TypeScript 6 and 7', asyn
       const nickname: string | null = user.nickname;
       const created: Date | number = user.createdAt;
       const balance: string = user.balance;
+      const input: Rows.Insert['User'] = { id: 1, email: 'reader@example.test', createdAt: new Date(),
+        balance: 1.5, settings: JSON.stringify({ enabled: true }) };
+      const patch: Rows.Update['User'] = { email: undefined, nickname: null };
+      sql.insertValues(input, ['id', 'email', 'createdAt', 'balance', 'settings']);
+      sql.assignments(patch, ['email', 'nickname']);
+      // @ts-expect-error generated insert inputs require nonnullable fields without defaults
+      const missingInput: Rows.Insert['User'] = { id: 1 };
+      // @ts-expect-error write types use serialized JSON, preserving SQL nullability
+      const invalidPatch: Rows.Update['User'] = { settings: null };
       // @ts-expect-error JSON remains unknown even when imported through a generated type
       user.settings.anything;
     `,

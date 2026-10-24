@@ -147,6 +147,118 @@ export type Rows = {
     "role": "reader" | "writer";
   };
 };
+
+export declare namespace Rows {
+  // Bound inputs for sql.insertValues. Missing/undefined fields use database defaults.
+  type Insert = {
+    "Category": {
+      "tenantId": number;
+      "id": number;
+      "name": string;
+    };
+    "Entry": {
+      "id"?: number | undefined;
+      "tenantId": number;
+      "spaceId": number;
+      "name": string;
+    };
+    "Post": {
+      "id"?: number | undefined;
+      "userId": number;
+      "reviewerId"?: number | null | undefined;
+      "title": string;
+    };
+    "PostTag": {
+      "postId": number;
+      "tagId": number;
+      "addedAt"?: globalThis.Date | string | undefined;
+    };
+    "Profile": {
+      "userId": number;
+      "bio": string;
+    };
+    "Space": {
+      "tenantId": number;
+      "id": number;
+      "name": string;
+    };
+    "SpaceCategory": {
+      "tenantId": number;
+      "spaceId": number;
+      "categoryId": number;
+    };
+    "Tag": {
+      "id"?: number | undefined;
+      "name": string;
+    };
+    "User": {
+      "id"?: number | undefined;
+      "email": string;
+      "name"?: string | undefined;
+      "active"?: boolean | undefined;
+      "score"?: number | undefined;
+      "nickname"?: string | null | undefined;
+      "createdAt"?: globalThis.Date | string | undefined;
+      "token"?: string | undefined;
+      "role"?: "reader" | "writer" | undefined;
+    };
+  };
+
+  // Bound inputs for sql.assignments. Missing/undefined fields are omitted.
+  type Update = {
+    "Category": {
+      "tenantId"?: number | undefined;
+      "id"?: number | undefined;
+      "name"?: string | undefined;
+    };
+    "Entry": {
+      "id"?: number | undefined;
+      "tenantId"?: number | undefined;
+      "spaceId"?: number | undefined;
+      "name"?: string | undefined;
+    };
+    "Post": {
+      "id"?: number | undefined;
+      "userId"?: number | undefined;
+      "reviewerId"?: number | null | undefined;
+      "title"?: string | undefined;
+    };
+    "PostTag": {
+      "postId"?: number | undefined;
+      "tagId"?: number | undefined;
+      "addedAt"?: globalThis.Date | string | undefined;
+    };
+    "Profile": {
+      "userId"?: number | undefined;
+      "bio"?: string | undefined;
+    };
+    "Space": {
+      "tenantId"?: number | undefined;
+      "id"?: number | undefined;
+      "name"?: string | undefined;
+    };
+    "SpaceCategory": {
+      "tenantId"?: number | undefined;
+      "spaceId"?: number | undefined;
+      "categoryId"?: number | undefined;
+    };
+    "Tag": {
+      "id"?: number | undefined;
+      "name"?: string | undefined;
+    };
+    "User": {
+      "id"?: number | undefined;
+      "email"?: string | undefined;
+      "name"?: string | undefined;
+      "active"?: boolean | undefined;
+      "score"?: number | undefined;
+      "nickname"?: string | null | undefined;
+      "createdAt"?: globalThis.Date | string | undefined;
+      "token"?: string | undefined;
+      "role"?: "reader" | "writer" | undefined;
+    };
+  };
+}
 export type Category = Rows["Category"];
 export type Entry = Rows["Entry"];
 export type Post = Rows["Post"];

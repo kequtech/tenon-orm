@@ -59,12 +59,12 @@ CREATE TABLE public."User" (
 DROP TABLE public."User";
 ```
 
-For development, add a script to `package.json` that applies migrations and updates table row types:
+For development, add a script to `package.json` that applies migrations and updates generated types:
 
 ```json
 {
   "scripts": {
-    "db:migrate": "tenon migrate && tenon generate --out src/generated-schema.ts"
+    "db:migrate": "tenon migrate && tenon generate --out src/generated-schema.d.ts"
   }
 }
 ```
@@ -170,15 +170,23 @@ Explicit `null` stays null. Empty batches and updates throw. Heterogeneous inser
 aligned, with `DEFAULT` for missing cells.
 
 ```ts
-await db.query(sql`INSERT INTO users ${sql.insertValues({ email, active: true })}`);
-await db.query(sql`UPDATE users SET ${sql.assignments({ email, active })} WHERE id = ${id}`);
+import type { Rows } from './generated-schema.js';
+
+const input: Rows.Insert['User'] = { email: 'another@example.test' };
+await db.query(sql`INSERT INTO public."User" ${sql.insertValues(input, ['email'])}`);
+
+const patch: Pick<Rows.Update['User'], 'active'> = { active: false };
+await db.query(sql`UPDATE public."User" SET ${sql.assignments(patch, ['active'])}
+  WHERE email = ${input.email}`);
 ```
 
-These helpers bind values only. Keep expressions, authorization, conflict handling and `RETURNING`
-in SQL. For SafeQL checking of runtime-built objects or batches, supply literal selected columns,
-for example `sql.assignments(patch, ['email', 'active'])`. The checker validates all selected columns
-without inspecting the code that built the patch. See the
-[mutation contract and checking limits](reference.md#object-based-mutation-fragments).
+Generated insert types distinguish required fields from defaults and nullable fields. Update types
+make writable fields optional; use `Pick` to limit what an action may edit. See the
+[input-type reference](reference.md#insert-and-update-inputs) for write-value mappings.
+
+Keep expressions, authorization, conflict handling and `RETURNING` in SQL. The selected column lists
+above also let the optional SQL checker inspect runtime-built inputs. They select fields rather
+than validate the complete object. See the [mutation cookbook](mutations.md) for batches and upserts.
 
 ## Check your SQL and result types
 
@@ -188,13 +196,9 @@ There are three different jobs here:
 - TypeScript checks the application code and the result types you declare.
 - SafeQL checks the SQL against your database and verifies or generates those types.
 
-SafeQL is optional development tooling run by ESLint. Configure it normally, with Tenon's
-`safeqlPlugin` adapter to translate queries, constant fragments, and official mutation helpers. A small
-companion ESLint rule, `tenon/check-composition`, flags queries that cannot be checked statically. SafeQL performs the
-database analysis and annotation fixes. Your application's ESLint configuration imports these tools;
-Tenon's database runtime does not need them. Generated table types are a separate convenience and
-are not required by SafeQL. Follow the one-time
-[SQL checking setup](reference.md#sql-checking-with-safeql).
+SafeQL is optional development tooling run by ESLint. Tenon's adapter supports queries, constant
+fragments, and mutation helpers; `tenon/check-composition` reports queries it cannot inspect.
+Follow the one-time [SQL checking setup](reference.md#sql-checking-with-safeql).
 
 Use the application's existing lint commands. If it has none, the setup shows `lint` and `lint:fix`.
 They run ESLint, including all other enabled rules. Once configured, the normal workflow is:
@@ -255,9 +259,10 @@ works, but it does not prove that every variant is valid SQL or returns the decl
 const filters = [sql.fragment`active = ${true}`];
 if (email !== undefined) filters.push(sql.fragment`email = ${email}`);
 
-// eslint-disable-next-line tenon/check-composition -- Runtime filters are covered by database tests.
+/* eslint-disable tenon/check-composition -- Runtime filters are covered by database tests. */
 const query = sql<UserSummary>`SELECT id, email FROM public."User"
   WHERE ${sql.join(filters, 'AND')} ORDER BY id`;
+/* eslint-enable tenon/check-composition */
 ```
 
 The initial condition keeps this list nonempty. Empty lists throw so that missing filters cannot

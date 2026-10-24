@@ -22,62 +22,53 @@ required fields and constraints.
 For runtime-built rows, supply an inline column list for SafeQL:
 
 ```ts
-const rows: { name: string; bio?: string | null; score?: number }[] = buildRows();
+import type { Rows } from './generated-schema.js';
+
+const rows: Rows.Insert['profiles'][] = buildRows();
 await db.query(sql`INSERT INTO profiles ${sql.insertValues(rows, ['name', 'bio', 'score'])}`);
 ```
 
 This list selects and orders fields; unlisted fields are ignored. It does not assert that the
 entire input object contains only allowed keys. Keep narrower application input validation.
 
+`tenon generate` also provides `Rows.Update['profiles']`. Use `Pick` to limit a patch to fields
+the caller may edit, for example `Pick<Rows.Update['profiles'], 'name' | 'bio'>`. Generated inputs
+understand defaults, nullability, domains, and generated columns. They use write representations:
+timestamps accept `Date | string`, bigint accepts `string | bigint`, and JSON uses serialized text.
+See the [input-type reference](reference.md#insert-and-update-inputs) for the complete mapping.
+
 ## Input types, SQL checking, and runtime validation
 
-Suppose `profiles.score` is an integer column. An application-owned input type checks callers;
-an inline column list lets SafeQL check the SQL even when the object is built at runtime:
+Apply input types with an annotation, `satisfies`, or a helper generic argument. Generating the
+file alone does not check every write. Narrow the fields each operation accepts:
 
 ```ts
 import { sql, type QueryClient } from '@kequtech/tenon-orm';
+import type { Rows } from './generated-schema.js';
 
-type ProfileInput = { name: string; score: number };
+type ProfileInput = Pick<Rows.Insert['profiles'], 'name' | 'score'>;
 
 function createProfile(client: QueryClient, input: ProfileInput) {
   return client.query(sql<{ id: number }>`INSERT INTO profiles
     ${sql.insertValues(input, ['name', 'score'])} RETURNING id`);
 }
-
-function parseProfile(value: unknown): ProfileInput {
-  if (
-    typeof value !== 'object' ||
-    value === null ||
-    !('name' in value) ||
-    typeof value.name !== 'string' ||
-    !('score' in value) ||
-    typeof value.score !== 'number' ||
-    !Number.isInteger(value.score) ||
-    value.score < 0 ||
-    value.score > 100
-  ) {
-    throw new Error('Expected a profile name and an integer score from 0 to 100.');
-  }
-  return { name: value.name, score: value.score };
-}
-
-await createProfile(db, parseProfile(JSON.parse(requestBody)));
 ```
 
-Here `id` is assumed to be a PostgreSQL integer. The guarantees are separate:
+Here `id` and `score` are assumed to be integers. TypeScript rejects an incompatible typed input
+such as `{ name: 'Ada', score: true }`. SafeQL checks selected columns and `RETURNING`; it does not
+inspect runtime values. Validate external inputs before calling this function and keep database
+constraints and application authorization in place.
 
-- A caller supplying `{ name: 'Ada', score: true }` to `createProfile` fails TypeScript checking. External JSON
-  with those values throws in `parseProfile` before the query is built.
-- A misspelled selected column such as `['name', 'socre']` fails TypeScript checking against
-  `ProfileInput`. A key present in that type but absent from the database, such as adding
-  `nickname: string` and selecting `'nickname'`, instead produces a SafeQL SQL diagnostic.
-- Bypassing validation and supplying a boolean for `score` through untyped data is not a SafeQL
-  input-type error. SQL analysis sees a parameter in an integer column's context, not the value.
-  PostgreSQL rejects the incompatible value at execution. The same limitation applies to a
-  numeric value outside the application's allowed range unless a database constraint enforces it.
+**Selected columns can discard required fields.** For a table requiring integer `id` and text
+`name` and `location`, this input is valid but the query fails:
 
-SafeQL also checks the `RETURNING id` projection against the result annotation. None of these
-checks establishes authorization, valid JSON contents in other columns, or nonempty runtime batches.
+```ts
+const row: Rows.Insert['profiles'] = { id: 1, name: 'Ada', location: 'London' };
+const query = sql`INSERT INTO profiles ${sql.insertValues(row, ['id', 'name'])}`;
+// PostgreSQL rejects the insert: location was dropped and has no default.
+```
+
+A column list selects fields; it does not prove that all required fields will be written.
 
 ## Patches mixed with SQL expressions
 
@@ -139,8 +130,8 @@ await db.query(
 ```
 
 Objects used as JSON values retain pg's ordinary JSON conversion. The helper does not infer JSON
-versus array encoding from the table schema. SafeQL's projection checks do not validate stored JSON
-contents or runtime input values.
+versus array encoding from the table schema. Generated JSON input types use serialized text for
+consistent handling of objects and arrays. Validate JSON contents in the application.
 
 ## Batches in one transaction
 
@@ -158,8 +149,8 @@ await db.transaction(async (tx) => {
 A failure rolls back all batches. The helper rejects an empty batch; this loop makes no insert
 calls for empty input. The query-wide limit is 65,535 bound parameters, including parameters outside
 the mutation fragment. An oversized query reports its actual count, for example
-`at most 65535 bound parameters; received 65536`. Defaults consume no parameters. Account for your selected column count and
-surrounding query when choosing a batch size; Tenon never splits queries automatically.
+`at most 65535 bound parameters; received 65536`. Defaults consume no parameters. Account for the
+selected columns and surrounding query when choosing a batch size; Tenon never splits queries automatically.
 
 Reusable authorization fragments remain valid at runtime. Keep shared policy in application
 functions and test it rather than duplicating it for static coverage. Function-generated SQL,

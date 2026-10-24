@@ -2,7 +2,7 @@ import { quote } from './sql.js';
 import { plainObject } from './validation.js';
 
 export type MutationPart = string | Readonly<{ value: unknown }>;
-export type MutationColumns<Row> = Row extends object ? Extract<keyof Row, string> : never;
+export type MutationColumns<Input> = Input extends object ? Extract<keyof Input, string> : never;
 
 /** Validate and quote one explicit column list, shared by runtime and SQL checking. */
 export function mutationColumns(columns: readonly string[]): string[] {

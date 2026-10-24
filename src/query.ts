@@ -160,7 +160,7 @@ export function unsafeSql<Row extends QueryResultRow = UnknownRow>(
   if (!Array.isArray(values)) throw new Error('SQL input must be an explicit array.');
   if (values.length > 65535)
     throw new Error(
-      'A PostgreSQL query supports at most 65535 bound parameters; split large batches explicitly.',
+      `A PostgreSQL query supports at most 65535 bound parameters; received ${values.length}. Split large batches explicitly.`,
     );
   return Object.freeze({ [queryTag]: true as const, text, values: Object.freeze([...values]) });
 }

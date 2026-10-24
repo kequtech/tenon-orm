@@ -90,14 +90,14 @@ test('query compilation enforces the combined PostgreSQL bind limit without impl
     () =>
       unsafeSql(
         'SELECT 1',
-        Array.from({ length: 65536 }, () => 1),
+        Array.from({ length: 65537 }, () => 1),
       ),
-    /65535 bound parameters/,
+    /65535 bound parameters; received 65537/,
   );
   const rows = Array.from({ length: 65535 }, () => ({ value: 1 }));
   assert.throws(
     () => sql`INSERT INTO users ${sql.insertValues(rows)} RETURNING ${1}`,
-    /65535 bound parameters/,
+    /65535 bound parameters; received 65536/,
   );
 });
 

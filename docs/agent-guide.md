@@ -202,6 +202,11 @@ Reuse existing lint scripts or add:
 SQL and annotation errors come from `@ts-safeql/check-sql`; unsupported composition errors come from
 `tenon/check-composition`. Keep both rules enabled.
 
+For existing applications, use the [incremental audit workflow](adoption-guide.md#adopt-sql-checking-incrementally)
+to preview fixes and review raw database types versus application refinements. It also documents
+reported nullable-temporal fix loops and an indexed-access annotation workaround. Do not repeatedly
+apply a non-converging fix or weaken driver mappings to silence it.
+
 1. Run the development `db:migrate` script below against the intended development/test database.
 2. Run `npm run lint`. Fix SQL mistakes before accepting generated types.
 3. Run `npm run lint:fix` for missing/stale annotations. It can add

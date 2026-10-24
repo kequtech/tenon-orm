@@ -81,8 +81,9 @@ check during development and CI; it is not part of query execution.
 
 Configure SafeQL in your application's ESLint setup. Tenon supplies a `safeqlPlugin` adapter for its
 queries, constant fragments, and official mutation helpers, plus an `eslintPlugin` rule that flags
-queries the adapter cannot check. SafeQL handles database analysis and result annotations; Tenon keeps the SQL and pg type
-mappings consistent with execution. Both integrations are optional development tooling. See
+queries the adapter cannot check. SafeQL handles database analysis and result annotations; Tenon
+keeps the SQL and pg type mappings consistent with execution. Both integrations are optional
+development tooling. See
 [SQL checking setup](docs/reference.md#sql-checking-with-safeql) for installation and a complete
 configuration, including multiple databases.
 
@@ -97,7 +98,9 @@ arbitrary JSON, and runtime-built query variants need their own tests.
 - **[Reference](docs/reference.md)** — complete options, SQL checking setup, type mappings, and
   limitations.
 - **[Adoption guide](docs/adoption-guide.md)** — replace an existing ORM and, if needed, transfer
-  migration ownership.
+  migration ownership; upgrade local write helpers and adopt SQL checking incrementally.
+- **[Mutation cookbook](docs/mutations.md)** — defaults, patches, upserts, arrays, batching, and
+  the boundaries between input typing and SQL checking.
 
 The complete `docs/` folder ships with the npm package. Maintainer instructions are in
 [CONTRIBUTING.md](https://github.com/kequtech/tenon-orm/blob/main/CONTRIBUTING.md), which is not

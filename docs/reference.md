@@ -404,6 +404,10 @@ They run all enabled ESLint rules, and `lint:fix` can change non-SQL code too:
 
 ### Generate and check annotations
 
+For an existing persistence layer, start with the [incremental audit workflow](adoption-guide.md#adopt-sql-checking-incrementally).
+It covers a separate SQL lint command, fix previews, application refinements, and reported annotation
+limitations. Review findings before bulk fixes; an annotation disagreement is not always a SQL bug.
+
 Write a query without a result annotation:
 
 ```ts

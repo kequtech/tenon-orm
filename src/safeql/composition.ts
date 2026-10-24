@@ -122,6 +122,21 @@ export function renderFragment(
     }
     return list.elements.map((item) => renderFragment(item, checker, visited)).join(between);
   }
+  if (ts.isCallExpression(node)) {
+    throw new CompositionError(
+      `Function-generated fragments from ${node.expression.getText()}() are not analyzed; the checker does not inspect function bodies.`,
+    );
+  }
+  if (ts.isConditionalExpression(node)) {
+    throw new CompositionError(
+      'Conditional fragments are not analyzed; the checker does not choose JavaScript branches, even for literal conditions.',
+    );
+  }
+  if (ts.isIdentifier(node)) {
+    throw new CompositionError(
+      `Fragment "${node.text}" has no inspectable const initializer; mutable and runtime-supplied fragments are not analyzed.`,
+    );
+  }
   throw new CompositionError(
     'Only constant sql.fragment templates, literal sql.join arrays, and official mutation helpers are supported. Function-generated fragments and conditional SQL structure are not analyzed.',
   );

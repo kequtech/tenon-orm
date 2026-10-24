@@ -21,6 +21,31 @@ const project = migrationProject(pool);
 before(() => assertTestDatabase(pool));
 after(() => pool.end());
 
+test('generated PostgreSQL name columns match pg strings and preserve nullability', async () => {
+  await project(
+    { '0001_names.up.sql': 'CREATE TABLE "Names" (value name NOT NULL, optional name);' },
+    async (options) => {
+      await migrate(options);
+      const warnings: string[] = [];
+      await checkGeneratedTypes(
+        { ...options, onWarning: (message) => warnings.push(message) },
+        `
+        import type { Names } from './definitions.js';
+        ${typeAssertions}
+        type Complete = Assert<Equal<Names, { value: string; optional: string | null }>>;
+        // @ts-expect-error PostgreSQL names arrive as strings
+        const invalid: Names['value'] = 42;
+        `,
+      );
+      assert.deepEqual(warnings, []);
+      const result = await pool.query(
+        `INSERT INTO ${qualified(options.namespace, 'Names')} VALUES ('example', NULL) RETURNING *`,
+      );
+      assert.deepEqual(result.rows, [{ value: 'example', optional: null }]);
+    },
+  );
+});
+
 test('generated values follow standard pg parsing for bigint, numeric, JSON and bytea', async () => {
   await project(
     {

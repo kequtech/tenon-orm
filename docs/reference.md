@@ -492,6 +492,12 @@ references, runtime filter lists, and dynamic identifiers are also unsupported. 
 expressions remain bound parameters; calls that produce data for an official mutation helper can
 use its explicit column-list contract.
 
+`tenon/check-composition` points to the first unsupported interpolation in each query and explains
+why it cannot be checked. For example, opaque mutation inputs need an inline column list, while
+fragment-returning functions remain outside static analysis. Errors reached through shared constants
+are reported at the consuming query. ESLint suppressions must cover the reported expression's line;
+a scoped disable/enable can cover one multiline query.
+
 Reusable authorization and other application policy can still live in fragment-returning functions
 at runtime. Keep that policy centralized and cover its behavior with database tests. Suppress
 `tenon/check-composition` only on the particular query, with a reason, when its variants are tested.

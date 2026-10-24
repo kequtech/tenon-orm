@@ -52,6 +52,7 @@ const scalarTypes: Readonly<Record<string, string>> = {
   float8: 'number',
   bool: 'boolean',
   text: 'string',
+  name: 'string',
   varchar: 'string',
   bpchar: 'string',
   time: 'string',

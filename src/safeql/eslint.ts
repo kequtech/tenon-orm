@@ -31,20 +31,25 @@ export const eslintPlugin: ESLint.Plugin = {
               !isExport(template.tag, checker, 'sql')
             )
               return;
-            try {
-              if (node.quasi.quasis.some(({ value }) => value.raw !== value.cooked)) {
-                throw new CompositionError(
+            if (node.quasi.quasis.some(({ value }) => value.raw !== value.cooked)) {
+              context.report({
+                node,
+                message: new CompositionError(
                   'JavaScript escapes in an outer sql template would be checked as different SQL. Use literal newlines and bound string values instead.',
-                );
-              }
-              if (ts.isTemplateExpression(template.template)) {
-                for (const span of template.template.templateSpans) {
+                ).message,
+              });
+              return;
+            }
+            if (ts.isTemplateExpression(template.template)) {
+              for (const [index, span] of template.template.templateSpans.entries()) {
+                try {
                   renderValue(span.expression, checker);
+                } catch (error) {
+                  if (!(error instanceof CompositionError)) throw error;
+                  context.report({ node: node.quasi.expressions[index]!, message: error.message });
+                  return;
                 }
               }
-            } catch (error) {
-              if (!(error instanceof CompositionError)) throw error;
-              context.report({ node, message: error.message });
             }
           },
         };

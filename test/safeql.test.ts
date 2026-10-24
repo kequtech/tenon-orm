@@ -32,6 +32,109 @@ test('the composition rule requires type-aware parsing', async () => {
   );
 });
 
+test('composition errors identify the failing interpolation and keep unsupported SQL unchecked', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'tenon-composition-diagnostics-'));
+  const cases = [
+    ['buildPolicy()', /Function-generated fragments from buildPolicy\(\)/],
+    ['policy.visible()', /Function-generated fragments from policy.visible\(\)/],
+    [
+      'true ? sql.fragment`TRUE` : sql.fragment`FALSE`',
+      /Conditional fragments.*does not choose JavaScript branches/,
+    ],
+    ["sql.join(parts, 'AND')", /sql.join needs a nonempty literal array/],
+    ['sql.insertValues(rows)', /sql.insertValues:.*explicit literal column list/],
+    ['sql.assignments(patch)', /sql.assignments:.*explicit literal column list/],
+    ['sql.assignments({ ...patch })', /sql.assignments:.*spreads.*explicit literal column list/],
+    [
+      "identifier(namespace, 'accounts')",
+      /Identifier names must be literal strings or const strings/,
+    ],
+    ['mutable', /Fragment "mutable" has no inspectable const initializer/],
+    ['indirect', /Function-generated fragments from buildPolicy\(\)/],
+    ['shared', /Function-generated fragments from buildPolicy\(\)/],
+    ['sql.fragment`(${buildPolicy()})`', /Function-generated fragments from buildPolicy\(\)/],
+  ] as const;
+  const imports = `import { sql, identifier } from ${JSON.stringify(resolve('dist/index.js'))};\n`;
+  const source =
+    imports +
+    `
+      import { shared } from './shared.js';
+      const buildPolicy = () => sql.fragment\`TRUE\`;
+      const policy = { visible: buildPolicy };
+      const parts = [sql.fragment\`TRUE\`];
+      declare const rows: { id: number }[];
+      declare const patch: { id?: number };
+      declare const namespace: string;
+      let mutable = sql.fragment\`TRUE\`;
+      const indirect = buildPolicy();
+    ` +
+    cases
+      .map(
+        ([expression], index) =>
+          `const query${index} = sql\`\nSELECT \${1}\nWHERE \${${expression}}\n\`;\n`,
+      )
+      .join('') +
+    `
+      const firstOnly = sql\`SELECT \${buildPolicy()} WHERE \${policy.visible()}\`;
+      const values = sql\`SELECT \${Math.random() ? 'one' : 'two'}\`;
+      const supported = sql\`INSERT INTO accounts \${sql.insertValues(rows, ['id'])}\`;
+      /* eslint-disable tenon/check-composition -- Runtime variants have database tests. */
+      const suppressed = sql\`
+        SELECT 1
+        WHERE \${buildPolicy()}
+      \`;
+      /* eslint-enable tenon/check-composition */
+    `;
+  try {
+    await writeFile(join(directory, 'package.json'), '{"type":"module"}');
+    await writeFile(
+      join(directory, 'tsconfig.json'),
+      JSON.stringify({ compilerOptions: { strict: true, module: 'NodeNext' }, include: ['*.ts'] }),
+    );
+    await writeFile(
+      join(directory, 'shared.ts'),
+      imports +
+        'const buildPolicy = () => sql.fragment`TRUE`;\n' +
+        'export const shared = sql.fragment`${buildPolicy()}`;\n',
+    );
+    const file = join(directory, 'queries.ts');
+    await writeFile(file, source);
+    const eslint = new ESLint({
+      cwd: directory,
+      overrideConfigFile: true,
+      overrideConfig: {
+        files: ['**/*.ts'],
+        languageOptions: {
+          parser: tseslint.parser,
+          parserOptions: { projectService: true, tsconfigRootDir: directory },
+        },
+        plugins: { tenon: eslintPlugin },
+        rules: { 'tenon/check-composition': 'error' },
+      },
+    });
+    const [result] = await eslint.lintFiles([file]);
+    assert.equal(result!.messages.length, cases.length + 1, JSON.stringify(result!.messages));
+    assert.equal(result!.suppressedMessages.length, 1);
+    for (const [index, [expression, reason]] of cases.entries()) {
+      const message = result!.messages[index]!;
+      assert.equal(message.ruleId, 'tenon/check-composition');
+      assert.match(message.message, reason);
+      assert.equal(message.fix, undefined);
+      const start = source.indexOf(expression, source.indexOf(`const query${index} =`));
+      const before = source.slice(0, start).split('\n');
+      const through = source.slice(0, start + expression.length).split('\n');
+      assert.deepEqual(
+        [message.line, message.column, message.endLine, message.endColumn],
+        [before.length, before.at(-1)!.length + 1, through.length, through.at(-1)!.length + 1],
+        expression,
+      );
+    }
+    assert.match(result!.messages.at(-1)!.message, /buildPolicy\(\)/);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('SafeQL file scopes and tag targets select separate connections for inference and SQL errors', async () => {
   const pool = new Pool({ connectionString: testConnection });
   const directory = await mkdtemp(join(tmpdir(), 'tenon-safeql-connections-'));

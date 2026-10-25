@@ -36,8 +36,9 @@ application then closes that pool.
 
 ## Create a table
 
-If you already have a schema and migration runner, you can keep them. For a new schema, create a
-migration:
+If you already have a schema and migration runner, you can keep them. For new schemas, prefer plural
+`snake_case` table names and `snake_case` column names. Tenon preserves your schema's exact names.
+Create a migration:
 
 ```sh
 npx tenon new create_users
@@ -47,7 +48,7 @@ Fill the generated files:
 
 ```sql
 -- migrations/0001_create_users.up.sql
-CREATE TABLE public."User" (
+CREATE TABLE public.users (
   id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   email text NOT NULL UNIQUE,
   active boolean NOT NULL DEFAULT true
@@ -56,7 +57,7 @@ CREATE TABLE public."User" (
 
 ```sql
 -- migrations/0001_create_users.down.sql
-DROP TABLE public."User";
+DROP TABLE public.users;
 ```
 
 For development, add a script to `package.json` that applies migrations and updates generated types:
@@ -87,10 +88,10 @@ import { sql } from '@kequtech/tenon-orm';
 import { db } from './db.js';
 
 const email = 'reader@example.test';
-await db.query(sql`INSERT INTO public."User" (email) VALUES (${email})`);
+await db.query(sql`INSERT INTO public.users (email) VALUES (${email})`);
 const user = await db.query(
   sql<{ id: number; email: string }>`
-    SELECT id, email FROM public."User" WHERE email = ${email}
+    SELECT id, email FROM public.users WHERE email = ${email}
   `,
   { returns: 'oneOrNone' },
 );
@@ -107,8 +108,8 @@ These options do not change your SQL.
 Generated table types can help describe projections without repeating every field:
 
 ```ts
-import type { User } from './generated-schema.js';
-type UserSummary = Pick<User, 'id' | 'email'>;
+import type { Rows } from './generated-schema.js';
+type UserSummary = Pick<Rows['users'], 'id' | 'email'>;
 ```
 
 You can then write `sql<UserSummary>`. A table type describes the full table; a join or aggregate
@@ -123,15 +124,14 @@ supplied values easy to read:
 
 ```ts
 import { sql, type QueryClient } from '@kequtech/tenon-orm';
-import type { User } from './generated-schema.js';
+import type { Rows } from './generated-schema.js';
 
-type UserSummary = Pick<User, 'id' | 'email'>;
+type UserSummary = Pick<Rows['users'], 'id' | 'email'>;
 
 export function userByEmail(client: QueryClient, { email }: { email: string }) {
-  return client.query(
-    sql<UserSummary>`SELECT id, email FROM public."User" WHERE email = ${email}`,
-    { returns: 'oneOrNone' },
-  );
+  return client.query(sql<UserSummary>`SELECT id, email FROM public.users WHERE email = ${email}`, {
+    returns: 'oneOrNone',
+  });
 }
 
 const user = await userByEmail(db, { email: 'reader@example.test' });
@@ -147,7 +147,7 @@ await db.transaction(async (tx) => {
   const user = await userByEmail(tx, { email: 'reader@example.test' });
   if (!user) throw new Error('User not found');
 
-  await tx.query(sql`UPDATE public."User" SET active = false WHERE id = ${user.id}`, {
+  await tx.query(sql`UPDATE public.users SET active = false WHERE id = ${user.id}`, {
     affectedRows: { exact: 1 },
   });
 });
@@ -172,11 +172,11 @@ aligned, with `DEFAULT` for missing cells.
 ```ts
 import type { Rows } from './generated-schema.js';
 
-const input: Rows.Insert['User'] = { email: 'another@example.test' };
-await db.query(sql`INSERT INTO public."User" ${sql.insertValues(input, ['email'])}`);
+const input: Rows.Insert['users'] = { email: 'another@example.test' };
+await db.query(sql`INSERT INTO public.users ${sql.insertValues(input, ['email'])}`);
 
-const patch: Pick<Rows.Update['User'], 'active'> = { active: false };
-await db.query(sql`UPDATE public."User" SET ${sql.assignments(patch, ['active'])}
+const patch: Pick<Rows.Update['users'], 'active'> = { active: false };
+await db.query(sql`UPDATE public.users SET ${sql.assignments(patch, ['active'])}
   WHERE email = ${input.email}`);
 ```
 
@@ -227,7 +227,7 @@ For fixed conditions, write them directly:
 
 ```ts
 const users = await db.query(
-  sql<UserSummary>`SELECT id, email FROM public."User" WHERE active = ${true}`,
+  sql<UserSummary>`SELECT id, email FROM public.users WHERE active = ${true}`,
   { returns: 'many' },
 );
 ```
@@ -238,9 +238,9 @@ its count:
 
 ```ts
 const search = sql.fragment`active = ${true} AND email ILIKE ${pattern}`;
-const page = sql<UserSummary>`SELECT id, email FROM public."User"
+const page = sql<UserSummary>`SELECT id, email FROM public.users
   WHERE ${search} ORDER BY id LIMIT ${limit}`;
-const count = sql<{ count: string }>`SELECT count(*) AS count FROM public."User"
+const count = sql<{ count: string }>`SELECT count(*) AS count FROM public.users
   WHERE ${search}`;
 ```
 
@@ -258,7 +258,7 @@ for (const term of terms) {
   filters.push(sql.fragment`email ILIKE ${'%' + term + '%'}`);
 }
 
-const query = sql<UserSummary>`SELECT id, email FROM public."User"
+const query = sql<UserSummary>`SELECT id, email FROM public.users
   WHERE ${sql.join(filters, 'AND')} ORDER BY id`;
 ```
 

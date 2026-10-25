@@ -29,7 +29,7 @@ try {
   const email = 'reader@example.test';
   const user = await db.query(
     sql<{ id: number; email: string }>`
-      SELECT id, email FROM public."User" WHERE email = ${email}
+      SELECT id, email FROM public.users WHERE email = ${email}
     `,
     { returns: 'oneOrNone' },
   );

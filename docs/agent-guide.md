@@ -9,6 +9,8 @@ This guide contains the setup and contracts needed for routine implementation; t
 
 1. Inspect the application's connection setup, migrations, generated types, query modules, and check
    commands. Reuse them. Do not replace a working migration runner just to use Tenon queries.
+   For new schemas, prefer plural `snake_case` table names and `snake_case` column names; preserve
+   existing schemas' names.
 2. Write straightforward SQL with explicit selected columns. Use separate complete queries when
    variants return different shapes. Introduce fragments only for actual reuse or variable
    composition.
@@ -47,12 +49,12 @@ or configure `search_path`; CLI `--namespace` does not change runtime query name
 
 ```ts
 import { sql, type QueryClient } from '@kequtech/tenon-orm';
-import type { User } from './generated-schema.js';
+import type { Rows } from './generated-schema.js';
 
-type Summary = Pick<User, 'id' | 'email'>;
+type Summary = Pick<Rows['users'], 'id' | 'email'>;
 
 function userById(client: QueryClient, { id }: { id: number }) {
-  return client.query(sql<Summary>`SELECT id, email FROM public."User" WHERE id = ${id}`, {
+  return client.query(sql<Summary>`SELECT id, email FROM public.users WHERE id = ${id}`, {
     returns: 'oneOrNone',
   });
 }
@@ -98,9 +100,9 @@ For example, share a search condition between a page and count query:
 
 ```ts
 const search = sql.fragment`active = ${true} AND email ILIKE ${pattern}`;
-const page = sql<Summary>`SELECT id, email FROM public."User"
+const page = sql<Summary>`SELECT id, email FROM public.users
   WHERE ${search} ORDER BY id LIMIT ${limit}`;
-const count = sql<{ count: string }>`SELECT count(*) AS count FROM public."User"
+const count = sql<{ count: string }>`SELECT count(*) AS count FROM public.users
   WHERE ${search}`;
 ```
 

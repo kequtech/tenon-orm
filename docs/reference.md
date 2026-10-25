@@ -78,7 +78,7 @@ types from SQL context.
 Use an array parameter for a set of values:
 
 ```ts
-const query = sql<{ id: number }>`SELECT id FROM public."User"
+const query = sql<{ id: number }>`SELECT id FROM public.users
   WHERE id = ANY(${ids}::integer[])`;
 ```
 
@@ -114,7 +114,7 @@ const conditions = [sql.fragment`active = ${true}`];
 if (email !== undefined) conditions.push(sql.fragment`email = ${email}`);
 if (afterId !== undefined) conditions.push(sql.fragment`id > ${afterId}`);
 
-const query = sql<{ id: number }>`SELECT id FROM public."User"
+const query = sql<{ id: number }>`SELECT id FROM public.users
   WHERE ${sql.join(conditions, 'AND')} ORDER BY id`;
 ```
 
@@ -205,7 +205,7 @@ See the [mutation cookbook](mutations.md) for common patterns and
 ```ts
 await db.transaction(async (tx) => {
   const id = 42;
-  await tx.query(sql`UPDATE public."User" SET active = false WHERE id = ${id}`, {
+  await tx.query(sql`UPDATE public.users SET active = false WHERE id = ${id}`, {
     affectedRows: { exact: 1 },
   });
   // Use tx for every query that belongs to this transaction.
@@ -260,9 +260,18 @@ current database. It never rewrites the file. Pending migration files
 are a separate concern. The representation includes table columns, constraints, indexes, and
 referenced domains, not every PostgreSQL object.
 
-Generation reads a consistent snapshot of ordinary tables and partitioned roots. `Rows['User']`
-describes one returned row; the generated `User` alias means the same thing. Use `sql<User>` for a
-full row or `Pick<User, 'id' | 'email'>` for a projection. Table keys preserve exact SQL names;
+Generation reads a consistent snapshot of ordinary tables and partitioned roots. `Rows['users']`
+describes one returned row. Application type names can use PascalCase:
+
+```ts
+import type { Rows } from './generated-schema.js';
+
+type User = Rows['users'];
+type UserSummary = Pick<User, 'id' | 'email'>;
+```
+
+Use `sql<User>` for a full row or `sql<UserSummary>` for that projection. Generated table keys and
+named aliases preserve exact SQL names; the generated `users` alias also means `Rows['users']`.
 `type AuditRow = Rows['audit-log']` works for names that cannot be exported as identifiers.
 Views, foreign tables, and attached partitions use query-specific types. A missing namespace
 fails; an existing empty schema is valid.
@@ -417,7 +426,7 @@ It covers a separate SQL lint command, fix previews, and application refinements
 Write a query without a result annotation:
 
 ```ts
-const query = sql`SELECT id, email FROM public."User" WHERE id = ${id}`;
+const query = sql`SELECT id, email FROM public.users WHERE id = ${id}`;
 ```
 
 Run `npm run lint:fix`. SafeQL can write `sql<{ id: number; email: string }>` using the connected
@@ -540,7 +549,7 @@ safeql.configs.connections({
   plugins: [safeqlPlugin],
   targets: [{ tag: 'sql' }],
   overrides: {
-    columns: { 'User.tags': 'PgArray<string>', 'User.amounts': 'PgArray<number>' },
+    columns: { 'users.tags': 'PgArray<string>', 'users.amounts': 'PgArray<number>' },
   },
 });
 ```

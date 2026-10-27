@@ -1,6 +1,7 @@
 import { createClient } from './client.js';
 import type { Connection, QueryExecutor } from './connection.js';
-import { createPool, executeSql } from './connection.js';
+import { createConnection, executeSql } from './connection.js';
+import { prepareArrays } from './driver/array.js';
 import { withTransaction } from './transaction.js';
 import type { Database, QueryEvent } from './types.js';
 import { plainObject } from './validation.js';
@@ -20,7 +21,7 @@ export function createTenon(options: TenonOptions): Database {
   if (options.onQuery !== undefined && typeof options.onQuery !== 'function') {
     throw new Error('onQuery must be a function.');
   }
-  const { pool, owned } = createPool(options.connection);
+  const { sql: pool, owned } = createConnection(options.connection);
   let closed = false;
 
   function checkOpen() {
@@ -34,6 +35,7 @@ export function createTenon(options: TenonOptions): Database {
     if (guarded) {
       return withTransaction(pool, (query) => query(text, input, readResult, false));
     }
+    await prepareArrays(pool);
     return readResult(await executeSql(pool, text, input));
   };
 

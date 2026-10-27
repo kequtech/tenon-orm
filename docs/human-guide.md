@@ -1,7 +1,7 @@
 # Using Tenon: a human guide
 
 Tenon lets you use PostgreSQL directly from TypeScript. You write SQL; Tenon binds its inputs and
-executes it through `pg`. This guide follows a small application from its first table to reusable
+executes it through Postgres.js. This guide follows a small application from its first table to reusable
 queries, transactions, and result checking.
 
 Use the [reference](reference.md) when you need exact options or unusual cases. The
@@ -13,8 +13,7 @@ Use the [reference](reference.md) when you need exact options or unusual cases. 
 In an existing Node.js 24+ TypeScript project using ESM:
 
 ```sh
-npm install @kequtech/tenon-orm pg
-npm install --save-dev @types/pg
+npm install @kequtech/tenon-orm
 ```
 
 Use PostgreSQL 16+ and TypeScript 6+. Keep your existing strict TypeScript configuration and Node
@@ -31,7 +30,7 @@ export const db = createTenon({ connection });
 ```
 
 Reuse this instance across the application and call `await db.close()` at shutdown. For multiple
-databases, create an instance for each connection. You can also supply an existing `pg.Pool`; your
+databases, create an instance for each connection. You can also supply an existing Postgres.js client; your
 application then closes that pool.
 
 ## Create a table
@@ -102,7 +101,7 @@ separately from the SQL text, even when the value contains SQL.
 
 The type describes one selected row. `returns: 'oneOrNone'` gives you that row or `undefined`; it
 throws if the query returns more than one row. Use `'one'` when absence should also be an error,
-`'many'` for an array, or omit `returns` for the full driver result with `.rows` and `.rowCount`.
+`'many'` for an array, or omit `returns` for the native result array with `.count` and `.columns`.
 These options do not change your SQL.
 
 Generated table types can help describe projections without repeating every field:
@@ -114,8 +113,8 @@ type UserSummary = Pick<Rows['users'], 'id' | 'email'>;
 
 You can then write `sql<UserSummary>`. A table type describes the full table; a join or aggregate
 needs a type for what that particular query selects. An annotation is a declaration, not proof that
-the SQL matches. Without one, result fields are `unknown`. The checking workflow below can generate
-and verify it.
+the SQL matches. Without one, result fields are `unknown`. Use the inspection and database-test
+workflow below to check the declared contract against the query's behavior.
 
 ## Reuse a query with a function
 
@@ -190,36 +189,23 @@ choose which fields to write; they do not validate the complete object. See the
 
 ## Check your SQL and result types
 
-There are three different jobs here:
+Use `describeQuery({ connection, query })` on the completed query object, or
+`npx tenon describe query.sql` on a SQL file, to inspect the server's parameter and result types.
+This works with dynamic fragments and needs no additional checking setup. Match the application's
+connection settings and keep database assertions for actual rows, nulls, JSON, permissions, and
+transaction effects. See [query inspection](query-inspection.md).
 
-- Tenon executes queries and binds values.
-- TypeScript checks the application code and the result types you declare.
-- SafeQL checks the SQL against your database and verifies or generates those types.
-
-SafeQL is optional development tooling run by ESLint. Tenon's adapter supports queries, constant
-fragments, and mutation helpers; `tenon/check-composition` reports queries it cannot inspect.
-Follow the one-time [SQL checking setup](reference.md#sql-checking-with-safeql).
-
-Use the application's existing lint commands. If it has none, the setup shows `lint` and `lint:fix`.
-They run ESLint, including all other enabled rules. Once configured, the normal workflow is:
+TypeScript checks the application code and the result types you declare. Describe reports
+PostgreSQL metadata; it does not generate or verify a TypeScript annotation. Use generated table
+types where appropriate, declare projections explicitly, and check complete returned rows in tests.
 
 1. Run `npm run db:migrate` against the development/test database.
-2. Run `npm run lint` to find SQL errors and missing or incorrect annotations.
-3. Use `npm run lint:fix` to generate or repair annotations, then review the diff.
-4. Run TypeScript and database tests. CI runs the check without fixing files.
+2. Inspect the completed SQL and review the reported types and unresolved findings.
+3. Run TypeScript and database tests. Keep these checks in routine CI validation.
 
-For example, SafeQL can turn `sql` followed by a query selecting `id, email` into
-`sql<{ id: number; email: string }>` based on your actual schema. It can detect a renamed column or
-an incorrect declared result type before the query runs.
-
-Input validation and database tests still matter. Checking a query does not prove that a request is
-authorized, that its values are valid, or that returned JSON has an application-specific shape.
-
-The checker supports constant fragments and `sql.join` with inline arrays. Runtime-built lists and
-fragment-returning functions remain outside static analysis. Keep result annotations and database
-tests for those queries; when using the checker, suppress `tenon/check-composition` only on the
-tested query with a reason. Runtime-built mutation inputs need inline selected columns for SQL
-checking. See the [checking reference](reference.md#supported-sql-and-limitations) for details.
+Input validation and authorization remain application responsibilities. Describe cannot establish
+that a request is authorized, that its values are valid, or that returned JSON has an
+application-specific shape.
 
 ## Reuse or assemble parts of SQL when needed
 

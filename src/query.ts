@@ -1,4 +1,3 @@
-import type { QueryResultRow } from 'pg';
 import { joinSeparator, quote } from './sql.js';
 import {
   assignmentParts,
@@ -13,7 +12,7 @@ const identifierTag = Symbol.for('@kequtech/tenon-orm/identifier');
 export type UnknownRow = Record<string, unknown>;
 
 /** A parameterized statement. The row type describes one returned record. */
-export interface SqlQuery<Row extends QueryResultRow = UnknownRow> {
+export interface SqlQuery<Row extends object = UnknownRow> {
   readonly text: string;
   readonly values: readonly unknown[];
   /** Type-only field; a stable key preserves row inference across package copies. */
@@ -131,7 +130,7 @@ function assignments<Input extends object>(
   });
 }
 
-function createQuery<Row extends QueryResultRow = UnknownRow>(
+function createQuery<Row extends object = UnknownRow>(
   strings: TemplateStringsArray,
   ...values: readonly unknown[]
 ): NoInfer<SqlQuery<Row>> {
@@ -152,15 +151,15 @@ function createQuery<Row extends QueryResultRow = UnknownRow>(
 export const sql = Object.assign(createQuery, { fragment, join, insertValues, assignments });
 
 /** Escape hatch for externally authored SQL. Never concatenate application input into text. */
-export function unsafeSql<Row extends QueryResultRow = UnknownRow>(
+export function unsafeSql<Row extends object = UnknownRow>(
   text: string,
   values: readonly unknown[],
 ): NoInfer<SqlQuery<Row>> {
   if (typeof text !== 'string' || !text.trim()) throw new Error('SQL must be a nonempty string.');
   if (!Array.isArray(values)) throw new Error('SQL input must be an explicit array.');
-  if (values.length > 65535)
+  if (values.length > 65533)
     throw new Error(
-      `A PostgreSQL query supports at most 65535 bound parameters; received ${values.length}. Split large batches explicitly.`,
+      `Postgres.js 3.4.9 supports at most 65533 bound parameters; received ${values.length}. Split large batches explicitly.`,
     );
   return Object.freeze({ [queryTag]: true as const, text, values: Object.freeze([...values]) });
 }

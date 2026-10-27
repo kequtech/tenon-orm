@@ -33,6 +33,7 @@ export async function checkGeneratedTypes(
         moduleResolution: 'NodeNext',
         types: ['node'],
         typeRoots: [resolve('node_modules/@types')],
+        paths: { '@kequtech/tenon-orm': [resolve('dist/index.d.ts')] },
       },
       files: ['consumer.ts'],
     }),

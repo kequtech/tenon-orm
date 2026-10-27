@@ -1,7 +1,7 @@
-import { Pool } from 'pg';
+import postgres from 'postgres';
 import { assertTestDatabase, testConnection } from './helpers/database.js';
 
-const pool = new Pool({ connectionString: testConnection });
+const pool = postgres(testConnection);
 try {
   console.log(`Test database: PostgreSQL ${await assertTestDatabase(pool)}.`);
 } catch (error) {

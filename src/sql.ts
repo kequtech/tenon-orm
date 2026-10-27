@@ -16,7 +16,7 @@ export function qualified(namespace: string, table: string): string {
   return `${quote(namespace)}.${quote(table)}`;
 }
 
-/** Shared by query assembly and static checking so separators produce identical SQL. */
+/** Assemble query parts with a validated SQL separator. */
 export function joinSeparator(value: unknown): string {
   switch (value) {
     case 'AND':

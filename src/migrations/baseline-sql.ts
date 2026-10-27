@@ -2,7 +2,7 @@ import { quote } from '../sql.js';
 
 export const baselineHeader = '-- Tenon baseline captured by pg_dump.\n';
 
-/** Bridge pg_dump's plain-text script to pg's transactional SQL execution. */
+/** Bridge pg_dump's plain-text script to transactional SQL execution. */
 export function prepareBaselineSql(dump: string, namespace: string): string {
   // Recent pg_dump versions bracket psql scripts with a random restrict key.
   // Remove only the outer pair; SQL bodies containing similar text stay intact.

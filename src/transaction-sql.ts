@@ -1,4 +1,4 @@
-/** Read only the command prefix, leaving strings, bodies and SQL syntax to pg. */
+/** Read only the command prefix, leaving strings, bodies and SQL syntax to PostgreSQL. */
 function commandPrefix(sql: string): string[] {
   const words: string[] = [];
   let i = 0;

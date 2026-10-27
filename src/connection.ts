@@ -1,60 +1,48 @@
-import type { PoolClient, PoolConfig, QueryResult } from 'pg';
-import { Pool } from 'pg';
+import postgres from 'postgres';
+import type { UnknownRow } from './query.js';
 import { plainObject } from './validation.js';
 
-export type Connection = string | PoolConfig | Pool;
+export type ConnectionOptions = postgres.Options<{}>;
+export type Connection = string | ConnectionOptions | postgres.Sql;
+export type QueryResult<Row extends object = UnknownRow> = postgres.RowList<Row[]>;
+
+/** The driver operations shared by ordinary and reserved connections. */
+export interface SqlConnection {
+  unsafe<Rows extends object[] = UnknownRow[]>(
+    text: string,
+    input?: postgres.ParameterOrJSON<never>[],
+    options?: postgres.UnsafeQueryOptions & { simple?: boolean },
+  ): Promise<postgres.RowList<Rows>>;
+  array: postgres.Sql['array'];
+  typed: postgres.Sql['typed'];
+}
 export type QueryExecutor = <T>(
   text: string,
   input: readonly unknown[],
-  readResult: (result: QueryResult<Record<string, unknown>>) => T,
+  readResult: (result: QueryResult) => T,
   guarded: boolean,
 ) => Promise<T>;
 
-/** Borrow application pools; own pools created from a connection string or config. */
-export function createPool(connection: Connection): { pool: Pool; owned: boolean } {
-  if (connection instanceof Pool) {
-    return { pool: connection, owned: false };
+/** Own clients created from a URI/config; borrow explicitly supplied Postgres.js clients. */
+export function createConnection(connection: Connection): { sql: postgres.Sql; owned: boolean } {
+  if (typeof connection === 'function' && typeof connection.unsafe === 'function') {
+    return { sql: connection, owned: false };
   }
-  // Missing configuration must not silently select pg's environment defaults.
-  // An explicit config object (including {}) may still use those defaults.
   if (typeof connection === 'string') {
     if (!connection.trim()) throw new Error('Connection string must not be empty.');
-  } else {
-    plainObject(connection, 'Connection configuration');
+    return { sql: postgres(connection), owned: true };
   }
-  const config = typeof connection === 'string' ? { connectionString: connection } : connection;
-  const pool = new Pool(config);
-  // pg removes broken idle clients itself, but an unhandled pool error would
-  // still terminate Node. Borrowed pools keep their application's error policy.
-  pool.on('error', (error) => process.emitWarning(error));
-  return { pool, owned: true };
+  plainObject(connection, 'Connection configuration');
+  return { sql: postgres(connection), owned: true };
 }
 
-/** Observe failures between queries until ownership returns to the pool. */
-export function watchClient(client: PoolClient) {
-  let failure: Error | undefined;
-  const onError = (error: Error) => {
-    failure ??= error;
-  };
-  client.on('error', onError);
-  return {
-    check() {
-      if (failure) {
-        throw failure;
-      }
-    },
-    release(error?: Error) {
-      try {
-        client.release(error ?? failure);
-      } finally {
-        client.removeListener('error', onError);
-      }
-    },
-  };
-}
-
-export function executeSql(connection: Pool | PoolClient, text: string, input: readonly unknown[]) {
-  // Extended protocol makes even a zero-parameter call one SQL statement.
-  const config = { text, values: [...input], queryMode: 'extended' };
-  return connection.query<Record<string, unknown>>(config);
+export function executeSql(
+  sql: SqlConnection,
+  text: string,
+  input: readonly unknown[] = [],
+): Promise<QueryResult> {
+  // Tenon compiles SQL separately from values; let PostgreSQL infer array/JSON types from the surrounding SQL.
+  const values = input.map((value) => (Array.isArray(value) ? sql.typed(value, 0) : value));
+  const options = { simple: false, prepare: false };
+  return sql.unsafe<UnknownRow[]>(text, values as postgres.ParameterOrJSON<never>[], options);
 }

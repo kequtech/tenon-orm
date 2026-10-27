@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { Pool } from 'pg';
+import postgres from 'postgres';
 import { createTenon, identifier, migrate, sql } from '../src/index.js';
 import { assertTestDatabase, migrationProject, testConnection } from './helpers/database.js';
 
 test('dynamic predicates and ordering execute with bound values and guarded transactions', async () => {
-  const pool = new Pool({ connectionString: testConnection });
+  const pool = postgres(testConnection);
   const db = createTenon({ connection: pool });
   try {
     await assertTestDatabase(pool);

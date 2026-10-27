@@ -4,8 +4,8 @@ import { plainObject } from './validation.js';
 export type MutationPart = string | Readonly<{ value: unknown }>;
 export type MutationColumns<Input> = Input extends object ? Extract<keyof Input, string> : never;
 
-/** Validate and quote one explicit column list, shared by runtime and SQL checking. */
-export function mutationColumns(columns: readonly string[]): string[] {
+/** Validate and quote one explicit column list for mutation fragments. */
+function mutationColumns(columns: readonly string[]): string[] {
   if (!Array.isArray(columns) || !columns.length)
     throw new Error('Mutation columns must be a nonempty array.');
   const seen = new Set<string>();
@@ -16,44 +16,6 @@ export function mutationColumns(columns: readonly string[]): string[] {
     seen.add(column);
     return column;
   });
-}
-
-/** SQL structure depends only on these columns and cells, never on JavaScript source. */
-export function insertLayout(
-  columns: readonly string[],
-  rows: readonly (readonly unknown[])[],
-): MutationPart[] {
-  if (!rows.length) throw new Error('sql.insertValues requires at least one row.');
-  if (!columns.length) {
-    if (rows.length !== 1) throw new Error('Default-only inserts require exactly one row.');
-    return ['DEFAULT VALUES'];
-  }
-  const parts: MutationPart[] = [`(${columns.map(quote).join(', ')}) VALUES `];
-  for (const [index, row] of rows.entries()) {
-    if (index) parts.push(', ');
-    parts.push('(');
-    for (const [column, value] of row.entries()) {
-      if (column) parts.push(', ');
-      parts.push(value === undefined ? 'DEFAULT' : Object.freeze({ value }));
-    }
-    parts.push(')');
-  }
-  return parts;
-}
-
-export function assignmentLayout(
-  columns: readonly string[],
-  values: readonly unknown[],
-): MutationPart[] {
-  const parts: MutationPart[] = [];
-  for (const [index, column] of columns.entries()) {
-    const value = values[index];
-    if (value === undefined) continue;
-    if (parts.length) parts.push(', ');
-    parts.push(`${quote(column)} = `, Object.freeze({ value }));
-  }
-  if (!parts.length) throw new Error('sql.assignments requires at least one defined field.');
-  return parts;
 }
 
 function record(value: unknown, helper: string, index: number): object {
@@ -102,17 +64,34 @@ export function insertParts(
           ),
         ]
       : mutationColumns(selected);
-  return insertLayout(
-    columns,
-    rows.map((row, index) => columns.map((column) => cell(row, column, 'sql.insertValues', index))),
-  );
+  if (!columns.length) {
+    if (rows.length !== 1) throw new Error('Default-only inserts require exactly one row.');
+    return ['DEFAULT VALUES'];
+  }
+  const parts: MutationPart[] = [`(${columns.map(quote).join(', ')}) VALUES `];
+  for (const [index, row] of rows.entries()) {
+    if (index) parts.push(', ');
+    parts.push('(');
+    for (const [position, column] of columns.entries()) {
+      if (position) parts.push(', ');
+      const value = cell(row, column, 'sql.insertValues', index);
+      parts.push(value === undefined ? 'DEFAULT' : Object.freeze({ value }));
+    }
+    parts.push(')');
+  }
+  return parts;
 }
 
 export function assignmentParts(input: object, selected?: readonly string[]): MutationPart[] {
   const row = record(input, 'sql.assignments', 0);
   const columns = selected === undefined ? Object.keys(row) : mutationColumns(selected);
-  return assignmentLayout(
-    columns,
-    columns.map((column) => cell(row, column, 'sql.assignments', 0)),
-  );
+  const parts: MutationPart[] = [];
+  for (const column of columns) {
+    const value = cell(row, column, 'sql.assignments', 0);
+    if (value === undefined) continue;
+    if (parts.length) parts.push(', ');
+    parts.push(`${quote(column)} = `, Object.freeze({ value }));
+  }
+  if (!parts.length) throw new Error('sql.assignments requires at least one defined field.');
+  return parts;
 }

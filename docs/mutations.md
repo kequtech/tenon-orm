@@ -34,10 +34,10 @@ entire input object contains only allowed keys. Keep narrower application input 
 `tenon generate` also provides `Rows.Update['profiles']`. Use `Pick` to limit a patch to fields
 the caller may edit, for example `Pick<Rows.Update['profiles'], 'name' | 'bio'>`. Generated inputs
 understand defaults, nullability, domains, and generated columns. They use write representations:
-timestamps accept `Date | string`, bigint accepts `string | bigint`, and JSON uses serialized text.
+timestamps accept `Date | string`, bigint accepts `string | bigint`, and JSON accepts native JavaScript values through Tenon's exported `JSONValue` type.
 See the [input-type reference](reference.md#insert-and-update-inputs) for the complete mapping.
 
-## Input types, SQL checking, and runtime validation
+## Input types and runtime validation
 
 Apply input types with an annotation, `satisfies`, or a helper generic argument. Generating the
 file alone does not check every write. Narrow the fields each operation accepts:
@@ -55,9 +55,9 @@ function createProfile(client: QueryClient, input: ProfileInput) {
 ```
 
 Here `id` and `score` are assumed to be integers. TypeScript rejects an incompatible typed input
-such as `{ name: 'Ada', score: true }`. SafeQL checks selected columns and `RETURNING`; it does not
-inspect runtime values. Validate external inputs before calling this function and keep database
-constraints and application authorization in place.
+such as `{ name: 'Ada', score: true }`. Inspect the completed SQL with `describeQuery` and test its
+returned rows and write effects against the database. Validate external inputs before calling this
+function and keep database constraints and application authorization in place.
 
 **Selected columns can discard required fields.** For a table requiring integer `id` and text
 `name` and `location`, this input is valid but the query fails:
@@ -115,22 +115,22 @@ database default; that alone does not decide what an upsert should overwrite.
 
 ## JSONB arrays and PostgreSQL arrays
 
-Tenon preserves pg's value conversion. A JavaScript array binds as a PostgreSQL array. To write an
-array into a JSON/JSONB column, serialize it explicitly:
+SQL context determines whether a bound JavaScript array is a PostgreSQL array or a JSON value.
+Pass native JavaScript values; Postgres.js serializes them for the target type:
 
 ```ts
 const handles = ['ada', 'lin'];
 await db.query(
   sql`INSERT INTO deliveries ${sql.insertValues({
-    recipients_json: JSON.stringify(handles), // jsonb column
+    recipients_json: handles, // jsonb column
     recipient_handles: handles, // text[] column
   })}`,
 );
 ```
 
-Objects used as JSON values retain pg's ordinary JSON conversion. The helper does not infer JSON
-versus array encoding from the table schema. Generated JSON input types use serialized text for
-consistent handling of objects and arrays. Validate JSON contents in the application.
+Objects used as JSON values retain Postgres.js's ordinary JSON conversion. The helper does not need runtime schema metadata. Generated JSON input types use Tenon's exported
+`JSONValue` type, excluding SQL null for nonnullable columns. Pre-serialized text becomes a JSON
+string; use SQL such as `'null'::jsonb` when JSON null is required. Validate JSON contents in the application.
 
 ## Batches in one transaction
 
@@ -146,7 +146,7 @@ await db.transaction(async (tx) => {
 ```
 
 A failure rolls back all batches. The helper rejects an empty batch; this loop makes no insert
-calls for empty input. The query-wide limit is 65,535 bound parameters, including parameters outside
+calls for empty input. Each query accepts at most 65,533 bound parameters, including parameters outside
 the mutation fragment. An oversized query reports its actual count, for example
-`at most 65535 bound parameters; received 65536`. Defaults consume no parameters. Account for the
+`at most 65533 bound parameters; received 65534`. Defaults consume no parameters. Account for the
 selected columns and surrounding query when choosing a batch size; Tenon never splits queries automatically.

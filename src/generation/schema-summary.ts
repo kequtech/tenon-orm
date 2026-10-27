@@ -1,4 +1,4 @@
-import type { PoolClient } from 'pg';
+import type { SqlConnection } from '../connection.js';
 import { quote } from '../sql.js';
 
 interface NamedDefinition {
@@ -15,17 +15,19 @@ interface IndexDefinition {
 
 /** Include only domains reached through selected columns, base domains or arrays. */
 export async function domainSummaries(
-  client: PoolClient,
+  client: SqlConnection,
   typeOids: readonly string[],
 ): Promise<string[]> {
-  const domains = await client.query<{
-    oid: string;
-    name: string;
-    base: string;
-    nullable: boolean;
-    expression: string | null;
-    collation: string | null;
-  }>(
+  const domains = await client.unsafe<
+    {
+      oid: string;
+      name: string;
+      base: string;
+      nullable: boolean;
+      expression: string | null;
+      collation: string | null;
+    }[]
+  >(
     `
     WITH RECURSIVE referenced(oid) AS (
       SELECT unnest($1::oid[])
@@ -42,11 +44,11 @@ export async function domainSummaries(
       JOIN pg_catalog.pg_type base ON base.oid = t.typbasetype
     WHERE t.typtype = 'd'
     ORDER BY pg_catalog.format_type(t.oid, NULL) COLLATE "C"`,
-    [typeOids],
+    [client.array([...typeOids])],
   );
   const summaries: string[] = [];
-  for (const domain of domains.rows) {
-    const constraints = await client.query<NamedDefinition>(
+  for (const domain of domains) {
+    const constraints = await client.unsafe<NamedDefinition[]>(
       `
       SELECT conname AS name, pg_catalog.pg_get_constraintdef(oid, false) AS definition
       FROM pg_catalog.pg_constraint WHERE contypid = $1::oid
@@ -59,7 +61,7 @@ export async function domainSummaries(
           (domain.collation === null ? '' : ` COLLATE ${domain.collation}`) +
           (domain.expression === null ? '' : ` DEFAULT ${domain.expression}`) +
           (domain.nullable ? '' : ' NOT NULL'),
-        ...constraints.rows.map(
+        ...constraints.map(
           (constraint) => `  CONSTRAINT ${quote(constraint.name)} ${constraint.definition}`,
         ),
       ].join('\n'),
@@ -69,8 +71,12 @@ export async function domainSummaries(
 }
 
 /** Called inside generation's read-only snapshot, with a fixed local search_path. */
-export async function tableSummary(client: PoolClient, oid: string, name: string): Promise<string> {
-  const columns = await client.query<NamedDefinition>(
+export async function tableSummary(
+  client: SqlConnection,
+  oid: string,
+  name: string,
+): Promise<string> {
+  const columns = await client.unsafe<NamedDefinition[]>(
     `
     SELECT a.attname AS name,
       pg_catalog.format_type(a.atttypid, a.atttypmod)
@@ -101,7 +107,7 @@ export async function tableSummary(client: PoolClient, oid: string, name: string
   );
   // Column definitions already describe NOT NULL; PostgreSQL 18 also stores it
   // as a table constraint, which would duplicate every required column here.
-  const constraints = await client.query<NamedDefinition>(
+  const constraints = await client.unsafe<NamedDefinition[]>(
     `
     SELECT conname AS name, pg_catalog.pg_get_constraintdef(oid, false) AS definition
     FROM pg_catalog.pg_constraint
@@ -109,7 +115,7 @@ export async function tableSummary(client: PoolClient, oid: string, name: string
     ORDER BY conname COLLATE "C"`,
     [oid],
   );
-  const indexes = await client.query<IndexDefinition>(
+  const indexes = await client.unsafe<IndexDefinition[]>(
     `
     SELECT pg_catalog.pg_get_indexdef(i.indexrelid, 0, false) AS definition,
       pg_catalog.format('CREATE %sINDEX %I ON %s',
@@ -127,11 +133,11 @@ export async function tableSummary(client: PoolClient, oid: string, name: string
   );
   const lines = [
     `TABLE ${quote(name)}`,
-    ...columns.rows.map((column) => `  ${quote(column.name)} ${column.definition}`),
-    ...constraints.rows.map(
+    ...columns.map((column) => `  ${quote(column.name)} ${column.definition}`),
+    ...constraints.map(
       (constraint) => `  CONSTRAINT ${quote(constraint.name)} ${constraint.definition}`,
     ),
-    ...indexes.rows.map((index) => {
+    ...indexes.map((index) => {
       // pg_get_indexdef always qualifies its target table. Remove only that
       // known prefix, never matching/replacing namespace text inside SQL literals.
       const qualifiedPrefix = index.prefix + index.qualification;

@@ -2,7 +2,7 @@ import type { QueryClient } from '../src/index.js';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { after, before, beforeEach, test } from 'node:test';
-import { Pool } from 'pg';
+import postgres from 'postgres';
 import type { QueryResult, Transaction } from '../src/index.js';
 import { createTenon, identifier, migrate, sql } from '../src/index.js';
 import { qualified, quote } from '../src/sql.js';
@@ -11,7 +11,7 @@ import { echoValues } from './fixtures/queries.js';
 
 import { assertTestDatabase, testConnection as connection } from './helpers/database.js';
 const namespace = `tenon_test_${randomUUID().replaceAll('-', '')}`;
-const pool = new Pool({ connectionString: connection, max: 3 });
+const pool = postgres(connection, { max: 3 });
 const target = qualified(namespace, 'User');
 type UserSummary = Pick<User, 'id' | 'email'>;
 type UserWithPosts = UserSummary & {
@@ -118,9 +118,9 @@ function assertNativeResult(
   rowCount: number | null,
 ): void {
   assert.equal(result.command, command);
-  assert.equal(result.rowCount, rowCount);
-  assert.deepEqual(result.rows, []);
-  assert.deepEqual(result.fields, []);
+  assert.equal(result.count, rowCount);
+  assert.deepEqual([...result], []);
+  assert.deepEqual(result.columns, []);
   assert.notEqual(Object.getPrototypeOf(result), Object.prototype);
 }
 
@@ -141,7 +141,7 @@ beforeEach(async () => {
 });
 after(async () => {
   try {
-    if (ownsNamespace) await pool.query(`DROP SCHEMA IF EXISTS ${quote(namespace)} CASCADE`);
+    if (ownsNamespace) await pool.unsafe(`DROP SCHEMA IF EXISTS ${quote(namespace)} CASCADE`);
   } finally {
     await db.close();
     await pool.end();
@@ -290,13 +290,13 @@ test('native mode reports inserted, updated and deleted rows, including zero mat
 });
 
 test('native mode preserves native result metadata, explicit RETURNING rows and database errors', async () => {
-  assert.deepEqual((await queries.undeclared_rows(db)).rows, [{ value: 1 }]);
+  assert.deepEqual([...(await queries.undeclared_rows(db))], [{ value: 1 }]);
   const result = await queries.insert_returning_command(db, { email: 'alice' });
   assert.equal(result.command, 'INSERT');
-  assert.equal(result.rowCount, 1);
-  assert.deepEqual(result.rows, [{ id: 1, email: 'alice' }]);
+  assert.equal(result.count, 1);
+  assert.deepEqual([...result], [{ id: 1, email: 'alice' }]);
   assert.deepEqual(
-    result.fields.map((field) => field.name),
+    result.columns.map((field) => field.name),
     ['id', 'email'],
   );
   assert.notEqual(Object.getPrototypeOf(result), Object.prototype);
@@ -312,8 +312,8 @@ test('native mode preserves native result metadata, explicit RETURNING rows and 
 });
 
 test('commands without a PostgreSQL count return null rather than zero', async () => {
-  assertNativeResult(await queries.create_table_command(db), 'CREATE', null);
-  assertNativeResult(await queries.drop_table_command(db), 'DROP', null);
+  assertNativeResult(await queries.create_table_command(db), 'CREATE TABLE', null);
+  assertNativeResult(await queries.drop_table_command(db), 'DROP TABLE', null);
 });
 
 test('command metadata follows the transaction connection and writes commit or roll back together', async () => {

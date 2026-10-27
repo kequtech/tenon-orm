@@ -1,6 +1,6 @@
 {
   "name": "@kequtech/tenon-orm",
-  "version": "0.1.4",
+  "version": "0.2.0",
   "license": "ISC",
   "type": "module",
   "description": "A PostgreSQL ORM designed for coding agents, with explicit SQL, typed queries, and migrations",
@@ -28,16 +28,13 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
-    },
-    "./safeql": {
-      "types": "./dist/safeql.d.ts",
-      "import": "./dist/safeql.js"
     }
   },
   "files": [
     "dist/**/*.js",
     "dist/**/*.d.ts",
-    "docs/"
+    "docs/",
+    "CHANGELOG.md"
   ],
   "engines": {
     "node": ">=24"
@@ -48,41 +45,23 @@
     "typecheck": "node node_modules/typescript/bin/tsc --noEmit -p tsconfig.json",
     "test": "npm run build && node node_modules/typescript/bin/tsc -p config/tsconfig.test.json && node .test-dist/test/check-database.js && node --test .test-dist/test/*.test.js",
     "test:consumer": "npm run build && node node_modules/typescript/bin/tsc -p config/tsconfig.test.json && node --test .test-dist/test/consumer.test.js",
+    "test:describe": "node node_modules/typescript/bin/tsc -p config/tsconfig.test.json && node --test .test-dist/test/describe*.test.js",
     "check": "npm run format:check && npm run typecheck && npm test",
     "prepack": "npm run build",
     "prepublishOnly": "npm run check",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "benchmark": "npm run build && node scripts/benchmark.mjs"
+    "benchmark": "npm run build && node scripts/benchmark.mjs",
+    "test:pilots": "npm run build && node test/pilots/run.mjs"
+  },
+  "dependencies": {
+    "postgres": "3.4.9"
   },
   "devDependencies": {
     "@types/node": "^24.19.2",
-    "@types/pg": "^8.23.1",
-    "pg": "^8.23.1",
     "prettier": "^3.9.10",
     "typescript": "~6.0.2",
-    "typescript-next": "npm:typescript@^7.0.2",
-    "@ts-safeql/eslint-plugin": "^5.4.2",
-    "typescript-eslint": "^8.58.0",
-    "eslint": "^10.0.0",
-    "@ts-safeql/plugin-utils": "^5.3.1"
-  },
-  "peerDependencies": {
-    "pg": "^8.23.1",
-    "typescript": ">=6",
-    "@ts-safeql/eslint-plugin": "^5.4.2",
-    "eslint": "^10.0.0"
-  },
-  "peerDependenciesMeta": {
-    "typescript": {
-      "optional": true
-    },
-    "@ts-safeql/eslint-plugin": {
-      "optional": true
-    },
-    "eslint": {
-      "optional": true
-    }
+    "typescript-next": "npm:typescript@^7.0.2"
   },
   "bin": {
     "tenon": "./dist/cli.js"

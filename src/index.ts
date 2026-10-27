@@ -1,4 +1,5 @@
-export type { QueryResult } from 'pg';
+export type { JSONValue } from 'postgres';
+export type { Connection, ConnectionOptions, QueryResult } from './connection.js';
 export type { AffectedRowsConstraint } from './affected-rows.js';
 export { createTenon } from './database.js';
 export type { TenonOptions } from './database.js';
@@ -7,6 +8,18 @@ export type { QueryOptions, QueryOutput, QueryReturnMode } from './query-options
 export { identifier, sql, unsafeSql } from './query.js';
 export type { SqlFragment, SqlQuery, UnknownRow } from './query.js';
 export type { Database, QueryClient, QueryEvent, Transaction } from './types.js';
+
+export { describeQuery } from './describe.js';
+export type {
+  DescribeOptions,
+  DescribedColumn,
+  DescribedType,
+  DescriptionIssue,
+  InspectionContext,
+  InspectionSession,
+  InspectionTimeouts,
+  QueryDescription,
+} from './inspection/types.js';
 
 export { adoptBaseline, captureBaseline } from './baseline.js';
 export type { CaptureBaselineOptions, CapturedBaseline } from './baseline.js';

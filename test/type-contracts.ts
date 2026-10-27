@@ -1,12 +1,14 @@
 import type {
   Database,
+  DescribeOptions,
+  QueryDescription,
   QueryClient,
   QueryOptions,
   QueryResult,
   SqlQuery,
   UnknownRow,
 } from '../src/index.js';
-import { identifier, sql, unsafeSql } from '../src/index.js';
+import { describeQuery, identifier, sql, unsafeSql } from '../src/index.js';
 import type { User } from './fixtures/generated-schema.js';
 import { echoValues } from './fixtures/queries.js';
 
@@ -133,6 +135,36 @@ async function contracts(db: Database, options?: QueryOptions) {
   });
 }
 void contracts;
+
+async function inspectionContracts(db: Database) {
+  const input = {
+    connection: 'postgresql://unused',
+    query: sql`SELECT ${1}::integer AS id`,
+    session: { searchPath: 'public', timeZone: 'UTC' },
+    timeouts: { statementMs: 5000 },
+  } satisfies DescribeOptions;
+  const result: QueryDescription = await describeQuery(input);
+  const nullable: 'unknown' = result.columns[0]!.nullability;
+  const declaration: string | null = result.rowType;
+  for (const issue of result.issues) {
+    if (issue.code === 'duplicate-column') {
+      const column: string = issue.column;
+      void column;
+    } else if (issue.code === 'unmapped-type') {
+      const oid: number = issue.oid;
+      void oid;
+    }
+  }
+  await describeQuery({ connection: input.connection, query: input.query.text });
+  // @ts-expect-error inspection does not borrow a database or transaction connection
+  await describeQuery({ connection: db, query: input.query });
+  // @ts-expect-error sessions accept strings, not arbitrary pool parser settings
+  await describeQuery({ connection: input.connection, query: input.query, session: { role: 1 } });
+  // @ts-expect-error descriptions do not prove a non-null result
+  const proven: false = result.columns[0]!.nullability;
+  void [nullable, declaration];
+}
+void inspectionContracts;
 
 // Mutation columns preserve known object keys without widening their input types.
 function mutationContracts() {

@@ -27,7 +27,7 @@ export function createClient(
         statement.values,
         (result) => {
           command = result.command;
-          rowCount = result.rowCount;
+          rowCount = result.count;
           if (options.affectedRows) checkAffectedRows(options.affectedRows, result);
           return queryOutput(options, result);
         },

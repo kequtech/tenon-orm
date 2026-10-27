@@ -115,7 +115,7 @@ export type Rows = {
   "PostTag": {
     "postId": number;
     "tagId": number;
-    "addedAt": globalThis.Date | number;
+    "addedAt": globalThis.Date;
   };
   "Profile": {
     "userId": number;
@@ -142,7 +142,7 @@ export type Rows = {
     "active": boolean;
     "score": number;
     "nickname": string | null;
-    "createdAt": globalThis.Date | number;
+    "createdAt": globalThis.Date;
     "token": string;
     "role": "reader" | "writer";
   };

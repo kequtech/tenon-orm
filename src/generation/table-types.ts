@@ -1,3 +1,4 @@
+import { arrayTypes, scalarTypes, valueTypes, type ValueTypes } from '../driver/types.js';
 import type { ColumnRow, TableRow } from './catalog.js';
 
 // Every generated table remains accessible through Rows["exact SQL name"].
@@ -18,62 +19,6 @@ function canExportRowName(name: string): boolean {
   return (
     /^[$_\p{ID_Start}][$_\u200c\u200d\p{ID_Continue}]*$/u.test(name) && !reservedTypeNames.has(name)
   );
-}
-
-type ValueTypes = Readonly<{ read: string; write: string }>;
-type TypeMapping = string | ValueTypes;
-
-// A string means the read and write representations match. Arrays use verified
-// built-in OIDs because their parsers can differ from scalar parsers (numeric[]).
-const arrayTypes: Readonly<Record<string, TypeMapping>> = {
-  '1000': 'boolean',
-  '1001': 'import("node:buffer").Buffer',
-  '1005': 'number',
-  '1007': 'number',
-  '1021': 'number',
-  '1022': 'number',
-  '1028': 'number',
-  '1016': { read: 'string', write: 'string | bigint' },
-  '1231': { read: 'number', write: 'string | number' },
-  '1009': 'string',
-  '1014': 'string',
-  '1015': 'string',
-  '1183': 'string',
-  '1270': 'string',
-  '2951': 'string',
-  '1182': { read: 'globalThis.Date | number', write: 'globalThis.Date | string' },
-  '1115': { read: 'globalThis.Date | number', write: 'globalThis.Date | string' },
-  '1185': { read: 'globalThis.Date | number', write: 'globalThis.Date | string' },
-  '199': { read: 'unknown', write: 'string' },
-  '3807': { read: 'unknown', write: 'string' },
-};
-const scalarTypes: Readonly<Record<string, TypeMapping>> = {
-  int2: 'number',
-  int4: 'number',
-  oid: 'number',
-  float4: 'number',
-  float8: 'number',
-  bool: 'boolean',
-  text: 'string',
-  name: 'string',
-  varchar: 'string',
-  bpchar: 'string',
-  time: 'string',
-  timetz: 'string',
-  uuid: 'string',
-  // pg returns +/-Infinity as numbers. TypeScript has no infinity literal type.
-  date: { read: 'globalThis.Date | number', write: 'globalThis.Date | string' },
-  timestamp: { read: 'globalThis.Date | number', write: 'globalThis.Date | string' },
-  timestamptz: { read: 'globalThis.Date | number', write: 'globalThis.Date | string' },
-  int8: { read: 'string', write: 'string | bigint' },
-  numeric: { read: 'string', write: 'string | number' },
-  json: { read: 'unknown', write: 'string' },
-  jsonb: { read: 'unknown', write: 'string' },
-  bytea: 'import("node:buffer").Buffer',
-};
-
-function valueTypes(mapping: TypeMapping): ValueTypes {
-  return typeof mapping === 'string' ? { read: mapping, write: mapping } : mapping;
 }
 
 function isSupportedArray(value: ColumnRow): boolean {
@@ -105,7 +50,7 @@ function columnTypes(
           ? ''
           : ` with underlying type ${JSON.stringify(value.typeSchema)}.${JSON.stringify(value.type)} (OID ${value.oid})`;
       onWarning(
-        `Column ${column} uses PostgreSQL type ${JSON.stringify(value.declaredSchema)}.${JSON.stringify(value.declaredType)} (OID ${value.declaredOid})${underlying} without a verified pg mapping; generated as unknown for reads and never for non-null writes.`,
+        `Column ${column} uses PostgreSQL type ${JSON.stringify(value.declaredSchema)}.${JSON.stringify(value.declaredType)} (OID ${value.declaredOid})${underlying} without a verified Postgres.js mapping; generated as unknown for reads and never for non-null writes.`,
       );
       types = { read: 'unknown', write: 'never' };
     }

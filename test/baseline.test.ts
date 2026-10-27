@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { after, before, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { Pool } from 'pg';
+import postgres from 'postgres';
 import {
   adoptBaseline,
   captureBaseline,
@@ -20,7 +20,7 @@ import {
 import { qualified, quote } from '../src/sql.js';
 
 import { assertTestDatabase, testConnection as connection } from './helpers/database.js';
-const pool = new Pool({ connectionString: connection, max: 1 });
+const pool = postgres(connection, { max: 1 });
 const cli = fileURLToPath(new URL('../src/cli.js', import.meta.url));
 const run = promisify(execFile);
 before(() => assertTestDatabase(pool));
@@ -39,11 +39,11 @@ async function project(
   const directory = await mkdtemp(join(tmpdir(), 'tenon-baseline-test-'));
   const namespace = `tenon_baseline_${randomUUID().replaceAll('-', '')}`;
   try {
-    await pool.query(`CREATE SCHEMA ${quote(namespace)}`);
+    await pool.unsafe(`CREATE SCHEMA ${quote(namespace)}`);
     await work({ connection, namespace, directory, schemas: [namespace] });
   } finally {
     try {
-      await pool.query(`DROP SCHEMA IF EXISTS ${quote(namespace)} CASCADE`);
+      await pool.unsafe(`DROP SCHEMA IF EXISTS ${quote(namespace)} CASCADE`);
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
@@ -54,7 +54,7 @@ test('capture, adoption, future migrations and fresh replay share one baseline w
   await project(async (options) => {
     const table = qualified(options.namespace, 'Customer');
     const oldHistory = qualified(options.namespace, '_old_migrations');
-    await pool.query(`CREATE TABLE ${table} (id integer GENERATED ALWAYS AS IDENTITY (START WITH 100) PRIMARY KEY, name text NOT NULL DEFAULT 'customer');
+    await pool.unsafe(`CREATE TABLE ${table} (id integer GENERATED ALWAYS AS IDENTITY (START WITH 100) PRIMARY KEY, name text NOT NULL DEFAULT 'customer');
       CREATE TABLE ${oldHistory} (name text PRIMARY KEY);
       INSERT INTO ${table} (name) VALUES ('existing');
       INSERT INTO ${oldHistory} VALUES ('legacy_001');
@@ -63,7 +63,7 @@ test('capture, adoption, future migrations and fresh replay share one baseline w
         BEGIN ATOMIC SELECT value + 1; END;
       CREATE FUNCTION ${qualified(options.namespace, 'literal')}() RETURNS text LANGUAGE sql
         AS $body$SELECT E'\\nCREATE SCHEMA "${options.namespace}";\\n\\\\restrict literal\\n'::text$body$;`);
-    const original = (await pool.query(`SELECT * FROM ${table}`)).rows;
+    const original = await pool.unsafe(`SELECT * FROM ${table}`);
     const captured = await captureBaseline(options);
     await assert.rejects(
       adoptBaseline({ ...options, namespace: `${options.namespace}_missing` }),
@@ -73,33 +73,35 @@ test('capture, adoption, future migrations and fresh replay share one baseline w
       id: '0001',
       upPath: join(options.directory, '0001_baseline.up.sql'),
     });
-    assert.deepEqual((await pool.query(`SELECT * FROM ${table}`)).rows, original);
+    assert.deepEqual([...(await pool.unsafe(`SELECT * FROM ${table}`))], [...original]);
     assert.equal(
       (
-        await pool.query('SELECT to_regclass($1) AS name', [
+        await pool.unsafe('SELECT to_regclass($1) AS name', [
           qualified(options.namespace, '__tenon_migrations'),
         ])
-      ).rows[0].name,
+      )[0]!.name,
       null,
     );
     assert.deepEqual(await readdir(options.directory), ['0001_baseline.up.sql']);
     assert.deepEqual(await adoptBaseline(options), ['0001']);
     assert.deepEqual(await adoptBaseline(options), []);
     assert.deepEqual(await migrate(options), []);
-    assert.deepEqual((await pool.query(`SELECT * FROM ${table}`)).rows, original);
-    assert.deepEqual((await pool.query(`SELECT * FROM ${oldHistory}`)).rows, [
-      { name: 'legacy_001' },
-    ]);
-    assert.deepEqual((await pool.query(`INSERT INTO ${table} DEFAULT VALUES RETURNING id`)).rows, [
-      { id: 101 },
-    ]);
+    assert.deepEqual([...(await pool.unsafe(`SELECT * FROM ${table}`))], [...original]);
+    assert.deepEqual(
+      [...(await pool.unsafe(`SELECT * FROM ${oldHistory}`))],
+      [{ name: 'legacy_001' }],
+    );
+    assert.deepEqual(
+      [...(await pool.unsafe(`INSERT INTO ${table} DEFAULT VALUES RETURNING id`))],
+      [{ id: 101 }],
+    );
     const files = await readMigrations(options.directory);
     assert.deepEqual(
-      (
-        await pool.query(
+      [
+        ...(await pool.unsafe(
           `SELECT id, checksum FROM ${qualified(options.namespace, '__tenon_migrations')}`,
-        )
-      ).rows,
+        )),
+      ],
       [{ id: '0001', checksum: files[0]!.checksum }],
     );
     await assert.rejects(rollback(options), /no down SQL/);
@@ -115,32 +117,35 @@ test('capture, adoption, future migrations and fresh replay share one baseline w
     assert.deepEqual(await adoptBaseline(options), []);
     const definitions = await generateDefinitions(options);
     assert.deepEqual(await rollback(options), ['0002']);
-    assert.deepEqual((await pool.query(`SELECT * FROM ${table} ORDER BY id`)).rows, [
-      { id: 100, name: 'existing' },
-      { id: 101, name: 'customer' },
-    ]);
+    assert.deepEqual(
+      [...(await pool.unsafe(`SELECT * FROM ${table} ORDER BY id`))],
+      [
+        { id: 100, name: 'existing' },
+        { id: 101, name: 'customer' },
+      ],
+    );
 
-    // Exercise Tenon's pg_dump/pg adapter and history transaction, not a schema
+    // Exercise Tenon's pg_dump/Postgres.js adapter and history transaction, not a schema
     // comparison system or a reimplementation of PostgreSQL's export guarantees.
-    await pool.query(`DROP SCHEMA ${quote(options.namespace)} CASCADE`);
+    await pool.unsafe(`DROP SCHEMA ${quote(options.namespace)} CASCADE`);
     const settings = `SELECT current_setting('search_path') AS path,
       current_setting('statement_timeout') AS timeout, current_setting('check_function_bodies') AS bodies`;
-    const before = (await pool.query(settings)).rows;
+    const before = await pool.unsafe(settings);
     assert.deepEqual(await migrate({ ...options, connection: pool }), ['0001', '0002']);
-    assert.deepEqual((await pool.query(settings)).rows, before);
+    assert.deepEqual([...(await pool.unsafe(settings))], [...before]);
     assert.equal(await generateDefinitions(options), definitions);
-    assert.deepEqual((await pool.query(`SELECT * FROM ${table}`)).rows, []);
-    assert.deepEqual((await pool.query(`SELECT * FROM ${oldHistory}`)).rows, []);
+    assert.deepEqual([...(await pool.unsafe(`SELECT * FROM ${table}`))], []);
+    assert.deepEqual([...(await pool.unsafe(`SELECT * FROM ${oldHistory}`))], []);
     assert.deepEqual(
-      (await pool.query(`SELECT ${qualified(options.namespace, 'increment')}(2) AS value`)).rows,
+      [...(await pool.unsafe(`SELECT ${qualified(options.namespace, 'increment')}(2) AS value`))],
       [{ value: 3 }],
     );
     assert.deepEqual(
-      (await pool.query(`SELECT ${qualified(options.namespace, 'literal')}() AS value`)).rows,
+      [...(await pool.unsafe(`SELECT ${qualified(options.namespace, 'literal')}() AS value`))],
       [{ value: `\nCREATE SCHEMA "${options.namespace}";\n\\restrict literal\n` }],
     );
     assert.deepEqual(
-      (await pool.query(`SELECT * FROM ${qualified(options.namespace, 'CustomerNames')}`)).rows,
+      [...(await pool.unsafe(`SELECT * FROM ${qualified(options.namespace, 'CustomerNames')}`))],
       [],
     );
     await assert.rejects(rollback({ ...options, steps: 2 }), /no down SQL/);
@@ -149,7 +154,7 @@ test('capture, adoption, future migrations and fresh replay share one baseline w
 
 test('concurrent pre-start adoption and migration are repeatable and edited baseline history rejects', async () => {
   await project(async (options) => {
-    await pool.query(`CREATE TABLE ${qualified(options.namespace, 'Record')} (id integer)`);
+    await pool.unsafe(`CREATE TABLE ${qualified(options.namespace, 'Record')} (id integer)`);
     await captureBaseline(options);
     await writeFile(
       join(options.directory, '0002_name.up.sql'),
@@ -202,9 +207,9 @@ test('baseline CLI captures and adopts without replaying live data or exposing c
     const args = ['--directory', options.directory, '--namespace', options.namespace];
     const env = { ...process.env, DATABASE_URL: connection };
     const table = qualified(options.namespace, 'LiveRecord');
-    await pool.query(`CREATE TABLE ${table} (id integer PRIMARY KEY, value text);
+    await pool.unsafe(`CREATE TABLE ${table} (id integer PRIMARY KEY, value text);
       INSERT INTO ${table} VALUES (1, 'existing data')`);
-    const original = (await pool.query(`SELECT * FROM ${table}`)).rows;
+    const original = await pool.unsafe(`SELECT * FROM ${table}`);
 
     await run(
       process.execPath,
@@ -212,14 +217,14 @@ test('baseline CLI captures and adopts without replaying live data or exposing c
       { env },
     );
     assert.deepEqual(await migrationStatus(options), { applied: [], pending: ['0001'] });
-    assert.deepEqual((await pool.query(`SELECT * FROM ${table}`)).rows, original);
+    assert.deepEqual([...(await pool.unsafe(`SELECT * FROM ${table}`))], [...original]);
 
     await run(process.execPath, [cli, 'baseline', 'adopt', ...args], { env });
     assert.deepEqual(await migrationStatus(options), { applied: ['0001'], pending: [] });
-    assert.deepEqual((await pool.query(`SELECT * FROM ${table}`)).rows, original);
+    assert.deepEqual([...(await pool.unsafe(`SELECT * FROM ${table}`))], [...original]);
     await run(process.execPath, [cli, 'baseline', 'adopt', ...args], { env });
     assert.deepEqual(await migrationStatus(options), { applied: ['0001'], pending: [] });
-    assert.deepEqual((await pool.query(`SELECT * FROM ${table}`)).rows, original);
+    assert.deepEqual([...(await pool.unsafe(`SELECT * FROM ${table}`))], [...original]);
     await run(
       process.execPath,
       [

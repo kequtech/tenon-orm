@@ -3,7 +3,7 @@ import { rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { after, before, test } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
-import { Pool } from 'pg';
+import postgres from 'postgres';
 import {
   createTenon,
   generateDefinitions,
@@ -21,7 +21,7 @@ import {
   testConnection as connection,
   migrationProject,
 } from './helpers/database.js';
-const pool = new Pool({ connectionString: connection });
+const pool = postgres(connection);
 const project = migrationProject(pool);
 before(() => assertTestDatabase(pool));
 after(() => pool.end());
@@ -30,7 +30,7 @@ async function waitForAdvisoryWaiters(application: string, expected: number): Pr
   const deadline = Date.now() + 5000;
   let count = 0;
   do {
-    const result = await pool.query<{ count: number }>(
+    const result = await pool.unsafe<{ count: number }[]>(
       `
       SELECT count(*)::int AS count FROM pg_catalog.pg_locks l
       JOIN pg_catalog.pg_stat_activity a ON a.pid = l.pid
@@ -38,7 +38,7 @@ async function waitForAdvisoryWaiters(application: string, expected: number): Pr
         AND a.datname = current_database() AND a.application_name = $1`,
       [application],
     );
-    count = result.rows[0]!.count;
+    count = result[0]!.count;
     if (count === expected) return;
     await delay(10);
   } while (Date.now() < deadline);
@@ -48,7 +48,7 @@ async function waitForAdvisoryWaiters(application: string, expected: number): Pr
 test('migration upgrades and rollbacks preserve existing data', async () => {
   await project(recordMigrations, async (options) => {
     await migrate(options);
-    await pool.query(
+    await pool.unsafe(
       `INSERT INTO ${qualified(options.namespace, 'Record')} (name) VALUES ('existing')`,
     );
     await writeFile(
@@ -78,7 +78,7 @@ test('migration upgrades and rollbacks preserve existing data', async () => {
               returns: 'native',
             },
           )
-        ).rowCount,
+        ).count,
         1,
       );
       assert.deepEqual(
@@ -108,7 +108,7 @@ test('migration upgrades and rollbacks preserve existing data', async () => {
               returns: 'native',
             },
           )
-        ).rowCount,
+        ).count,
         1,
       );
       assert.deepEqual(
@@ -125,10 +125,10 @@ test('migration upgrades and rollbacks preserve existing data', async () => {
     assert.deepEqual(await rollback({ ...options, steps: 2 }), ['0002', '0001']);
     assert.equal(
       (
-        await pool.query('SELECT to_regclass($1)::text AS name', [
+        await pool.unsafe('SELECT to_regclass($1)::text AS name', [
           qualified(options.namespace, 'Record'),
         ])
-      ).rows[0].name,
+      )[0]!.name,
       null,
     );
   });
@@ -145,15 +145,15 @@ test('a failed migration rolls back its schema and data changes without recordin
       await assert.rejects(migrate(options), /0002_failure.*failed/);
       assert.deepEqual(await migrationStatus(options), { applied: ['0001'], pending: ['0002'] });
       assert.deepEqual(
-        (await pool.query(`SELECT * FROM ${qualified(options.namespace, 'Record')}`)).rows,
+        [...(await pool.unsafe(`SELECT * FROM ${qualified(options.namespace, 'Record')}`))],
         [],
       );
       assert.equal(
         (
-          await pool.query('SELECT to_regclass($1)::text AS name', [
+          await pool.unsafe('SELECT to_regclass($1)::text AS name', [
             qualified(options.namespace, 'Temporary'),
           ])
-        ).rows[0].name,
+        )[0]!.name,
         null,
       );
     },
@@ -176,20 +176,19 @@ test('edited or missing applied files and out-of-order additions stop migration 
     await assert.rejects(migrate(options), /history differs/);
     assert.equal(
       (
-        await pool.query(
+        await pool.unsafe(
           `SELECT count(*)::int AS count FROM ${qualified(options.namespace, '__tenon_migrations')}`,
         )
-      ).rows[0].count,
+      )[0]!.count,
       1,
     );
   });
 });
 
 test('migration parsing stays consistent when the connection uses backslash escapes', async () => {
-  const configured = new Pool({
-    connectionString: connection,
+  const configured = postgres(connection, {
     max: 1,
-    options: '-c standard_conforming_strings=off',
+    connection: { standard_conforming_strings: 'off' },
   });
   try {
     await project(
@@ -203,15 +202,15 @@ test('migration parsing stays consistent when the connection uses backslash esca
         await assert.rejects(migrate(migration));
         assert.equal(
           (
-            await pool.query('SELECT to_regclass($1) AS name', [
+            await pool.unsafe('SELECT to_regclass($1) AS name', [
               qualified(options.namespace, 'escaped_commit'),
             ])
-          ).rows[0].name,
+          )[0]!.name,
           null,
         );
         assert.deepEqual(await migrationStatus(migration), { applied: [], pending: ['0001'] });
         assert.equal(
-          (await configured.query('SHOW standard_conforming_strings')).rows[0]
+          (await configured.unsafe('SHOW standard_conforming_strings'))[0]!
             .standard_conforming_strings,
           'off',
         );
@@ -222,12 +221,15 @@ test('migration parsing stays consistent when the connection uses backslash esca
         );
         await migrate(migration);
         assert.deepEqual(
-          (await pool.query(`SELECT value FROM ${qualified(options.namespace, 'escaped_commit')}`))
-            .rows,
+          [
+            ...(await pool.unsafe(
+              `SELECT value FROM ${qualified(options.namespace, 'escaped_commit')}`,
+            )),
+          ],
           [{ value: "a' b" }],
         );
         assert.equal(
-          (await configured.query('SHOW standard_conforming_strings')).rows[0]
+          (await configured.unsafe('SHOW standard_conforming_strings'))[0]!
             .standard_conforming_strings,
           'off',
         );
@@ -256,10 +258,9 @@ test('irreversible migrations reject rollback before any selected down operation
 
 test('overlapping migration tools wait for locks and reread history before selecting work', async () => {
   await project(recordMigrations, async (options) => {
-    const contenders = new Pool({
-      connectionString: connection,
-      application_name: options.namespace,
+    const contenders = postgres(connection, {
       max: 3,
+      connection: { application_name: options.namespace },
     });
     const queued = { ...options, connection: contenders };
     const pending: Promise<unknown>[] = [];
@@ -302,7 +303,7 @@ test('overlapping migration tools wait for locks and reread history before selec
       assert.deepEqual(
         await migrate({
           ...options,
-          connection: { connectionString: connection, lock_timeout: 1000 },
+          connection: connection,
         }),
         ['0001'],
       );
@@ -315,7 +316,7 @@ test('overlapping migration tools wait for locks and reread history before selec
 
 test('tool lock waits honor the connection lock_timeout and leave connections reusable', async () => {
   await project(recordMigrations, async (options) => {
-    const limited = new Pool({ connectionString: connection, lock_timeout: 100, max: 1 });
+    const limited = postgres(connection, { max: 1, connection: { lock_timeout: 100 } });
     const timed = { ...options, connection: limited };
     try {
       await withMigrationLock(options, 'exclusive', async () => {
@@ -323,11 +324,10 @@ test('tool lock waits honor the connection lock_timeout and leave connections re
         await assert.rejects(generateDefinitions(timed), { code: '55P03' });
         await assert.rejects(migrationStatus(timed), { code: '55P03' });
         assert.equal(
-          (await pool.query('SELECT to_regnamespace($1) AS name', [options.namespace])).rows[0]
-            .name,
+          (await pool.unsafe('SELECT to_regnamespace($1) AS name', [options.namespace]))[0]!.name,
           null,
         );
-        assert.equal((await limited.query('SHOW lock_timeout')).rows[0].lock_timeout, '100ms');
+        assert.equal((await limited.unsafe('SHOW lock_timeout'))[0]!.lock_timeout, '100ms');
       });
       assert.deepEqual(await migrate(timed), ['0001']);
       await withMigrationLock(options, 'shared', async () => {

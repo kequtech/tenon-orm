@@ -1,12 +1,10 @@
 #!/usr/bin/env node
-import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import type { CaptureBaselineOptions } from './baseline.js';
 import { adoptBaseline, captureBaseline } from './baseline.js';
 import { generateDefinitions } from './generate.js';
-import { definitionDiff } from './generation/diff.js';
+import { writeDefinitions } from './generation/output.js';
+import { describeFlags, runDescribe } from './inspection/cli.js';
 import { migrate, migrationStatus, rollback } from './migrations.js';
 import { createMigration } from './migrations/files.js';
 
@@ -15,47 +13,15 @@ tenon baseline capture|adopt [--directory migrations] [--namespace public]
 baseline capture: [--schema name ...] (default: whole database schema)
 tenon new <name> [--directory migrations] (no database required)
 tenon generate [--namespace public] [--out src/generated-schema.ts] [--check]
+tenon describe <query.sql> [--role name] [--search-path schemas] [--time-zone zone]
+describe: [--connect-timeout-ms 3000] [--statement-timeout-ms 5000] [--lock-timeout-ms 1000]
+describe emits JSON metadata; it does not execute the query or verify result annotations.
 rollback: --steps 1
 Connection: DATABASE_URL
 `;
 
 function warn(message: string): void {
   process.stderr.write(`Warning: ${message}\n`);
-}
-
-/** Check without writing, or replace the complete generated file atomically. */
-async function writeDefinitions(source: string, filename: string, check: boolean): Promise<void> {
-  const output = resolve(filename);
-  if (check) {
-    let existing: string;
-    try {
-      existing = await readFile(output, 'utf8');
-    } catch (error) {
-      if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) {
-        throw error;
-      }
-      throw new Error(
-        `Generated definitions file is missing: ${output}\nRun tenon generate with the same options, omitting --check, then commit the result.`,
-      );
-    }
-    if (existing !== source) {
-      throw new Error(
-        `Generated definitions differ: ${output}\n${definitionDiff(existing, source)}\nRun tenon generate with the same options, omitting --check, then commit the result.`,
-      );
-    }
-    process.stdout.write('Generated definitions are current.\n');
-    return;
-  }
-
-  await mkdir(dirname(output), { recursive: true });
-  const temporary = `${output}.${randomUUID()}.tmp`;
-  try {
-    await writeFile(temporary, source, 'utf8');
-    await rename(temporary, output);
-  } finally {
-    await rm(temporary, { force: true });
-  }
-  process.stdout.write(`Generated ${output}\n`);
 }
 
 async function runBaseline(
@@ -93,6 +59,7 @@ async function main(): Promise<void> {
       check: { type: 'boolean', default: false },
       steps: { type: 'string', default: '1' },
       help: { type: 'boolean', default: false },
+      ...describeFlags,
     },
   });
   if (values.help) {
@@ -104,8 +71,8 @@ async function main(): Promise<void> {
   // Validate explicitly supplied flags, not defaults. Silently ignoring --check
   // on migrate, for example, would turn an intended dry run into a schema change.
   const allowed = new Set(['help']);
-  if (command !== 'generate') allowed.add('directory');
-  if (command !== 'new') {
+  if (command !== 'generate' && command !== 'describe') allowed.add('directory');
+  if (command !== 'new' && command !== 'describe') {
     allowed.add('namespace');
   }
   if (command === 'generate') {
@@ -117,6 +84,9 @@ async function main(): Promise<void> {
   }
   if (command === 'baseline' && argument === 'capture') {
     allowed.add('schema');
+  }
+  if (command === 'describe') {
+    for (const name of Object.keys(describeFlags)) allowed.add(name);
   }
   for (const token of tokens) {
     if (token.kind === 'option' && !allowed.has(token.name)) {
@@ -134,19 +104,24 @@ async function main(): Promise<void> {
   }
 
   const baseline = command === 'baseline' && (argument === 'capture' || argument === 'adopt');
-  const valid = baseline
-    ? positionals.length === 2
-    : positionals.length === 1 &&
-      ['migrate', 'generate', 'status', 'rollback'].includes(command ?? '');
+  const valid =
+    baseline || command === 'describe'
+      ? positionals.length === 2
+      : positionals.length === 1 &&
+        ['migrate', 'generate', 'status', 'rollback'].includes(command ?? '');
   if (!valid) {
     throw new Error(
-      'Choose new, baseline capture|adopt, migrate, generate, status, or rollback. Use --help for options.',
+      'Choose new, baseline capture|adopt, migrate, generate, describe <query.sql>, status, or rollback. Use --help for options.',
     );
   }
 
   const connection = process.env.DATABASE_URL;
   if (!connection) {
     throw new Error('DATABASE_URL is required.');
+  }
+  if (command === 'describe') {
+    await runDescribe(argument!, connection, values);
+    return;
   }
   const options = { connection, directory: values.directory, namespace: values.namespace };
   if (baseline) {

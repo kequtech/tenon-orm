@@ -9,7 +9,11 @@
     "verbatimModuleSyntax": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "rootDir": "."
+    "rootDir": ".",
+    "types": ["node"],
+    "paths": {
+      "@kequtech/tenon-orm": ["./src/index.ts"]
+    }
   },
   "include": ["src/**/*.ts", "test/**/*.ts"]
 }

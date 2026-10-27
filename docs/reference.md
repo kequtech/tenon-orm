@@ -1,31 +1,28 @@
 # Tenon reference
 
-Use this document to look up exact API behavior, checker setup, and limitations. The
+Use this document to look up exact API behavior, query inspection, and limitations. The
 [human guide](human-guide.md) teaches the workflow; the [agent guide](agent-guide.md) is a
 self-contained implementation guide. [Adoption](adoption-guide.md) covers replacing an existing ORM
 and transferring migration history.
 
 ## Installation and connection
 
-Runtime requirements: Node.js 24+, PostgreSQL 16+, ESM, and `pg`. TypeScript consumers need
-TypeScript 6+ and development typings for Node and `pg`. Keep your application's strict TypeScript
+Runtime requirements: Node.js 24+, PostgreSQL 16+, and ESM. The Postgres.js driver is included. TypeScript consumers need
+TypeScript 6+ and Node development typings. Keep your application's strict TypeScript
 setup; Tenon needs no special compiler configuration. `"type": "module"` and TypeScript's
-`"module": "NodeNext"` are a usual Node setup. Checker compatibility is listed separately below.
+`"module": "NodeNext"` are a usual Node setup.
 
 ```sh
-npm install @kequtech/tenon-orm pg
-npm install --save-dev @types/pg
+npm install @kequtech/tenon-orm
 ```
 
 `createTenon({ connection, onQuery? })` returns a `Database` with `query`, `transaction`, and
-`close`. The required `connection` accepts a URL, `pg.PoolConfig`, or existing `pg.Pool`. An
-explicit `{}` selects pg's environment defaults. Tenon does not load environment files
+`close`. The required `connection` accepts a URL, Postgres.js options, or an existing Postgres.js client. An
+explicit `{}` selects the driver's environment defaults. Tenon does not load environment files
 automatically.
 
 Reuse an instance per database connection. `close()` closes pools created by Tenon; supplied pools
-remain application-owned. Finish outstanding work before closing. Install your own
-`pool.on('error', handler)` on supplied pools; Tenon reports idle errors on owned pools through
-`process.emitWarning`.
+remain application-owned. Finish outstanding work before closing. Postgres.js handles connection errors through rejected queries and its native connection callbacks.
 
 Qualify SQL names or configure the driver's `search_path`. The CLI's `--namespace` selects the
 schema used by tooling, not a runtime query namespace.
@@ -47,17 +44,18 @@ automatically describe joins or aggregates.
 `query` accepts `{ returns?, affectedRows?, label? }`. Unknown options are rejected. `label` must be
 a nonempty string when supplied and is used for diagnostics.
 
-| `returns`          | Result                | Returned rows allowed |
-| ------------------ | --------------------- | --------------------- |
-| `native` (default) | pg `QueryResult<Row>` | Any                   |
-| `many`             | `Row[]`               | Any, including zero   |
-| `oneOrNone`        | `Row \| undefined`    | Zero or one           |
-| `one`              | `Row`                 | Exactly one           |
+| `returns`          | Result                               | Returned rows allowed |
+| ------------------ | ------------------------------------ | --------------------- |
+| `native` (default) | Postgres.js `QueryResult<Row>` array | Any                   |
+| `many`             | `Row[]`                              | Any, including zero   |
+| `oneOrNone`        | `Row \| undefined`                   | Zero or one           |
+| `one`              | `Row`                                | Exactly one           |
 
-Native results retain `command`, `rowCount`, `fields`, and `rows`; a null row count means none was
-reported. Result modes never add `LIMIT` or `RETURNING`. A count mismatch throws; returned-row
-checks alone do not undo an autocommitted write. Use `affectedRows` for write limits that roll back
-on failure.
+Native results are arrays of rows with `command`, `count`, `columns`, `statement`, and `state`
+metadata. `count` is the affected-row count, independent of `RETURNING`; it can be null for commands
+without a count. `many` returns a plain row array. Result modes never add `LIMIT` or `RETURNING`.
+A returned-row mismatch does not undo an autocommitted write. Use `affectedRows` for write limits
+that roll back on failure.
 
 Reusable queries are ordinary functions. Accept a `QueryClient` and named object inputs when useful;
 both `Database` and `Transaction` implement `QueryClient`. Keep result annotations on the SQL and
@@ -70,10 +68,12 @@ The `sql` tag binds ordinary interpolations as `$1`, `$2`, etc. Never quote inte
 manual parameter placeholders inside templates. Every public query executes one statement, including
 parameterless queries.
 
-Values use pg's conversions, including arrays, JSON, dates, and `undefined` becoming SQL null. Cast
-standalone parameter projections to the intended SQL type: `SELECT ${1.5} AS value` returns text,
-while `SELECT ${1.5}::float8 AS value` returns a JavaScript number. PostgreSQL infers parameter
-types from SQL context.
+Values use Postgres.js's native conversions. An undefined bound parameter is rejected. Objects and
+arrays destined for JSON columns are serialized by the driver; passing pre-serialized JSON text
+stores a JSON string. Arrays bound to PostgreSQL array columns retain null elements. SQL context
+establishes array and JSON parameter types; cast standalone parameters to the intended SQL type.
+Tenon uses the driver's raw-query path with the extended protocol so every public call executes
+one statement, including calls without parameters.
 
 Use an array parameter for a set of values:
 
@@ -192,13 +192,13 @@ To reset an update field to its default, write `column = DEFAULT` in the
 surrounding SQL. Put arithmetic and `excluded.column` expressions there too; these helpers accept
 values only, with no expression/default sentinel.
 
-A compiled query, including surrounding interpolations, is limited to 65,535 bound parameters.
+A compiled query accepts at most 65,533 bound parameters, including surrounding interpolations.
 Tenon rejects larger queries and does not split them automatically. Choose batch sizes and
 transaction boundaries in the caller. Helper validation errors identify invalid rows/columns
 without printing cell values.
 
 See the [mutation cookbook](mutations.md) for common patterns and
-[checking mutation fragments](#checking-mutation-fragments) for optional SQL checking.
+[query inspection](#query-inspection) for checking completed statements.
 
 ## Transactions, guarded writes, and errors
 
@@ -232,7 +232,7 @@ before data queries and `SET LOCAL statement_timeout = '5s'`. Manual savepoints 
 through SQL; reserve `tenon_affected_rows_` names for Tenon. Direct BEGIN/COMMIT/ROLLBACK boundaries
 are owned by `transaction`.
 
-SQL errors retain pg's codes and details. Invalid inputs and returned-row mismatches throw ordinary
+SQL errors retain Postgres.js's codes and details. Invalid inputs and returned-row mismatches throw ordinary
 `Error` objects. `AffectedRowsError` carries `expected`, `actual`, `command`, and code
 `TENON_AFFECTED_ROWS_MISMATCH` or `TENON_AFFECTED_ROWS_UNSUPPORTED`. When both work and cleanup
 fail, `AggregateError` preserves both failures. A lost commit acknowledgment can leave the outcome
@@ -247,8 +247,8 @@ transaction has committed.
 
 `generateDefinitions({ connection, namespace?, onWarning? })` returns TypeScript source for the
 connected schema. It does not need migration files or history. Table type generation is optional.
-SafeQL reads the database directly and does not require these generated files; they provide
-reusable row and mutation input types. The CLI writes that source atomically. This command checks
+Generated files provide reusable row and mutation input types. The CLI writes that source
+atomically. This command checks
 the existing file without rewriting it:
 
 ```sh
@@ -276,24 +276,25 @@ named aliases preserve exact SQL names; the generated `users` alias also means `
 Views, foreign tables, and attached partitions use query-specific types. A missing namespace
 fails; an existing empty schema is valid.
 
-| PostgreSQL type                                | Returned value                                | Generated write input                 |
-| ---------------------------------------------- | --------------------------------------------- | ------------------------------------- |
-| smallint, integer, oid, real, double precision | `number`                                      | `number`                              |
-| bigint                                         | `string`                                      | `string \| bigint`                    |
-| numeric                                        | `string`                                      | `string \| number`                    |
-| boolean                                        | `boolean`                                     | `boolean`                             |
-| text, name, varchar, char, uuid, time, timetz  | `string`                                      | `string`                              |
-| date, timestamp, timestamptz                   | `Date \| number` (numbers include infinities) | `Date \| string`                      |
-| enum                                           | String literal union                          | Same union; `never` for an empty enum |
-| json, jsonb                                    | `unknown`                                     | Serialized JSON text (`string`)       |
-| bytea                                          | `Buffer`                                      | `Buffer`                              |
+| PostgreSQL type                                | Returned value                           | Generated write input                   |
+| ---------------------------------------------- | ---------------------------------------- | --------------------------------------- |
+| smallint, integer, oid, real, double precision | `number`                                 | `number`                                |
+| bigint                                         | `string`                                 | `string \| bigint`                      |
+| numeric                                        | `string`                                 | `string \| number`                      |
+| boolean                                        | `boolean`                                | `boolean`                               |
+| text, name, varchar, char, uuid, time, timetz  | `string`                                 | `string`                                |
+| date, timestamp, timestamptz                   | `Date` (infinities become invalid dates) | `Date \| string`                        |
+| enum                                           | String literal union                     | Same union; `never` for an empty enum   |
+| json, jsonb                                    | `unknown`                                | `Exclude<JSONValue, null>` (from Tenon) |
+| bytea                                          | `Buffer`                                 | `Buffer`                                |
 
 For returned rows, nullable columns add null. Domains use verified underlying mappings and the
 column's own nullability. Unverified types warn and become `unknown`. Verified arrays use
 `PgArray<T> = (T | null | PgArray<T>)[]` for null elements and multiple dimensions. Numeric arrays
-contain numbers and can lose precision; cast to text[] for exact values. Enum arrays and arrays of
-domains are unverified. Finite dates and timestamps without time zone use Node's local timezone.
-Custom pg parsers need matching application types.
+contain exact strings, like numeric scalars. Enum arrays and arrays of
+domains are unverified. Date-only values use the driver's UTC date parsing; timestamps without time zone use Node's local timezone.
+Infinite timestamps remain invalid `Date` objects: check validity before using date methods.
+Custom Postgres.js parsers need matching application types.
 
 ### Insert and update inputs
 
@@ -323,9 +324,10 @@ Computed columns and `GENERATED ALWAYS` identity columns cannot receive values. 
 primary keys remain writable. Use `Pick` or `Omit` for application-specific restrictions and keep
 expressions, `DEFAULT`, and special identity overrides in SQL.
 
-Write representations in the table above also apply to verified array elements. Serialize JSON
-with `JSON.stringify`, including JSON arrays; a JSON string containing `null` differs from SQL null.
-Use timestamp strings for infinities. Unverified non-null write values use `never` and warn;
+Write representations in the table above also apply to verified array elements. Pass JavaScript JSON
+values directly; do not pre-serialize them. A bound null is SQL null. To construct JSON null explicitly,
+use SQL such as `'null'::jsonb`. Native temporal serialization requires finite dates; strings such as
+`'infinity'` are not valid bound date values. Use SQL literals for these PostgreSQL values. Unverified non-null write values use `never` and warn;
 nullable fields still accept null. Supply an application-owned replacement when needed, for example
 `Omit<Rows.Insert['events'], 'delay'> & { delay: string }` for a reviewed interval-text input.
 
@@ -333,252 +335,26 @@ Apply these types through annotations, `satisfies`, or helper generic arguments 
 `sql.insertValues<NewProfile>(input)`. They check shapes and representations, not authorization,
 constraints, JSON contents, or nonempty inputs. Optional fields accept explicit `undefined`,
 including with `exactOptionalPropertyTypes`. Selected columns can discard required fields; see
-the [cookbook example](mutations.md#input-types-sql-checking-and-runtime-validation).
+the [cookbook example](mutations.md#input-types-and-runtime-validation).
 
-## SQL checking with SafeQL
+## Query inspection
 
-SafeQL checks SQL against a real PostgreSQL schema and infers result types. ESLint runs that check
-on your source files. Tenon runs the queries in the application; it does not import or run either
-tool during query execution.
+`describeQuery({ connection, query, session?, timeouts? })` accepts a PostgreSQL connection URI
+and a finished SQL string or `{ text }` query object. It returns parameter/result type metadata,
+source constraints, conservative row declaration, effective session context, and coded findings.
+It does not bind query values, execute the inspected statement, or verify `sql<Row>`.
 
-Configure [SafeQL normally](https://safeql.dev/api/). Tenon's optional `safeql` entry point exports
-two objects:
+`tenon describe <query.sql>` prints that report as JSON using `DATABASE_URL`. Session flags are
+`--role`, `--search-path`, and `--time-zone`. Timeout flags are `--connect-timeout-ms`,
+`--statement-timeout-ms`, and `--lock-timeout-ms`; defaults are 3000, 5000, and 1000 ms.
 
-- `safeqlPlugin` is a SafeQL plugin descriptor. Add it to each Tenon connection's `plugins` list. It
-  translates constant fragments, official mutation helpers, and identifiers, preserves parameter
-  behavior, and supplies pg result mappings. SafeQL owns database analysis and annotation fixes.
-- `eslintPlugin` supplies `tenon/check-composition`. Register it in ESLint and enable the rule to
-  report queries that the adapter cannot resolve, including runtime-built fragments and escaped
-  outer templates.
+Inspection owns a separate connection and uses Postgres.js mappings. Match the application's role
+and settings; temporary tables, uncommitted changes, transaction-local settings, and custom parsers
+are not inherited. Result nullability remains unknown. CLI exit 0 means description succeeded,
+including reports with unresolved issues; execution and type annotations remain unchecked.
 
-Use both. The adapter skips unsupported queries; the companion rule makes those exclusions visible
-as ordinary, individually suppressible lint errors. Neither replaces or wraps SafeQL's rule.
-
-### Install and configure
-
-Install the checking tools as application development dependencies, reusing the application's
-existing TypeScript installation:
-
-```sh
-npm install --save-dev eslint typescript-eslint @ts-safeql/eslint-plugin
-```
-
-These are development dependencies. Reuse your existing type-aware parser configuration and a
-TypeScript version supported by the lint toolchain. Tenon's database runtime does not load them.
-
-For a project with `src/**/*.ts` and a `tsconfig.json`:
-
-```js
-// eslint.config.mjs
-import { defineConfig } from 'eslint/config';
-import safeql from '@ts-safeql/eslint-plugin/config';
-import tseslint from 'typescript-eslint';
-import { safeqlPlugin, eslintPlugin } from '@kequtech/tenon-orm/safeql';
-
-const databaseUrl = process.env.DATABASE_URL;
-if (!databaseUrl) throw new Error('DATABASE_URL is required for SQL checking');
-
-export default defineConfig({
-  files: ['src/**/*.ts'],
-  languageOptions: {
-    parser: tseslint.parser,
-    parserOptions: { projectService: true },
-  },
-  plugins: { tenon: eslintPlugin },
-  rules: { 'tenon/check-composition': 'error' },
-  extends: [
-    safeql.configs.connections({
-      databaseUrl,
-      plugins: [safeqlPlugin],
-      targets: [{ tag: 'sql' }],
-    }),
-  ],
-});
-```
-
-Add these settings to your existing ESLint setup if you have one; reuse its type-aware parser
-configuration. `projectService` uses the nearest TypeScript project for each file. Supply
-`DATABASE_URL` through your application's environment setup and point it at a development/test
-database with migrations applied. This example does not load `.env` files.
-
-`targets` selects the SQL tag spelling. If you alias `sql`, add the alias to the targets. For a
-single database, `targets: [{ tag: { regex: '.*' } }]` selects all tags; Tenon's adapter filters
-that down to actual Tenon queries, including aliases and object properties. Neither the adapter nor
-the rule executes application code.
-
-Reuse the application's lint scripts. If none exist, add these, adjusting file selection as needed.
-They run all enabled ESLint rules, and `lint:fix` can change non-SQL code too:
-
-```json
-{
-  "scripts": {
-    "lint": "eslint \"src/**/*.ts\"",
-    "lint:fix": "eslint \"src/**/*.ts\" --fix"
-  }
-}
-```
-
-### Generate and check annotations
-
-For an existing persistence layer, start with the [incremental audit workflow](adoption-guide.md#adopt-sql-checking-incrementally).
-It covers a separate SQL lint command, fix previews, and application refinements.
-
-Write a query without a result annotation:
-
-```ts
-const query = sql`SELECT id, email FROM public.users WHERE id = ${id}`;
-```
-
-Run `npm run lint:fix`. SafeQL can write `sql<{ id: number; email: string }>` using the connected
-schema. It can also repair an incorrect annotation. Review the changes, run TypeScript and database
-tests, and commit the result. Without an annotation, Tenon's result fields stay `unknown`.
-
-Run `npm run lint` in CI without `--fix`. Missing/incorrect annotations, invalid SQL, and
-unsupported composition fail the check without rewriting files. After schema changes, run the
-development [`db:migrate` script](human-guide.md#create-a-table) before checking queries. Inspect
-SQL mistakes before accepting types generated from an unintended query. ESLint's fix command may
-also apply other enabled rules.
-
-### Configuration choices and multiple databases
-
-All connection, target, and override options belong to SafeQL. There is no Tenon-specific
-configuration wrapper or separate database setting. Keep `safeqlPlugin` on each Tenon connection:
-without it, SafeQL does not resolve Tenon fragments and can infer different parameter types from
-those returned at runtime.
-
-For multiple databases, pass a connection array to `safeql.configs.connections`. With
-`usersDatabaseUrl` and `billingDatabaseUrl` set to your development/test URLs, replace the single
-connection in the setup above with:
-
-```js
-safeql.configs.connections([
-  {
-    databaseUrl: usersDatabaseUrl,
-    plugins: [safeqlPlugin],
-    targets: [{ tag: 'usersSql' }],
-  },
-  {
-    databaseUrl: billingDatabaseUrl,
-    plugins: [safeqlPlugin],
-    targets: [{ tag: 'billingSql' }],
-  },
-]);
-```
-
-Queries can then share a file:
-
-```ts
-import { sql as usersSql, sql as billingSql } from '@kequtech/tenon-orm';
-
-const users = usersSql`SELECT id, email FROM public.users`;
-const invoices = billingSql`SELECT id, total FROM public.invoices`;
-```
-
-The aliases only select a checker connection; they are the same runtime `sql` function. Execute each
-query with the correct `createTenon` instance. Neither SafeQL nor Tenon's composition rule follows
-`db.query` calls to infer which database will execute a query. Keep connection targets distinct so a
-query is checked against its intended database.
-
-If queries are already separated by file, keep the `sql` tag and use an ESLint config object per
-file group, each extending its own `safeql.configs.connections({ ... })`. Use non-overlapping
-`files` patterns when database settings differ. Normal SafeQL configurations for other libraries can
-coexist; add Tenon's adapter only to connections checking Tenon queries.
-
-Qualify same-named tables with their schemas, for example `SELECT id FROM billing.accounts`, so
-the intended relation is explicit in both checking and execution.
-
-### Supported SQL and limitations
-
-Within the configured targets, the adapter recognizes Tenon's `sql` export through imports, local
-aliases, namespace imports, and object properties that retain its TypeScript type. It checks
-constant fragments and `sql.join` with inline nonempty array literals, including nested fragments.
-Separators and `identifier()` names must resolve to literal strings or const string initializers.
-Values use the same parameter placeholders in static checking and execution, inside or outside
-fragments. PostgreSQL infers their types from SQL context; Tenon does not add casts based on
-JavaScript types.
-
-The checker follows const fragment initializers, including imported constants with inspectable
-source. It does not inspect function bodies, substitute helper arguments/defaults, or choose
-JavaScript conditional branches. Function-generated fragments and conditional SQL structure are
-unsupported even when a particular helper appears simple or a condition is a literal. Mutable
-fragment references and dynamic identifiers are also unsupported. Arrays stored in variables or
-assembled in loops are valid `sql.join` inputs at runtime but are not analyzed. Ordinary value
-expressions remain bound parameters; calls that produce data for an official mutation helper can
-use its explicit column-list contract.
-
-`tenon/check-composition` points to the first unsupported interpolation in each query and explains
-why it cannot be checked. For example, opaque mutation inputs need an inline column list, while
-fragment-returning functions remain outside static analysis. Errors reached through shared constants
-are reported at the consuming query. ESLint suppressions must cover the reported expression's line;
-a scoped disable/enable can cover one multiline query.
-
-Reusable authorization and other application policy can still live in fragment-returning functions
-at runtime. Keep that policy centralized and cover its behavior with database tests. Suppress
-`tenon/check-composition` only on the particular query, with a reason, when its variants are tested.
-Do not duplicate policy merely to obtain static coverage. SQL and annotation errors in checkable
-queries continue to come from `@ts-safeql/check-sql`.
-
-Ordinary functions containing complete `sql` templates remain checkable. Each template is analyzed
-where it is written, including constant fragments defined in that function:
-
-```ts
-function findUsers(email: string) {
-  const predicate = sql.fragment`email = ${email}`;
-  return sql`SELECT id FROM users WHERE ${predicate}`;
-}
-```
-
-Use literal line breaks in `sql` templates and bind string values with `${value}`. The composition
-rule rejects JavaScript escapes such as `\n` or `\'` in the outer template: SafeQL reads raw
-template text, while Tenon executes decoded JavaScript text. This diagnostic prevents checking
-different SQL from what runs. Escapes inside bound values are fine; constant fragments are decoded
-by Tenon's adapter before checking.
-
-This checks SQL structure and returned-row annotations, not JavaScript input compatibility or
-runtime values. For example, a boolean passed to an integer comparison is rejected by PostgreSQL at
-execution, not by this lint rule. Keep typed function parameters, validate external inputs, and test
-database behavior. Explicit SQL casts are checked as part of the SQL.
-
-The adapter supplies scalar mappings for bigint/numeric strings, unknown JSON, and `Date | number`
-temporal values (including infinities). For recursive arrays, use column overrides matching
-generated types, for example:
-
-```js
-safeql.configs.connections({
-  databaseUrl,
-  plugins: [safeqlPlugin],
-  targets: [{ tag: 'sql' }],
-  overrides: {
-    columns: { 'users.tags': 'PgArray<string>', 'users.amounts': 'PgArray<number>' },
-  },
-});
-```
-
-Import `PgArray` from generated definitions in files using that annotation. Numeric arrays use
-numbers with pg's default parser, even though numeric scalars use strings. Array dimensions/null
-elements, custom parsers, and unverified PostgreSQL types need appropriate overrides and database
-tests; a checker cannot infer your parser policy. Column keys are `Table.column`, so duplicate table
-names across schemas need care. Type overrides merge with the adapter's defaults. `unsafeSql` is
-outside static checking, and arbitrary JSON still needs application validation.
-
-### Checking mutation fragments
-
-SafeQL recognizes these official helpers directly through their Tenon function declarations,
-including aliases. It never analyzes their implementation or executes application data builders.
-Without an explicit column list, checking accepts inline object literals and inline insert arrays
-of object literals. Keys must be literal names; object spreads, computed keys, methods, accessors,
-and objects stored in variables require an explicit inline column list. Existing constant string
-resolution works for entries of that list; column arrays stored in variables are unsupported.
-
-For runtime inputs with explicit columns, the checker analyzes a representative nonempty insert
-row or assignment list containing **all selected columns**. This checks column references, SQL
-composition, conflict clauses, and `RETURNING` annotations. Runtime omission/default decisions and
-batch length do not require interpreting JavaScript. The check is conservative: an optional
-selected column is checked even when a particular runtime call omits it. It does not establish
-nonempty input, valid runtime values, successful constraints, or every default's behavior; runtime
-validation and database tests cover those contracts. Unknown inputs without explicit columns
-produce `tenon/check-composition` diagnostics. See the [mutation cookbook](mutations.md) for
-empty patches, conditional upserts, arrays, and batching.
+See [query inspection](query-inspection.md) for public types, finding codes, session behavior, and
+the workflow combining inspection with persistent application database tests.
 
 ## Command reference
 

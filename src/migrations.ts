@@ -46,24 +46,24 @@ async function execute(
     if (!selected.length) {
       return [];
     }
-    await client.query(`CREATE SCHEMA IF NOT EXISTS ${quote(namespace)}`);
+    await client.unsafe(`CREATE SCHEMA IF NOT EXISTS ${quote(namespace)}`);
     await createHistoryTable(client, namespace);
     const completed: string[] = [];
     for (const file of selected) {
       try {
-        await client.query('BEGIN');
+        await client.unsafe('BEGIN');
         // Match the string-literal rules used by the authored migration scanner.
-        await client.query('SET LOCAL standard_conforming_strings TO on');
-        await client.query(`SET LOCAL search_path TO ${quote(namespace)}, pg_catalog`);
-        await client.query(direction === 'up' ? file.up : file.down!);
+        await client.unsafe('SET LOCAL standard_conforming_strings TO on');
+        await client.unsafe(`SET LOCAL search_path TO ${quote(namespace)}, pg_catalog`);
+        await client.unsafe(direction === 'up' ? file.up : file.down!);
         if (direction === 'up') {
           await recordMigration(client, namespace, file);
         } else {
-          await client.query(`DELETE FROM ${qualified(namespace, migrationTable)} WHERE id = $1`, [
+          await client.unsafe(`DELETE FROM ${qualified(namespace, migrationTable)} WHERE id = $1`, [
             file.id,
           ]);
         }
-        const result = await client.query('COMMIT');
+        const result = await client.unsafe('COMMIT');
         if (result.command !== 'COMMIT') {
           throw new Error('The migration transaction was rolled back.');
         }

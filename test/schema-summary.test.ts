@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
-import { Pool } from 'pg';
+import postgres from 'postgres';
 import { generateDefinitions, migrate } from '../src/index.js';
 import { qualified, quote } from '../src/sql.js';
 import {
@@ -9,7 +9,7 @@ import {
   migrationProject,
 } from './helpers/database.js';
 import { checkGeneratedTypes, typeAssertions } from './helpers/generation.js';
-const pool = new Pool({ connectionString: connection });
+const pool = postgres(connection);
 const project = migrationProject(pool);
 before(() => assertTestDatabase(pool));
 after(() => pool.end());
@@ -71,12 +71,12 @@ test('schema comments describe SQL constraints, defaults, identity settings and 
       assert.equal(await generateDefinitions({ ...options, onWarning: () => {} }), source);
 
       // Advancing a sequence changes data, not the declared schema summary.
-      await pool.query(
+      await pool.unsafe(
         `INSERT INTO ${qualified(options.namespace, 'Detail')} (label) VALUES ('first')`,
       );
       assert.equal(await generateDefinitions({ ...options, onWarning: () => {} }), source);
       // A metadata-only change must still invalidate the generated artifact.
-      await pool.query(
+      await pool.unsafe(
         `ALTER TABLE ${qualified(options.namespace, 'Detail')} ALTER COLUMN active SET DEFAULT true`,
       );
       const changed = await generateDefinitions({ ...options, onWarning: () => {} });
@@ -92,8 +92,8 @@ test('schema comments describe SQL constraints, defaults, identity settings and 
 
 test('schema deparsing preserves external references and restores borrowed connection settings', async () => {
   await project({}, async (external) => {
-    await pool.query(`CREATE SCHEMA ${quote(external.namespace)}`);
-    await pool.query(
+    await pool.unsafe(`CREATE SCHEMA ${quote(external.namespace)}`);
+    await pool.unsafe(
       `CREATE TABLE ${qualified(external.namespace, 'External')} (id integer PRIMARY KEY)`,
     );
     await project(
@@ -115,19 +115,21 @@ test('schema deparsing preserves external references and restores borrowed conne
           source,
           /CREATE INDEX "odd ON target.index" ON "Local" USING btree \(external_id\)/,
         );
-        const configured = new Pool({
-          connectionString: connection,
+        const configured = postgres(connection, {
           max: 1,
-          options:
-            '-c search_path=public -c quote_all_identifiers=on -c standard_conforming_strings=off',
+          connection: {
+            search_path: 'public',
+            quote_all_identifiers: 'on',
+            standard_conforming_strings: 'off',
+          },
         });
         const settings = `SELECT current_setting('search_path') AS path,
         current_setting('quote_all_identifiers') AS quoted,
         current_setting('standard_conforming_strings') AS strings`;
         try {
-          const before = (await configured.query(settings)).rows;
+          const before = await configured.unsafe(settings);
           assert.equal(await generateDefinitions({ ...options, connection: configured }), source);
-          assert.deepEqual((await configured.query(settings)).rows, before);
+          assert.deepEqual([...(await configured.unsafe(settings))], [...before]);
         } finally {
           await configured.end();
         }
@@ -188,13 +190,13 @@ test('partition indexes and foreign keys describe logical roots without physical
       );
       assert.equal(source.match(/FOREIGN KEY/g)?.length, 1);
       assert.ok(!source.includes('LedgerToday'));
-      await pool.query(`CREATE TABLE ${qualified(options.namespace, 'LedgerTomorrow')}
+      await pool.unsafe(`CREATE TABLE ${qualified(options.namespace, 'LedgerTomorrow')}
       PARTITION OF ${qualified(options.namespace, 'Ledger')} FOR VALUES FROM (100) TO (200)`);
       assert.equal(await generateDefinitions(options), source);
       // Detach first so PostgreSQL can remove its internal referencing-FK clones.
-      await pool.query(`ALTER TABLE ${qualified(options.namespace, 'Ledger')}
+      await pool.unsafe(`ALTER TABLE ${qualified(options.namespace, 'Ledger')}
       DETACH PARTITION ${qualified(options.namespace, 'LedgerTomorrow')}`);
-      await pool.query(`DROP TABLE ${qualified(options.namespace, 'LedgerTomorrow')}`);
+      await pool.unsafe(`DROP TABLE ${qualified(options.namespace, 'LedgerTomorrow')}`);
       assert.equal(await generateDefinitions(options), source);
     },
   );

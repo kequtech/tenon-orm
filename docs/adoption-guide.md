@@ -22,12 +22,11 @@ queries or generate types; keep the existing migration runner if that is the int
 
 3. Replace queries with parameterized SQL in ordinary functions with named object inputs where
    useful. Preserve each caller's projection, null handling, ordering, and transaction behavior.
-   Generated types describe pg values: check bigint/numeric strings, dates, JSON, and arrays when
+   Generated types describe Postgres.js values: check bigint/numeric strings, dates, JSON, and arrays when
    the old ORM transformed them.
-4. If using optional SQL checking, configure the
-   [SafeQL integration](reference.md#sql-checking-with-safeql) and follow the
-   [incremental audit workflow](#adopt-sql-checking-incrementally) below before accepting generated
-   annotations. Run tests against a dedicated test database. Verify
+4. Inspect completed queries and test their behavior using the
+   [inspection workflow](#inspect-queries-during-adoption) below. Declare result types explicitly
+   and run tests against a dedicated test database. Verify
    writes and rollback, relationships, validation, and any hooks you moved into application code or
    SQL. A schema-preserving first release makes application rollback easier.
 5. Remove the old runtime dependency and unused generated code after its callers are gone. Keep the
@@ -50,81 +49,25 @@ in SQL and remove the local utilities after their callers move. Generated `Rows.
 `Rows.Update` types can replace handwritten table inputs; retain application-specific refinements
 and validation. Run the existing write and rollback workflows. See the [mutation cookbook](mutations.md).
 
-## Adopt SQL checking incrementally
+## Inspect queries during adoption
 
-For an existing application, including Next.js, SQL checking can run as a separate audit while the
-normal lint/build commands keep their existing database requirements. Extend the existing flat
-ESLint configuration rather than replacing it. After installing the
-[checking dependencies](reference.md#install-and-configure), a single-database setup can use:
+Use `describeQuery` from `@kequtech/tenon-orm` on the completed query object, or
+`npx tenon describe query.sql` on a SQL file. Inspection is available with the normal Tenon
+installation and uses no TypeScript compiler API. It works with helpers and runtime-built
+fragments because it receives the final SQL. See [query inspection](query-inspection.md).
 
-```js
-// eslint.sql.config.mjs
-import { defineConfig } from 'eslint/config';
-import baseConfig from './eslint.config.mjs';
-import safeql from '@ts-safeql/eslint-plugin/config';
-import tseslint from 'typescript-eslint';
-import { safeqlPlugin, eslintPlugin } from '@kequtech/tenon-orm/safeql';
+Reuse the application's connection URI and session configuration; compare the reported role,
+search path, and timezone with execution. Inspection uses a separate connection and Postgres.js
+read mappings. Custom parsers and transaction-local state remain application responsibilities.
 
-const databaseUrl = process.env.DATABASE_URL;
-if (!databaseUrl) throw new Error('DATABASE_URL is required for SQL checking');
+Pair descriptions with durable database tests of actual rows and effects. For each converted
+query, cover the meaningful filter/ownership branches, null relationships, JSON structure, empty
+results, ordering/cursors, and transaction failure/replay behavior as applicable. Describe's success
+does not verify a TypeScript annotation or prove that execution is permitted or succeeds. Preserve
+existing authorization policy and transaction boundaries while making queries available to tests.
 
-export default defineConfig(baseConfig, {
-  files: ['src/**/*.ts', 'src/**/*.tsx'],
-  languageOptions: {
-    parser: tseslint.parser,
-    parserOptions: { projectService: true },
-  },
-  plugins: { tenon: eslintPlugin },
-  rules: { 'tenon/check-composition': 'error' },
-  extends: [
-    safeql.configs.connections({
-      databaseUrl,
-      plugins: [safeqlPlugin],
-      targets: [{ tag: { regex: '.*' } }],
-    }),
-  ],
-});
-```
-
-Preserve existing type-aware parser settings where configured. The broad target above lets Tenon
-recognize aliases; use distinct targets for [multiple databases](reference.md#configuration-choices-and-multiple-databases).
-The example does not load environment files. Use the application's existing environment loader
-and URL selection to supply its migrated development/test database through `DATABASE_URL`.
-
-```json
-{
-  "scripts": {
-    "lint:sql": "eslint --config eslint.sql.config.mjs \"src/**/*.{ts,tsx}\""
-  }
-}
-```
-
-Start with `npm run lint:sql`. Keep both checking rules enabled and distinguish the findings:
-
-- SQL errors identify problems in reconstructed SQL; review them before accepting inferred types.
-- Missing/mismatched annotations may reflect an outdated type, a deliberate application refinement,
-  or a checker limitation. They are not all demonstrated application bugs.
-- `tenon/check-composition` means SQL analysis was skipped. Add inline selected columns for opaque
-  mutation inputs where useful. Keep reusable authorization policy centralized when its fragments
-  remain unsupported, with database tests for runtime variants.
-
-Preview fixes on a small module first, without writing source. Invoke ESLint directly to select
-one file, since the script above already supplies a source glob:
-
-```sh
-npx eslint --config eslint.sql.config.mjs src/database/profiles.ts --fix-dry-run --format json
-```
-
-Review the proposed annotations, apply selected changes deliberately, and run TypeScript and
-database tests. Broader inferred types may require validation where raw database values enter the
-application. For example, require a finite `Date` before calling `.getTime()`, validate structured
-JSON from `unknown`, and justify CHECK-constrained string refinements with matching schema checks
-or a reviewed column override. Do not globally map timestamps to `Date`: pg can return numeric
-infinities. See [checker mappings](reference.md#supported-sql-and-limitations).
-
-Unsupported queries have not had their SQL verified. Keep database tests for their runtime variants
-and use explained suppressions only where appropriate. Once the intended scope passes, make SQL
-checking a required CI step. Fix commands can also apply other enabled ESLint rules.
+Keep these tests in routine validation. A described query instance does not cover untested source
+queries or detect stale annotations elsewhere.
 
 ## Move migration ownership to Tenon
 

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { Pool } from 'pg';
+import { mockDriver, result } from './helpers/driver.js';
 import type { QueryEvent } from '../src/index.js';
 import { AffectedRowsError, createTenon, identifier, sql, unsafeSql } from '../src/index.js';
 
@@ -100,11 +100,10 @@ test('composition rejects empty lists, unsupported separators, executable querie
 });
 
 test('diagnostics report metadata without SQL or values and cannot change query outcomes', async (t) => {
-  const pool = new Pool();
   const driverError = Object.assign(new Error('private details'), { code: '23505' });
-  t.mock.method(pool, 'query', async (config: { text: string }) => {
-    if (config.text.includes('broken')) throw driverError;
-    return { command: 'SELECT', rowCount: 1, rows: [{ value: 7 }], fields: [], oid: 0 };
+  const { sql: pool } = mockDriver(t, async (text) => {
+    if (text.includes('broken')) throw driverError;
+    return result('SELECT', 1, [{ value: 7 }]);
   });
   const events: QueryEvent[] = [];
   const db = createTenon({
@@ -142,7 +141,7 @@ test('diagnostics report metadata without SQL or values and cannot change query 
       },
     ]) {
       const observed = createTenon({ connection: pool, onQuery });
-      assert.equal((await observed.query(sql`SELECT 1`)).rowCount, 1);
+      assert.equal((await observed.query(sql`SELECT 1`)).count, 1);
       await new Promise((resolve) => setImmediate(resolve));
       await observed.close();
     }

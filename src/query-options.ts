@@ -1,4 +1,4 @@
-import type { QueryResult, QueryResultRow } from 'pg';
+import type { QueryResult } from './connection.js';
 import type { AffectedRowsConstraint } from './affected-rows.js';
 import { validateAffectedRows } from './affected-rows.js';
 import type { UnknownRow } from './query.js';
@@ -11,10 +11,7 @@ export interface QueryOptions {
   /** Optional diagnostic label. No SQL or input values are sent to observers. */
   readonly label?: string;
 }
-export type QueryOutput<
-  Row extends QueryResultRow,
-  Mode extends QueryReturnMode,
-> = Mode extends 'native'
+export type QueryOutput<Row extends object, Mode extends QueryReturnMode> = Mode extends 'native'
   ? QueryResult<Row>
   : Mode extends 'many'
     ? Row[]
@@ -54,12 +51,12 @@ export function queryOutput(
   result: QueryResult<UnknownRow>,
 ): object | undefined {
   if (options.returns === 'native') return result;
-  if (options.returns === 'many') return result.rows;
+  if (options.returns === 'many') return [...result];
   const expected = options.returns === 'oneOrNone' ? 'at most one row' : 'exactly one row';
-  if (result.rows.length > 1 || (options.returns === 'one' && result.rows.length === 0)) {
+  if (result.length > 1 || (options.returns === 'one' && result.length === 0)) {
     throw new Error(
-      `${options.label ?? 'Query'} expected ${expected}, but returned ${result.rows.length} rows.`,
+      `${options.label ?? 'Query'} expected ${expected}, but returned ${result.length} rows.`,
     );
   }
-  return result.rows[0];
+  return result[0];
 }

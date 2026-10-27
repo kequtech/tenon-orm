@@ -14,6 +14,11 @@ npm run check
 `npm run typecheck`, `npm run build`, or `npm run test:consumer` for narrower checks. Run
 `npm run format` before the final check.
 
+Run `npm run test:describe` for focused query-inspection and timeout tests. After building, use
+`node dist/cli.js describe test/pilots/query.sql` with `DATABASE_URL` to inspect a SQL file.
+The [Mail/Identity pilots](test/pilots/README.md) run separately against application source through
+`npm run test:pilots -- --applications /path/to/monorepo`.
+
 ## Database tests
 
 Tests require the dedicated database `tenon_orm_test`. Create it once if necessary. The default
@@ -28,21 +33,16 @@ The suite checks the name and server version before changes, creates temporary n
 removes them afterward. Connection-failure tests terminate only their own test backends. Scripts do
 not load `.env` automatically.
 
+Inspection context tests also create and remove temporary restricted roles. The test connection
+needs permission to create those roles; the configured local and CI postgres user has it.
+
 CI tests PostgreSQL 16 and 18 with matching `pg_dump` clients. The consumer test packs and installs
 the actual npm artifact, compiles its API with TypeScript 6 and 7, exercises application
 upgrades/adoption/recovery, and checks production imports in a fresh production-only installation.
-It prefers npm's cache and downloads missing dependencies or metadata. SafeQL tests use TypeScript 6 for its linting
-toolchain. They exercise normal SafeQL configuration and the companion ESLint rule, annotation
-generation and repair, static fragments, aliases, and explicit rejection of unsupported dynamic
-composition. Generated result annotations are also compiled and compared with actual PostgreSQL
-results. The checker preserves runtime parameter placeholders; PostgreSQL owns parameter type
-inference. Packed consumers also load and run both integrations; production imports run without
-linting dependencies.
-
-Connection-routing tests use separate search paths in the existing test database. They check
-independent file scopes, separate tag targets within one file, inferred types, wrong-schema errors,
-and explicitly qualified same-named tables. Packed consumers also typecheck the adapter descriptor
-and ESLint plugin against their hosts' configuration APIs.
+It prefers npm's cache and downloads missing dependencies or metadata. Inspection tests compare
+database metadata with actual query results, cover dynamic composition, and verify session settings,
+timeouts, and resource cleanup. Generated row and mutation input types are compiled against both
+supported TypeScript versions. Production API and CLI checks run without development dependencies.
 
 Test observable behavior and compiler contracts. Keep regression cases focused on the failure they
 prevent. Do not preserve assertions about removed APIs. The generated fixture and lockfile are
@@ -62,19 +62,29 @@ do not edit an application's applied history.
 
 ## Source and release
 
-Public exports are in `src/index.ts`. Runtime execution lives in `client.ts`, `connection.ts`, and
-`transaction.ts`. Query options and result modes live in `query-options.ts`; reusable application
-queries are ordinary functions. Generation and migrations each have their own directory for
-catalog/SQL/file handling. The optional `safeql` export supplies a normal SafeQL adapter and a
-companion ESLint rule; `src/safeql/` contains their shared conservative composition resolver. Keep
-that tooling out of the runtime entry point. `query.ts` keeps fragment text and parameter tokens
-separate until final assembly. `dist/` and `.test-dist/` are disposable; build removes both before
-compiling. `npm run clean` removes them independently.
+Public exports are in `src/index.ts`. `query.ts` compiles detached SQL and fragments;
+`mutations.ts` builds object-based write fragments. `client.ts` handles public query options and
+results; `transaction.ts` owns callback boundaries and guarded-write savepoints.
+
+`connection.ts` creates clients and binds compiled queries. Driver-specific behavior is contained
+in `driver/`: `array.ts` installs SQL NULL array parsing, `types.ts` supplies shared type mappings,
+`lifecycle.ts` observes connection closures, and `session.ts` reserves and releases guarded sessions.
+Keep the `postgres` dependency pinned. [CONSIDERATIONS.md](CONSIDERATIONS.md) records driver
+workarounds, upstream issues, and the behavior to verify before an upgrade.
+
+Generation and migrations have separate catalog, file, and SQL modules. `generation/output.ts`
+handles writing and checking generated files. Public query inspection starts in `describe.ts`;
+`inspection/` separates input validation, session limits, catalog reads, report formatting, and CLI
+flags. The CLI dispatches these operations without implementing their database behavior.
+
+`dist/` and `.test-dist/` are disposable; build removes both before compiling. `npm run clean`
+removes them independently.
 
 Before publishing, run the full checks and inspect both PostgreSQL CI results. Review the source and
 `npm pack --dry-run`. The artifact includes compiled code, declarations, README, license, and the
 complete `docs/` folder. This contributing guide stays in the repository and is excluded from the
-npm artifact. Update package version and lockfile together. Publishing is a separate, explicit
+npm artifact. Keep the root `CHANGELOG.md` current and included in the npm package. Update package
+version and lockfile together. Publishing is a separate, explicit
 action; `prepublishOnly` runs the full suite and requires the test database.
 
 The npm package is `@kequtech/tenon-orm`; the Git repository is
@@ -82,5 +92,4 @@ The npm package is `@kequtech/tenon-orm`; the Git repository is
 
 Rehearse migration and recovery in the application's actual database/proxy environment. The tests do
 not establish physical backup or PITR recovery. `npm run benchmark` measures sequential calls on the
-test database, including an artificial per-query delay; it is not a production performance
-guarantee.
+test database; it is not a production performance guarantee.

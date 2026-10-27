@@ -1,17 +1,17 @@
-import type { QueryResult, QueryResultRow } from 'pg';
+import type { QueryResult } from './connection.js';
 import type { QueryOptions, QueryOutput, QueryReturnMode } from './query-options.js';
 import type { SqlQuery } from './query.js';
 
 export interface QueryClient {
-  query<Row extends QueryResultRow>(
+  query<Row extends object>(
     query: SqlQuery<Row>,
     options?: QueryOptions & { readonly returns?: 'native' },
   ): NoInfer<Promise<QueryResult<Row>>>;
-  query<Row extends QueryResultRow, Mode extends QueryReturnMode>(
+  query<Row extends object, Mode extends QueryReturnMode>(
     query: SqlQuery<Row>,
     options: QueryOptions & { readonly returns: Mode },
   ): NoInfer<Promise<QueryOutput<Row, Mode>>>;
-  query<Row extends QueryResultRow>(
+  query<Row extends object>(
     query: SqlQuery<Row>,
     options: QueryOptions | undefined,
   ): NoInfer<Promise<QueryOutput<Row, QueryReturnMode>>>;

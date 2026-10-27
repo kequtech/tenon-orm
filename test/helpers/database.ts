@@ -2,8 +2,9 @@ import { randomUUID } from 'node:crypto';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { Pool } from 'pg';
+import type postgres from 'postgres';
 import type { DatabaseToolOptions } from '../../src/index.js';
+import { prepareArrays } from '../../src/driver/array.js';
 import { quote } from '../../src/sql.js';
 
 export const testConnection =
@@ -11,12 +12,13 @@ export const testConnection =
   'postgresql://postgres:postgres@localhost:5432/tenon_orm_test';
 
 /** Check before a test creates or changes any namespace. */
-export async function assertTestDatabase(pool: Pool): Promise<string> {
-  const result = await pool.query<{ name: string; version: string; version_num: number }>(`
+export async function assertTestDatabase(pool: postgres.Sql): Promise<string> {
+  await prepareArrays(pool);
+  const result = await pool.unsafe<{ name: string; version: string; version_num: number }[]>(`
     SELECT current_database() AS name, current_setting('server_version') AS version,
       current_setting('server_version_num')::integer AS version_num
   `);
-  const database = result.rows[0]!;
+  const database = result[0]!;
   if (database.name !== 'tenon_orm_test') {
     throw new Error('Tests require the tenon_orm_test database. No test schemas were changed.');
   }
@@ -34,7 +36,7 @@ export interface MigrationProject extends DatabaseToolOptions {
 }
 
 /** Each test owns its migration files and namespace, including failure cleanup. */
-export function migrationProject(pool: Pool) {
+export function migrationProject(pool: postgres.Sql) {
   return async (
     files: Readonly<Record<string, string>>,
     work: (options: MigrationProject) => Promise<void>,
@@ -46,7 +48,7 @@ export function migrationProject(pool: Pool) {
       await work({ connection: pool, namespace, directory });
     } finally {
       try {
-        await pool.query(`DROP SCHEMA IF EXISTS ${quote(namespace)} CASCADE`);
+        await pool.unsafe(`DROP SCHEMA IF EXISTS ${quote(namespace)} CASCADE`);
       } finally {
         await rm(directory, { recursive: true, force: true });
       }

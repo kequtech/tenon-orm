@@ -306,10 +306,15 @@ ${result.stderr ?? ''}`);
       assert.deepEqual(composed.values, [7]);
       const db = createTenon({ connection: 'postgresql://unused' });
       await db.close();
+      const owned = createTenon({ connection: process.env.TENON_TEST_DATABASE_URL });
+      assert.equal((await owned.native.unsafe('SELECT 42 AS value'))[0].value, 42);
+      await owned.close();
+      await assert.rejects(owned.native.unsafe('SELECT 1'), {code: 'CONNECTION_ENDED'});
       const pool = postgres(process.env.TENON_TEST_DATABASE_URL);
       const shared = createTenon({ connection: pool });
+      assert.equal(shared.native, pool);
       await shared.close();
-      assert.equal((await pool.unsafe('SELECT 1 AS value'))[0].value, 1);
+      assert.equal((await shared.native.unsafe('SELECT 1 AS value'))[0].value, 1);
       await pool.end();
       const description = await describeQuery({
         connection: process.env.TENON_TEST_DATABASE_URL,

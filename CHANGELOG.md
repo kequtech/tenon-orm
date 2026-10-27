@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.1
+
+- Added readonly `db.native` access to Tenon's existing Postgres.js client for LISTEN, cursors,
+  COPY, and other native features without another driver installation. Native calls use the pool
+  directly and bypass Tenon's query guards and observation; transaction clients expose only `query`.
+- Connection ownership is unchanged: `db.close()` ends owned clients and their listeners, while
+  borrowed clients remain usable until their owner ends them.
+
 ## 0.2.0
 
 Changes since 0.1.0, including improvements shipped in 0.1.1–0.1.4.

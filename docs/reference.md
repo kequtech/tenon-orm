@@ -16,7 +16,7 @@ setup; Tenon needs no special compiler configuration. `"type": "module"` and Typ
 npm install @kequtech/tenon-orm
 ```
 
-`createTenon({ connection, onQuery? })` returns a `Database` with `query`, `transaction`, and
+`createTenon({ connection, onQuery? })` returns a `Database` with `query`, `transaction`, `native`, and
 `close`. The required `connection` accepts a URL, Postgres.js options, or an existing Postgres.js client. An
 explicit `{}` selects the driver's environment defaults. Tenon does not load environment files
 automatically.
@@ -26,6 +26,37 @@ remain application-owned. Finish outstanding work before closing. Postgres.js ha
 
 Qualify SQL names or configure the driver's `search_path`. The CLI's `--namespace` selects the
 schema used by tooling, not a runtime query namespace.
+
+## Native driver access
+
+`db.native` is the underlying Postgres.js client, typed as `postgres.Sql`. The property is readonly
+in TypeScript. It exposes the existing pool without creating another client or requiring a separate
+driver installation. A supplied client is returned by identity. Use native APIs for LISTEN, cursors,
+COPY, and other driver features; their behavior follows the included `postgres@3.4.9`.
+
+```ts
+const db = createTenon({ connection });
+await db.native.listen('updates', handlePayload, refreshAfterSubscription);
+// At application shutdown, after outstanding work finishes:
+await db.close();
+```
+
+Postgres.js LISTEN creates a dedicated physical connection alongside the query pool. Applications
+own notification parsing, authorization, callback failures, and catch-up after resubscription. See
+the [Postgres.js native API](https://github.com/porsager/postgres/tree/v3.4.9#listen--notify).
+
+Native calls bypass Tenon's result contracts, affected-row guards, SQL boundary checks, and
+`onQuery` observation. They use native preparation defaults. `db.native` always refers to the pool,
+including inside `db.transaction`: its queries do not join that transaction. Transaction callbacks
+expose only `tx.query`; use that for work that must commit or roll back together.
+
+Native access is immediate and does not initialize Tenon's array correction. The first Tenon query
+or transaction installs that correction on the shared client; already prepared native statements
+can retain earlier parsers. Raw calls otherwise follow native driver behavior.
+
+`db.close()` ends a Tenon-owned client and its native listeners. With a borrowed client, it closes
+only the Tenon wrapper: native queries and listeners remain usable until their owner calls
+`db.native.end()`. Calling `end()` directly also ends the client used by Tenon.
 
 ## Queries and result modes
 

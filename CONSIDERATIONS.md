@@ -220,6 +220,12 @@ from prepared-statement reuse.
 
 ## Transaction behavior owned by Tenon
 
+`db.native` exposes the actual pool-level client. Native operations bypass these transaction
+guarantees and Tenon's execution/preparation policy. Array correction remains shared client state,
+installed when Tenon first initializes execution; native access alone does not install it. Keep
+[test/native.test.ts](test/native.test.ts) for pool identity, transaction separation, and owned/borrowed
+shutdown, including dedicated LISTEN connections.
+
 [src/transaction.ts](src/transaction.ts) manages explicit SQL boundaries on a reserved session,
 rather than delegating the callback to native `begin()`. The
 [3.4.9 transaction implementation](https://github.com/porsager/postgres/blob/v3.4.9/src/index.js)

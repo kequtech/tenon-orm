@@ -33,6 +33,10 @@ queries or generate types; keep the existing migration runner if that is the int
    migration tooling until the migration transition below is complete, if that transition is part of
    the work.
 
+For driver features such as LISTEN or COPY, use [`db.native`](reference.md#native-driver-access).
+Preserve the application's notification recovery and resource ownership. Native pool queries do
+not join Tenon transactions; use `tx.query` for operations that must commit together.
+
 ## Replace local write helpers
 
 Use `sql.insertValues(rows)` and `sql.assignments(patch)` in place of local object-to-SQL utilities:

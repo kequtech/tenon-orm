@@ -17,6 +17,17 @@ type Equal<A, B> =
 type Assert<T extends true> = T;
 
 async function contracts(db: Database, options?: QueryOptions) {
+  const nativeRows = await db.native<{ value: number }[]>`SELECT ${1}::integer AS value`;
+  const nativeType: Assert<Equal<(typeof nativeRows)[number], { value: number }>> = true;
+  void nativeType;
+  const subscription = await db.native.listen('updates', (payload) => {
+    const text: string = payload;
+    void text;
+  });
+  const unsubscribe: Promise<void> = subscription.unlisten();
+  void unsubscribe;
+  // @ts-expect-error the driver reference is readonly
+  db.native = db.native;
   type Summary = Pick<User, 'id' | 'email'>;
   const query = sql<Summary>`SELECT id, email FROM public."User" WHERE id = ${42}`;
   const many = await db.query(query, { returns: 'many' });
@@ -124,6 +135,8 @@ async function contracts(db: Database, options?: QueryOptions) {
   const context: Assert<Equal<typeof contextual, SqlQuery<UnknownRow>>> = true;
   void context;
   await db.transaction(async (tx) => {
+    // @ts-expect-error native access is pool-level and is not exposed on transactions
+    tx.native;
     const row = await byEmail(tx, { email: 'a', active: true });
     const same: Assert<Equal<typeof row, Summary | undefined>> = true;
     void same;

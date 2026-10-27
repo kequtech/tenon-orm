@@ -41,6 +41,7 @@ export function createTenon(options: TenonOptions): Database {
 
   return {
     ...createClient(query, options.onQuery),
+    native: pool,
     async transaction(callback) {
       checkOpen();
       return withTransaction(pool, (query) => callback(createClient(query, options.onQuery)));

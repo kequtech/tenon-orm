@@ -45,6 +45,12 @@ supplied clients remain application-owned. The driver retains its native connect
 outstanding work before closing. Environment files are not loaded automatically. Qualify SQL names
 or configure `search_path`; CLI `--namespace` does not change runtime query names.
 
+Use `db.native` for Postgres.js features such as LISTEN, cursors, and COPY without another driver
+installation. It is the existing pool-level client. Native calls bypass Tenon's guards and `onQuery`,
+and do not join a Tenon transaction; transaction callbacks expose only `tx.query`. `db.close()` ends
+owned clients and their listeners; borrowed clients stay application-owned. Follow the
+[native access contract](reference.md#native-driver-access) for initialization and shutdown.
+
 ## Query contracts
 
 ```ts

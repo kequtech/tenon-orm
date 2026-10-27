@@ -43,6 +43,10 @@ This standalone example assumes the table exists. In a server, reuse an instance
 close it at shutdown, not after each request. Use `returns: 'many'` for an array, `'one'` when a row
 must exist, or omit the option for the driver's full result.
 
+Use [`db.native`](docs/reference.md#native-driver-access) to access the underlying Postgres.js client
+for LISTEN, cursors, COPY, and other native features without installing another driver. Native calls
+use the pool directly and bypass Tenon's query and transaction guards.
+
 Tenon also provides:
 
 - Transactions and affected-row limits that roll back rejected writes.

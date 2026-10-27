@@ -27,6 +27,7 @@ export function mockDriver(
   async function dispatch(text: string) {
     if (typeof options.debug === 'function') options.debug(1, text, [], []);
     if (text.startsWith('SELECT 1 /* tenon_session_')) return result();
+    text = text.replace(/ \/\* tenon_session_\d+ \*\/$/, '');
     if (text.includes('pg_terminate_backend')) {
       discard();
       return result();

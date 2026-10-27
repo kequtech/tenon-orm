@@ -43,6 +43,7 @@ export function executeSql(
 ): Promise<QueryResult> {
   // Tenon compiles SQL separately from values; let PostgreSQL infer array/JSON types from the surrounding SQL.
   const values = input.map((value) => (Array.isArray(value) ? sql.typed(value, 0) : value));
+  // Keep preparation off; CONSIDERATIONS.md records parser-cache and pipeline safety constraints.
   const options = { simple: false, prepare: false };
   return sql.unsafe<UnknownRow[]>(text, values as postgres.ParameterOrJSON<never>[], options);
 }

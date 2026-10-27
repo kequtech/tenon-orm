@@ -53,10 +53,12 @@ import type { Rows } from './generated-schema.js';
 
 type Summary = Pick<Rows['users'], 'id' | 'email'>;
 
-function userById(client: QueryClient, { id }: { id: number }) {
-  return client.query(sql<Summary>`SELECT id, email FROM public.users WHERE id = ${id}`, {
-    returns: 'oneOrNone',
-  });
+function userByIdQuery({ id }: { id: number }) {
+  return sql<Summary>`SELECT id, email FROM public.users WHERE id = ${id}`;
+}
+
+function userById(client: QueryClient, input: { id: number }) {
+  return client.query(userByIdQuery(input), { returns: 'oneOrNone' });
 }
 
 const user = await userById(db, { id: 42 });
@@ -141,6 +143,7 @@ Inspection ships with Tenon and needs no additional setup:
 ```ts
 import { describeQuery } from '@kequtech/tenon-orm';
 
+const query = userByIdQuery({ id: 42 });
 const description = await describeQuery({ connection, query });
 ```
 
@@ -162,6 +165,27 @@ inherit custom parsers, temporary tables, or transaction-local state.
 The report contains parameter/column types and findings with stable issue codes. Result nullability
 is unknown, source `NOT NULL` is informational, and JSON remains unknown. CLI success means the
 statement was described, not that `sql<Row>`, values, permissions, or business behavior were verified.
+
+With a test fixture containing user 42, check the database projection and the actual value separately:
+
+```ts
+import assert from 'node:assert/strict';
+
+assert.deepEqual(
+  description.columns.map(({ name, readType }) => [name, readType]),
+  [
+    ['id', 'number'],
+    ['email', 'string'],
+  ],
+);
+const expected = { id: 42, email: 'reader@example.test' } satisfies Summary;
+assert.deepEqual(await userById(db, { id: expected.id }), expected);
+```
+
+The builder keeps inspection and application SQL together; the query function keeps execution options
+and its `db`/`tx` contract together. Keep simple queries inline when they do not need a shared builder.
+The typed fixture checks the declared shape, the description checks PostgreSQL's projection, and
+execution checks the actual row. None of these proves coverage of other inputs or authorization rules.
 
 Run the same query through the real application connection against its test database. Assert full
 relevant rows/effects and exercise meaningful branches: ownership, optional filters, absent joins,
@@ -233,5 +257,7 @@ partitioned roots; views/foreign tables need authored query types.
 When replacing another ORM, preserve its schema and behavior. If transferring migration ownership,
 capture one reviewed baseline with `tenon baseline capture`, record it only on matching existing
 databases with `tenon baseline adopt`, and use `tenon migrate` on fresh databases. Adoption does not
-compare schemas or run baseline SQL. See [adoption](adoption-guide.md) for the full transition
-procedure. A down migration or schema-only baseline is not a data backup.
+compare schemas or run baseline SQL. Fresh replay omits ownership and grants; apply deployment
+security provisioning before application access, especially for `SECURITY DEFINER` functions.
+See [adoption](adoption-guide.md) for the full transition procedure. A down migration or schema-only
+baseline is not a data backup.

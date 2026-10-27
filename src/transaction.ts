@@ -8,7 +8,7 @@ export async function withTransaction<T>(
   pool: postgres.Sql,
   work: (query: QueryExecutor) => Promise<T>,
 ): Promise<T> {
-  const connection = await reserveConnection(pool);
+  const connection = await reserveConnection(pool, 'BEGIN');
   const client = connection.sql;
   let active = true;
   let discard = false;
@@ -56,7 +56,6 @@ export async function withTransaction<T>(
   };
 
   try {
-    await client.unsafe('BEGIN');
     const result = await work(query);
     active = false;
     await pending;

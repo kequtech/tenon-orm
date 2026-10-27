@@ -38,6 +38,8 @@ Changes since 0.1.0, including improvements shipped in 0.1.1–0.1.4.
   parsers retain their meanings.
 - Transactions and migration locks reject work after connection loss. Failed recovery discards
   the affected session, and accepted pending work finishes before transaction cleanup.
+- Transactions and standalone guarded writes issue one fewer bootstrap query by registering
+  their connection during BEGIN. Cold-start regressions cover concurrent reservations and tooling locks.
 - Large fragment composition avoids argument-spread failures. Queries reject more than 65,533
   bound parameters before execution; batching remains application-controlled.
 - PostgreSQL `name` columns generate string types. `tenon generate --check` reports missing

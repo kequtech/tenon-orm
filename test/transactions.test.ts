@@ -103,6 +103,21 @@ test('failed commit preserves the original error and rolls back before release',
   await db.close();
 });
 
+test('failed BEGIN discards the reservation without running application work', async (t) => {
+  const failure = new Error('BEGIN failed');
+  const driver = mockDriver(t, async (text) => {
+    if (text === 'BEGIN') throw failure;
+    return result(text);
+  });
+  const db = createTenon({ connection: driver.sql });
+  const work = t.mock.fn(async () => 'must not run');
+  await assert.rejects(db.transaction(work), (error) => error === failure);
+  assert.equal(work.mock.callCount(), 0);
+  assert.equal(driver.discard.mock.callCount(), 1);
+  assert.equal(driver.release.mock.callCount(), 0);
+  await db.close();
+});
+
 test('work and rollback failures retain both errors and discard the session', async (t) => {
   const failure = new Error('work failed'),
     rollback = new Error('rollback failed');

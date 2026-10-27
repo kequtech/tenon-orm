@@ -87,6 +87,26 @@ server's major. Default scope is the whole database schema. Repeat `--schema nam
 explicitly, accounting for dependencies, extensions, and required roles. Tenon's selected history
 table is excluded; old ORM metadata is preserved for deliberate cleanup later.
 
+The baseline recreates application schema, not a complete deployment environment. It omits
+ownership, grants/revokes, and default privileges. PostgreSQL creates replayed objects under the
+migration role. Role definitions and memberships also remain outside the dump. Functions,
+policies, or other object definitions can still refer to roles; provision any referenced roles
+before replay. See the [PostgreSQL pg_dump reference](https://www.postgresql.org/docs/16/app-pgdump.html).
+
+For `SECURITY DEFINER` functions, the owner determines execution authority, and newly created
+functions ordinarily permit `PUBLIC` execution. A captured function body alone does not preserve
+its original security boundary. Keep fixed application policy, such as revoking `PUBLIC` execution,
+in reviewed SQL in the baseline before its first adoption or in a subsequent application migration.
+Deployment provisioning assigns the intended owners, schema access, and grants to runtime roles.
+Keeping all security setup in provisioning is also supported, provided it runs before application access.
+
+On fresh environments, provision required roles, apply migrations, then apply the deployment's
+ownership/grant policy before starting the application. Verify both allowed and denied operations,
+including execution of sensitive functions and access to their underlying tables. For a shared
+database, apply only the selected application's policy. On existing environments, confirm the same
+provisioning procedure is repeatable. After adoption, use subsequent migrations rather than editing
+checksummed history.
+
 Capture changes no source data, migration history, or sequence positions. Review and commit the SQL.
 Keep the capture header: it identifies native dump SQL that bypasses the authored-migration scanner.
 It is a convention, not proof of provenance; do not use it on handwritten migrations. Normal

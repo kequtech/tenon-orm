@@ -7,7 +7,10 @@ import type { UnknownRow } from '../query.js';
 let nextLease = 0;
 
 /** Pin a healthy session for transactions and advisory locks, with explicit failure cleanup. */
-export async function reserveConnection(sql: postgres.Sql) {
+export async function reserveConnection(
+  sql: postgres.Sql,
+  initial: 'SELECT 1' | 'BEGIN' = 'SELECT 1',
+) {
   await prepareArrays(sql);
   const state = observeConnections(sql);
   // Warm a connection before reserve(): 3.4.9 can strand a cold reserve after reconnect.
@@ -60,22 +63,7 @@ export async function reserveConnection(sql: postgres.Sql) {
     array: client.array,
     typed: client.typed,
   };
-  const marker = `SELECT 1 /* tenon_session_${++nextLease} */`;
-  try {
-    const options = { simple: false, prepare: false };
-    const stopCapture = state.capture(marker, watch);
-    try {
-      await safe.unsafe(marker, [], options);
-    } finally {
-      stopCapture();
-    }
-    watch.check();
-  } catch (error) {
-    for (const [id, active] of state.active) if (active === watch) state.active.delete(id);
-    if (!watch.failure) client.release();
-    throw error;
-  }
-  return {
+  const connection = {
     sql: safe,
     check: watch.check,
     async release(discard = false) {
@@ -93,4 +81,17 @@ export async function reserveConnection(sql: postgres.Sql) {
       client.release();
     },
   };
+  // Capture the connection on BEGIN itself when opening a transaction.
+  const marker = `${initial} /* tenon_session_${++nextLease} */`;
+  const stopCapture = state.capture(marker, watch);
+  try {
+    await safe.unsafe(marker, [], { simple: false, prepare: false });
+    watch.check();
+    return connection;
+  } catch (error) {
+    await connection.release(true);
+    throw error;
+  } finally {
+    stopCapture();
+  }
 }

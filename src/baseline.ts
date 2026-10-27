@@ -30,7 +30,7 @@ export interface CapturedBaseline {
 }
 const run = promisify(execFile);
 
-/** Capture schema only. No source history writes, comparisons or ORM cleanup. */
+/** Capture a portable schema; deployment provisioning owns role-specific security. */
 export async function captureBaseline(options: CaptureBaselineOptions): Promise<CapturedBaseline> {
   if (typeof options.connection !== 'string' || !options.connection.trim()) {
     throw new Error('Baseline capture requires an explicit nonempty connection string.');

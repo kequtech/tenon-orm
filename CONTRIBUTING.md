@@ -33,7 +33,7 @@ The suite checks the name and server version before changes, creates temporary n
 removes them afterward. Connection-failure tests terminate only their own test backends. Scripts do
 not load `.env` automatically.
 
-Inspection context tests also create and remove temporary restricted roles. The test connection
+Inspection context and baseline security tests also create and remove temporary roles. The test connection
 needs permission to create those roles; the configured local and CI postgres user has it.
 
 CI tests PostgreSQL 16 and 18 with matching `pg_dump` clients. The consumer test packs and installs
@@ -92,4 +92,7 @@ The npm package is `@kequtech/tenon-orm`; the Git repository is
 
 Rehearse migration and recovery in the application's actual database/proxy environment. The tests do
 not establish physical backup or PITR recovery. `npm run benchmark` measures sequential calls on the
-test database; it is not a production performance guarantee.
+test database, including complete transactions with reservation, bootstrap, BEGIN, and COMMIT.
+It compares prepared/unprepared native queries, Tenon queries, guarded writes, and separate versus
+batched inserts on a warm single-connection pool. SQL dispatch counts are not protocol round-trip
+counts, and local timings are not a production performance guarantee.

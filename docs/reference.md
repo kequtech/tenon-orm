@@ -73,7 +73,9 @@ arrays destined for JSON columns are serialized by the driver; passing pre-seria
 stores a JSON string. Arrays bound to PostgreSQL array columns retain null elements. SQL context
 establishes array and JSON parameter types; cast standalone parameters to the intended SQL type.
 Tenon uses the driver's raw-query path with the extended protocol so every public call executes
-one statement, including calls without parameters.
+one statement, including calls without parameters. Application queries explicitly disable prepared
+statement caching, including when the supplied driver client has `prepare: true`. Parameters remain
+bound separately from SQL text.
 
 Use an array parameter for a set of values:
 

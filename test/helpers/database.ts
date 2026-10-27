@@ -7,9 +7,18 @@ import type { DatabaseToolOptions } from '../../src/index.js';
 import { prepareArrays } from '../../src/driver/array.js';
 import { quote } from '../../src/sql.js';
 
-export const testConnection =
+const testDatabaseUrl = new URL(
   process.env.TENON_TEST_DATABASE_URL ??
-  'postgresql://postgres:postgres@localhost:5432/tenon_orm_test';
+    'postgresql://postgres:postgres@localhost:5432/tenon_orm_test',
+);
+// Quiet fixture setup/cleanup notices, including CLI children; retain warnings and errors.
+testDatabaseUrl.searchParams.set(
+  'options',
+  `${testDatabaseUrl.searchParams.get('options') ?? ''} -c client_min_messages=warning`.trim(),
+);
+// libpq clients such as pg_dump require URI spaces (%20), rather than form spaces (+).
+testDatabaseUrl.search = testDatabaseUrl.searchParams.toString().replaceAll('+', '%20');
+export const testConnection = testDatabaseUrl.toString();
 
 /** Check before a test creates or changes any namespace. */
 export async function assertTestDatabase(pool: postgres.Sql): Promise<string> {

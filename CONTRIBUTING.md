@@ -30,8 +30,9 @@ postgresql://postgres:postgres@localhost:5432/tenon_orm_test
 
 Override its address with `TENON_TEST_DATABASE_URL`; its database name must remain `tenon_orm_test`.
 The suite checks the name and server version before changes, creates temporary namespaces, and
-removes them afterward. Connection-failure tests terminate only their own test backends. Scripts do
-not load `.env` automatically.
+removes them afterward. Test connections use `client_min_messages=warning` to suppress routine
+fixture notices while retaining PostgreSQL warnings and errors. Connection-failure tests terminate
+only their own test backends. Scripts do not load `.env` automatically.
 
 Inspection context and baseline security tests also create and remove temporary roles. The test connection
 needs permission to create those roles; the configured local and CI postgres user has it.

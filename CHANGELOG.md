@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.2
+
+- Closing a Tenon-owned client through `db.close()` prevents native LISTEN reconnects from
+  restoring connections after shutdown, including pending subscription setup. Borrowed clients
+  retain application ownership.
+
 ## 0.2.1
 
 - Added readonly `db.native` access to Tenon's existing Postgres.js client for LISTEN, cursors,

@@ -218,13 +218,45 @@ can still prepare according to the client setting; the forced-off policy concern
 application SQL. The array NULL correction and the documented reservation safeguards are separate
 from prepared-statement reuse.
 
-## Transaction behavior owned by Tenon
+## Native driver access and LISTEN lifecycle
 
-`db.native` exposes the actual pool-level client. Native operations bypass these transaction
-guarantees and Tenon's execution/preparation policy. Array correction remains shared client state,
+`db.native` exposes the actual pool-level client. Native operations bypass Tenon's transaction
+guarantees and execution/preparation policy. Array correction remains shared client state,
 installed when Tenon first initializes execution; native access alone does not install it. Keep
 [test/native.test.ts](test/native.test.ts) for pool identity, transaction separation, and owned/borrowed
 shutdown, including dedicated LISTEN connections.
+
+The native `.listen()` helper replaces the caller's `onclose` handler. Its readiness callback runs
+on subscription and resubscription, but it does not expose the corresponding disconnect callback;
+see the [pinned implementation](https://github.com/porsager/postgres/blob/v3.4.9/src/index.js).
+Original unsubscribe handles can retain callbacks after reconnect; a local two-subscriber probe
+reproduced [#1243](https://github.com/porsager/postgres/issues/1243). Application recovery and native
+subscription ownership remain outside Tenon's query API.
+
+Block Party's reported reconnect/shutdown race also reproduced through owned `db.close()` on
+PostgreSQL 16.15. After close returned, restoring a test proxy produced a new idle backend without
+another readiness callback. The driver's `reconnect()` leaves a timer queued, and `connect()` resets
+the termination flag when that timer fires. This differs from the unsubscribe-identity defect; no
+separate upstream shutdown-issue link was supplied.
+
+[src/driver/listener.ts](src/driver/listener.ts) guards only the dedicated native LISTEN transport of
+Tenon-owned clients. It temporarily supplies the documented socket factory while `.listen()`
+synchronously clones its client options, then restores the query pool's configuration. The factory
+refuses creation after owned shutdown, disposes tracked sockets, and destroys a caller factory's
+late result. Default TCP/Unix dialing uses Node sockets; writes buffer while TCP connects, leaving
+connection timeouts, authentication, TLS and reconnect scheduling with Postgres.js. TCP host rotation
+and TLS host metadata are retained. The driver, not Tenon, still owns subscription state and payloads.
+
+Use `db.close()` for this protection. Direct native `end()` and borrowed-client shutdown remain
+caller-owned. No native listener-disconnected API or reconnect-safe unsubscribe handle is added.
+[test/listener-shutdown.test.ts](test/listener-shutdown.test.ts) covers interrupted reconnect,
+pending initial setup, ordinary reconnect/delivery, and a custom socket resolving after disposal.
+Disabling the guard made the regression fail; the fixed reproduction had no restored backend or
+proxy socket. Local TLS-required shutdown and multi-host failover probes also passed; these are
+not a TLS CI matrix. Remove the guard only after these behaviors pass without it, including owned
+shutdown through the public API and continued usability of borrowed clients.
+
+## Transaction behavior owned by Tenon
 
 [src/transaction.ts](src/transaction.ts) manages explicit SQL boundaries on a reserved session,
 rather than delegating the callback to native `begin()`. The

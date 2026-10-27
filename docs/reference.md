@@ -56,7 +56,9 @@ can retain earlier parsers. Raw calls otherwise follow native driver behavior.
 
 `db.close()` ends a Tenon-owned client and its native listeners. With a borrowed client, it closes
 only the Tenon wrapper: native queries and listeners remain usable until their owner calls
-`db.native.end()`. Calling `end()` directly also ends the client used by Tenon.
+`db.native.end()`. Close owned clients through `db.close()` so Tenon can also prevent queued
+listener reconnects from reopening them. Calling `end()` directly ends the client used by Tenon
+but bypasses that listener shutdown guard.
 
 ## Queries and result modes
 
@@ -401,6 +403,7 @@ tenon migrate [--directory migrations] [--namespace public]
 tenon status [--directory migrations] [--namespace public]
 tenon rollback [--directory migrations] [--namespace public] [--steps 1]
 tenon generate [--namespace public] [--out path] [--check]
+tenon describe <query.sql> [--role name] [--search-path value] [--time-zone value]
 tenon baseline capture|adopt [--directory migrations] [--namespace public]
 ```
 

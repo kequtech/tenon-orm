@@ -6,6 +6,23 @@ query tutorial use the [human guide](human-guide.md); for API details use the
 application behavior while replacing the old ORM. Tenon does not need to own migrations to execute
 queries or generate types; keep the existing migration runner if that is the intended scope.
 
+## Preserve connection configuration
+
+Reuse the existing connection URI, including its credentials and TLS parameters. Translate pg
+configuration using Postgres.js names and units rather than passing the old options object through:
+
+| pg configuration                | Tenon / Postgres.js equivalent                                                         |
+| ------------------------------- | -------------------------------------------------------------------------------------- |
+| `connectionString`              | `createTenon({ connection: connectionString })`                                        |
+| `connectionTimeoutMillis: 5000` | `connect_timeout: 5` (seconds)                                                         |
+| `idleTimeoutMillis: 10000`      | `idle_timeout: 10` (seconds)                                                           |
+| Session `search_path`           | Preserve URI startup settings or set the Postgres.js options' `connection.search_path` |
+
+Timeouts can be supplied as URI query parameters or Postgres.js options. Keep the deployment's TLS
+requirements and use the driver's SSL configuration when supplying options. CLI `--namespace`
+does not configure the runtime search path. See [connection options](reference.md#installation-and-connection)
+and the [pinned driver configuration](https://github.com/porsager/postgres/tree/v3.4.9#connection-details).
+
 ## Replace application queries
 
 1. Locate the old ORM's connection setup, schema, migrations, and call sites. Identify behavior
@@ -36,6 +53,11 @@ queries or generate types; keep the existing migration runner if that is the int
 For driver features such as LISTEN or COPY, use [`db.native`](reference.md#native-driver-access).
 Preserve the application's notification recovery and resource ownership. Native pool queries do
 not join Tenon transactions; use `tx.query` for operations that must commit together.
+
+Check cardinality when replacing a "take first" API. Tenon's `oneOrNone` rejects multiple rows;
+`one` also rejects zero rows. If choosing one of several matches is intended, express that choice
+with a deterministic `ORDER BY` and `LIMIT 1`. Preserve a uniqueness contract when multiple matches
+would instead indicate an error. Return modes never add a SQL limit.
 
 ## Replace local write helpers
 
@@ -125,6 +147,12 @@ npx tenon baseline adopt
 Adoption records the baseline checksum without executing the SQL or comparing schemas. It requires
 the selected namespace to exist. Repeating matching adoption is harmless, including after later
 migrations; conflicting history fails.
+
+If application provisioning verifies a schema fingerprint before adoption, commit a separate frozen
+reference for the old runner's final checkpoint. Do not compare against generated definitions that
+will change with later Tenon migrations. Record the comparison's coverage and generator version:
+`generateDefinitions` represents tables, constraints and indexes, not every schema object, privilege
+or historical data change. It is not a complete schema-equivalence check.
 
 On a fresh database, run migrations instead:
 

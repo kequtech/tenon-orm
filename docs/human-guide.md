@@ -196,8 +196,9 @@ connection settings and keep database assertions for actual rows, nulls, JSON, p
 transaction effects. See [query inspection](query-inspection.md).
 
 TypeScript checks the application code and the result types you declare. Describe reports
-PostgreSQL metadata; it does not generate or verify a TypeScript annotation. Use generated table
-types where appropriate, declare projections explicitly, and check complete returned rows in tests.
+PostgreSQL metadata and a conservative `rowType` declaration for review; it does not update or
+verify the application's `sql<Row>` annotation. Use generated table types where appropriate,
+declare projections explicitly, and check complete returned rows in tests.
 
 1. Run `npm run db:migrate` against the development/test database.
 2. Inspect the completed SQL and review the reported types and unresolved findings.

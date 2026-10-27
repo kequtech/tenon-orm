@@ -69,7 +69,8 @@ results; `transaction.ts` owns callback boundaries and guarded-write savepoints.
 
 `connection.ts` creates clients and binds compiled queries. Driver-specific behavior is contained
 in `driver/`: `array.ts` installs SQL NULL array parsing, `types.ts` supplies shared type mappings,
-`lifecycle.ts` observes connection closures, and `session.ts` reserves and releases guarded sessions.
+`lifecycle.ts` observes connection closures, `session.ts` reserves and releases guarded sessions,
+and `listener.ts` prevents owned native LISTEN reconnects after shutdown.
 Keep the `postgres` dependency pinned. [CONSIDERATIONS.md](CONSIDERATIONS.md) records driver
 workarounds, upstream issues, and the behavior to verify before an upgrade.
 

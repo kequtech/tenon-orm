@@ -2,8 +2,15 @@ import postgres from 'postgres';
 import type { UnknownRow } from './query.js';
 import { plainObject } from './validation.js';
 
-export type ConnectionOptions = postgres.Options<{}>;
-export type Connection = string | ConnectionOptions | postgres.Sql;
+// Postgres.js 3.4.9 implements onnotify but omits it from Options; see CONSIDERATIONS.md.
+export type ConnectionOptions = postgres.Options<{}> & {
+  readonly onnotify?: ((channel: string, payload: string) => void) | undefined;
+};
+export interface ConnectionUri {
+  readonly url: string;
+  readonly options?: ConnectionOptions | undefined;
+}
+export type Connection = string | ConnectionOptions | ConnectionUri | postgres.Sql;
 export type QueryResult<Row extends object = UnknownRow> = postgres.RowList<Row[]>;
 
 /** The driver operations shared by ordinary and reserved connections. */
@@ -33,6 +40,18 @@ export function createConnection(connection: Connection): { sql: postgres.Sql; o
     return { sql: postgres(connection), owned: true };
   }
   plainObject(connection, 'Connection configuration');
+  if ('url' in connection) {
+    for (const key of Object.keys(connection)) {
+      if (key !== 'url' && key !== 'options') {
+        throw new Error(`Unknown URI connection option: ${key}`);
+      }
+    }
+    if (typeof connection.url !== 'string' || !connection.url.trim()) {
+      throw new Error('Connection string must not be empty.');
+    }
+    if (connection.options !== undefined) plainObject(connection.options, 'Connection options');
+    return { sql: postgres(connection.url, connection.options), owned: true };
+  }
   return { sql: postgres(connection), owned: true };
 }
 

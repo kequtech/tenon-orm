@@ -1,8 +1,18 @@
 # Mutation cookbook
 
-Keep SQL structure visible and let the official helpers handle object fields. See the
-[reference](reference.md#object-based-mutation-fragments) for the complete contract. Examples use
-application-owned inputs and clients; add the authorization predicates required by your product.
+Use `sql.insertValues` and `sql.assignments` for object fields while keeping SQL structure visible.
+The [reference](reference.md#object-based-mutation-fragments) defines the complete contract.
+Examples assume an existing `db` and this table, with generated `Rows` from the same schema:
+
+```sql
+CREATE TABLE profiles (
+  id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  name text NOT NULL UNIQUE,
+  bio text DEFAULT 'unwritten',
+  score integer NOT NULL DEFAULT 0,
+  revision integer NOT NULL DEFAULT 0
+);
+```
 
 ## Defaults, undefined, and null in batches
 
@@ -12,35 +22,15 @@ await db.query(
     { name: 'Ada', bio: null },
     { name: 'Lin', score: 4, bio: undefined },
   ])} RETURNING id`,
+  { returns: 'many' },
 );
 ```
 
-The first row uses the score default. The second uses the bio default. Explicit null in the first
-row stays null. Columns are aligned across rows. Omit generated columns and let PostgreSQL enforce
-required fields and constraints.
-
-Use a column list to select and order fields in runtime-built rows:
-
-```ts
-import type { Rows } from './generated-schema.js';
-
-const rows: Rows.Insert['profiles'][] = buildRows();
-await db.query(sql`INSERT INTO profiles ${sql.insertValues(rows, ['name', 'bio', 'score'])}`);
-```
-
-This list selects and orders fields; unlisted fields are ignored. It does not assert that the
-entire input object contains only allowed keys. Keep narrower application input validation.
-
-`tenon generate` also provides `Rows.Update['profiles']`. Use `Pick` to limit a patch to fields
-the caller may edit, for example `Pick<Rows.Update['profiles'], 'name' | 'bio'>`. Generated inputs
-understand defaults, nullability, domains, and generated columns. They use write representations:
-timestamps accept `Date | string`, bigint accepts `string | bigint`, and JSON accepts native JavaScript values through Tenon's exported `JSONValue` type.
-See the [input-type reference](reference.md#insert-and-update-inputs) for the complete mapping.
+Ada gets the score default and SQL null for bio. Lin gets score 4 and the bio default. Columns stay
+aligned across heterogeneous rows. Empty batches fail; a single default-only object emits
+`DEFAULT VALUES` and still depends on the table's required-column rules.
 
 ## Input types and runtime validation
-
-Apply input types with an annotation, `satisfies`, or a helper generic argument. Generating the
-file alone does not check every write. Narrow the fields each operation accepts:
 
 ```ts
 import { sql, type QueryClient } from '@kequtech/tenon-orm';
@@ -49,46 +39,44 @@ import type { Rows } from './generated-schema.js';
 type ProfileInput = Pick<Rows.Insert['profiles'], 'name' | 'score'>;
 
 function createProfile(client: QueryClient, input: ProfileInput) {
-  return client.query(sql<{ id: number }>`INSERT INTO profiles
-    ${sql.insertValues(input, ['name', 'score'])} RETURNING id`);
+  return client.query(
+    sql<{ id: number }>`INSERT INTO profiles
+    ${sql.insertValues(input, ['name', 'score'])} RETURNING id`,
+    { returns: 'one' },
+  );
 }
 ```
 
-Here `id` and `score` are assumed to be integers. TypeScript rejects an incompatible typed input
-such as `{ name: 'Ada', score: true }`. Inspect the completed SQL with `describeQuery` and test its
-returned rows and write effects against the database. Validate external inputs before calling this
-function and keep database constraints and application authorization in place.
+Annotations, `satisfies`, or helper generic arguments apply generated input types; merely generating
+the file does not check writes. Use `Pick` to narrow accepted fields and retain runtime validation.
+Generated inputs describe defaults and driver representations, not authorization or constraints.
 
-**Selected columns can discard required fields.** For a table requiring integer `id` and text
-`name` and `location`, this input is valid but the query fails:
+Selected columns choose and order fields, ignoring unlisted keys. They can discard a required
+field even when the original object is valid:
 
 ```ts
-const row: Rows.Insert['profiles'] = { id: 1, name: 'Ada', location: 'London' };
-const query = sql`INSERT INTO profiles ${sql.insertValues(row, ['id', 'name'])}`;
-// PostgreSQL rejects the insert: location was dropped and has no default.
+const input: Rows.Insert['profiles'] = { name: 'Ada' };
+const query = sql`INSERT INTO profiles ${sql.insertValues(input, ['bio', 'score'])}`;
+// Executing this fails: name was discarded and has no default.
 ```
 
-A column list selects fields; it does not prove that all required fields will be written.
-
-## Patches mixed with SQL expressions
+## Patches mixed with expressions
 
 ```ts
-await db.query(sql`UPDATE profiles
-  SET ${sql.assignments({ name, bio })}, revision = revision + 1, score = DEFAULT
+const patch: Pick<Rows.Update['profiles'], 'name' | 'bio'> = { bio: null };
+await db.query(sql`UPDATE profiles SET ${sql.assignments(patch)}, revision = revision + 1
   WHERE id = ${id}`);
 ```
 
-Undefined fields are omitted; null clears a field. Expressions, `DEFAULT`, and references to
-`excluded.column` belong in SQL, not in mutation objects.
+Missing/undefined fields are omitted; null clears a nullable field. Put arithmetic and
+`column = DEFAULT` in SQL. Helpers accept values, not SQL expression objects.
 
-An empty patch throws even if the surrounding statement has other assignments. Choose an
-expression-only query explicitly when that is the intended behavior:
+An empty patch fails even if the surrounding SQL has other assignments. Branch when an
+expression-only update is intended:
 
 ```ts
-const patch: { name?: string; bio?: string | null } = readPatch();
 if (patch.name !== undefined || patch.bio !== undefined) {
-  await db.query(sql`UPDATE profiles
-    SET ${sql.assignments(patch, ['name', 'bio'])}, revision = revision + 1
+  await db.query(sql`UPDATE profiles SET ${sql.assignments(patch)}, revision = revision + 1
     WHERE id = ${id}`);
 } else {
   await db.query(sql`UPDATE profiles SET revision = revision + 1 WHERE id = ${id}`);
@@ -97,44 +85,37 @@ if (patch.name !== undefined || patch.bio !== undefined) {
 
 ## Preserve an omitted field during an upsert
 
-Use separate queries when an option changes conflict behavior:
+Given validated `name`, `score`, and optional `bio`, choose conflict behavior explicitly:
 
 ```ts
-if (email !== undefined) {
-  await db.query(sql`INSERT INTO preferences ${sql.insertValues({ profile_id, in_app, email })}
-    ON CONFLICT (profile_id) DO UPDATE
-    SET in_app = excluded.in_app, email = excluded.email`);
+if (bio !== undefined) {
+  await db.query(sql`INSERT INTO profiles ${sql.insertValues({ name, score, bio })}
+    ON CONFLICT (name) DO UPDATE SET score = excluded.score, bio = excluded.bio`);
 } else {
-  await db.query(sql`INSERT INTO preferences ${sql.insertValues({ profile_id, in_app })}
-    ON CONFLICT (profile_id) DO UPDATE SET in_app = excluded.in_app`);
+  await db.query(sql`INSERT INTO profiles ${sql.insertValues({ name, score })}
+    ON CONFLICT (name) DO UPDATE SET score = excluded.score`);
 }
 ```
 
-The second query leaves an existing email value unchanged. Missing an insert field uses its
-database default; that alone does not decide what an upsert should overwrite.
+The second query preserves an existing bio. Omitting an insert value uses its database default;
+that alone does not decide which fields a conflict update overwrites.
 
-## JSONB arrays and PostgreSQL arrays
+## JSON and PostgreSQL arrays
 
-SQL context determines whether a bound JavaScript array is a PostgreSQL array or a JSON value.
-Pass native JavaScript values; Postgres.js serializes them for the target type:
+For a table with `payload jsonb` and `tags text[]`, native arrays work in either context:
 
 ```ts
-const handles = ['ada', 'lin'];
-await db.query(
-  sql`INSERT INTO deliveries ${sql.insertValues({
-    recipients_json: handles, // jsonb column
-    recipient_handles: handles, // text[] column
-  })}`,
-);
+const tags = ['ada', 'lin'];
+await db.query(sql`INSERT INTO deliveries ${sql.insertValues({ payload: tags, tags })}`);
 ```
 
-Objects used as JSON values retain Postgres.js's ordinary JSON conversion. The helper does not need runtime schema metadata. Generated JSON input types use Tenon's exported
-`JSONValue` type, excluding SQL null for nonnullable columns. Pre-serialized text becomes a JSON
-string; use SQL such as `'null'::jsonb` when JSON null is required. Validate JSON contents in the application.
+PostgreSQL establishes the target types and the driver serializes values. Pass native JSON rather
+than `JSON.stringify` output, which would store a JSON string. Generated JSON writes accept Tenon's
+`JSONValue` type, excluding SQL null for nonnullable columns. Use `'null'::jsonb` for JSON null.
 
 ## Batches in one transaction
 
-Choose the batch size in the caller and keep all writes on the transaction client:
+For an array `rows` of generated profile inputs:
 
 ```ts
 await db.transaction(async (tx) => {
@@ -145,8 +126,6 @@ await db.transaction(async (tx) => {
 });
 ```
 
-A failure rolls back all batches. The helper rejects an empty batch; this loop makes no insert
-calls for empty input. Each query accepts at most 65,533 bound parameters, including parameters outside
-the mutation fragment. An oversized query reports its actual count, for example
-`at most 65533 bound parameters; received 65534`. Defaults consume no parameters. Account for the
-selected columns and surrounding query when choosing a batch size; Tenon never splits queries automatically.
+A failure rolls back all batches. Empty input makes no insert calls. Choose a batch size below the
+query-wide 65,533-parameter limit, including surrounding parameters; default cells consume none.
+Tenon does not split batches or choose transaction boundaries for you.

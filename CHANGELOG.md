@@ -5,6 +5,11 @@
 - Closing a Tenon-owned client through `db.close()` prevents native LISTEN reconnects from
   restoring connections after shutdown, including pending subscription setup. Borrowed clients
   retain application ownership.
+- Added `connection: { url, options? }` to preserve a deployment URI while configuring the native
+  driver. `ConnectionUri` is exported; `ConnectionOptions` includes the pinned driver's constructor
+  `onnotify` callback. Internally created clients remain Tenon-owned.
+- Inspection accepts explicit `undefined` for optional session and timeout settings, including in
+  strict TypeScript configurations; unknown keys and invalid defined values still fail.
 
 ## 0.2.1
 

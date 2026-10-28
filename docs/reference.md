@@ -1,423 +1,356 @@
 # Tenon reference
 
-Use this document to look up exact API behavior, query inspection, and limitations. The
-[human guide](human-guide.md) teaches the workflow; the [agent guide](agent-guide.md) is a
-self-contained implementation guide. [Adoption](adoption-guide.md) covers replacing an existing ORM
-and transferring migration history.
+Exact API contracts and limitations. The [human guide](human-guide.md) introduces the workflow;
+the [agent guide](agent-guide.md) covers routine implementation. Examples below use the
+`public.users` table from the human guide and an existing `db` instance, unless stated otherwise.
 
 ## Installation and connection
 
-Runtime requirements: Node.js 24+, PostgreSQL 16+, and ESM. The Postgres.js driver is included. TypeScript consumers need
-TypeScript 6+ and Node development typings. Keep your application's strict TypeScript
-setup; Tenon needs no special compiler configuration. `"type": "module"` and TypeScript's
-`"module": "NodeNext"` are a usual Node setup.
+Requires Node.js 24+, PostgreSQL 16+, and ESM. TypeScript consumers need TypeScript 6+ and Node
+development typings. Tenon includes `postgres@3.4.9`; no driver peer or special compiler plugin is
+required. A usual Node TypeScript setup uses `module: "NodeNext"`.
 
 ```sh
 npm install @kequtech/tenon-orm
 ```
 
-`createTenon({ connection, onQuery? })` returns a `Database` with `query`, `transaction`, `native`, and
-`close`. The required `connection` accepts a URL, Postgres.js options, or an existing Postgres.js client. An
-explicit `{}` selects the driver's environment defaults. Tenon does not load environment files
-automatically.
+`createTenon({ connection, onQuery? })` returns a `Database` with `query`, `transaction`, `native`,
+and `close`. The required `connection` accepts:
 
-Reuse an instance per database connection. `close()` closes pools created by Tenon; supplied pools
-remain application-owned. Finish outstanding work before closing. Postgres.js handles connection errors through rejected queries and its native connection callbacks.
-
-Qualify SQL names or configure the driver's `search_path`. The CLI's `--namespace` selects the
-schema used by tooling, not a runtime query namespace.
-
-## Native driver access
-
-`db.native` is the underlying Postgres.js client, typed as `postgres.Sql`. The property is readonly
-in TypeScript. It exposes the existing pool without creating another client or requiring a separate
-driver installation. A supplied client is returned by identity. Use native APIs for LISTEN, cursors,
-COPY, and other driver features; their behavior follows the included `postgres@3.4.9`.
+- A PostgreSQL URI string.
+- `{ url: string, options?: ConnectionOptions }` to combine a URI with driver settings.
+- A Postgres.js options object; an explicit `{}` uses the driver's environment defaults.
+- An existing Postgres.js client, borrowed by identity.
 
 ```ts
-const db = createTenon({ connection });
-await db.native.listen('updates', handlePayload, refreshAfterSubscription);
-// At application shutdown, after outstanding work finishes:
-await db.close();
-```
-
-Postgres.js LISTEN creates a dedicated physical connection alongside the query pool. Applications
-own notification parsing, authorization, callback failures, and catch-up after resubscription. See
-the [Postgres.js native API](https://github.com/porsager/postgres/tree/v3.4.9#listen--notify).
-
-Native calls bypass Tenon's result contracts, affected-row guards, SQL boundary checks, and
-`onQuery` observation. They use native preparation defaults. `db.native` always refers to the pool,
-including inside `db.transaction`: its queries do not join that transaction. Transaction callbacks
-expose only `tx.query`; use that for work that must commit or roll back together.
-
-Native access is immediate and does not initialize Tenon's array correction. The first Tenon query
-or transaction installs that correction on the shared client; already prepared native statements
-can retain earlier parsers. Raw calls otherwise follow native driver behavior.
-
-`db.close()` ends a Tenon-owned client and its native listeners. With a borrowed client, it closes
-only the Tenon wrapper: native queries and listeners remain usable until their owner calls
-`db.native.end()`. Close owned clients through `db.close()` so Tenon can also prevent queued
-listener reconnects from reopening them. Calling `end()` directly ends the client used by Tenon
-but bypasses that listener shutdown guard.
-
-## Queries and result modes
-
-```ts
-const result = await db.query(sql<Row>`SELECT ...`, {
-  returns: 'many',
-  label: 'list-users',
+const db = createTenon({
+  connection: {
+    url: connection,
+    options: { connect_timeout: 5, idle_timeout: 10, connection: { search_path: 'app,public' } },
+  },
 });
 ```
 
-`sql<Row>` produces a `SqlQuery<Row>` with SQL `text` and ordered `values`. It does not execute.
-`Row` describes one selected row; fields are `unknown` when no annotation is supplied. Type
-annotations do not verify SQL or validate JSON. Full table types from generation do not
-automatically describe joins or aggregates.
+Tenon forwards `{ url, options }` to `postgres(url, options)`. Explicit driver options override
+corresponding URI pool/transport options. URI startup parameters such as `search_path` and
+`application_name` override `options.connection`. Timeouts above are seconds; preserve the
+deployment's credentials and TLS requirements. `ConnectionUri` and `ConnectionOptions` are
+exported. The latter includes `onnotify(channel, payload)` for native notification handling;
+configure callbacks at construction.
 
-`query` accepts `{ returns?, affectedRows?, label? }`. Unknown options are rejected. `label` must be
-a nonempty string when supplied and is used for diagnostics.
+Reuse an instance for each database configuration and await outstanding work before closing.
+`db.close()` closes internally created clients. For a borrowed client it closes only the Tenon
+wrapper; the caller still owns the driver pool. Tenon does not load environment files.
 
-| `returns`          | Result                               | Returned rows allowed |
-| ------------------ | ------------------------------------ | --------------------- |
-| `native` (default) | Postgres.js `QueryResult<Row>` array | Any                   |
-| `many`             | `Row[]`                              | Any, including zero   |
-| `oneOrNone`        | `Row \| undefined`                   | Zero or one           |
-| `one`              | `Row`                                | Exactly one           |
+Qualify SQL names or configure runtime `search_path`. CLI `--namespace` selects tooling scope;
+it does not configure application queries. Baseline capture and Describe accept connection
+strings rather than the runtime connection union.
 
-Native results are arrays of rows with `command`, `count`, `columns`, `statement`, and `state`
-metadata. `count` is the affected-row count, independent of `RETURNING`; it can be null for commands
-without a count. `many` returns a plain row array. Result modes never add `LIMIT` or `RETURNING`.
-A returned-row mismatch does not undo an autocommitted write. Use `affectedRows` for write limits
-that roll back on failure.
+## Native driver access
 
-Reusable queries are ordinary functions. Accept a `QueryClient` and named object inputs when useful;
-both `Database` and `Transaction` implement `QueryClient`. Keep result annotations on the SQL and
-execution options at the query call. Public types include `QueryOptions`, `QueryReturnMode`, and
-`QueryOutput<Row, Mode>`.
+`db.native` is the actual pool-level Postgres.js client, readonly in TypeScript. Use it for LISTEN,
+cursors, COPY, and other [native APIs](https://github.com/porsager/postgres/tree/v3.4.9#usage).
+Native calls bypass Tenon's result modes, affected-row guards, SQL checks, and `onQuery`. They use
+native preparation defaults and do not join a Tenon transaction; callback clients expose only
+`tx.query`.
+
+Native access alone does not install Tenon's array correction. The first Tenon query or transaction
+installs it on the shared client; native statements prepared earlier may retain their old parsers.
+
+Native `.listen(channel, onPayload, onReady?)` uses a dedicated physical connection. `onReady`
+runs after subscription and resubscription. Missed notifications are not replayed; the application
+owns catch-up and callback errors. That dedicated client installs its own close handler, so a
+constructor `onclose` does not report its outages. Explicit LISTEN on a dedicated reserved native
+connection can use constructor callbacks when disconnect detection is required. Subscription
+cancellation follows the pinned driver; known reconnect limitations are recorded in
+[maintainer considerations](https://github.com/kequtech/tenon-orm/blob/main/CONSIDERATIONS.md#native-driver-access-and-listen-lifecycle).
+
+Close owned clients through `db.close()` to prevent queued LISTEN reconnects from reopening them.
+Direct `db.native.end()` bypasses that protection. Borrowed clients and their listeners remain
+usable after wrapper close until their owner ends them.
+
+## Queries and result modes
+
+`sql<Row>` creates a detached `SqlQuery<Row>` with SQL `text` and ordered `values`; it does not
+execute. `Row` declares one selected row. Without an annotation, fields are `unknown`. An
+annotation does not verify the SQL or validate returned data.
+
+```ts
+const user = await db.query(
+  sql<{ id: number; email: string }>`SELECT id, email FROM public.users WHERE id = ${42}`,
+  { returns: 'oneOrNone', label: 'user-by-id' },
+);
+```
+
+`query` options are `{ returns?, affectedRows?, label? }`; unknown keys fail. A supplied `label`
+must be a nonempty string.
+
+| `returns`          | Output                          | Allowed returned rows |
+| ------------------ | ------------------------------- | --------------------- |
+| `native` (default) | `QueryResult<Row>` driver array | Any                   |
+| `many`             | Plain `Row[]`                   | Any                   |
+| `oneOrNone`        | `Row \| undefined`              | Zero or one           |
+| `one`              | `Row`                           | Exactly one           |
+
+Native arrays carry `command`, `count`, `columns`, `statement`, and `state` metadata. `count` is
+the command's affected-row count, independent of `RETURNING`; it can be null for commands without
+a count. Result modes never add `LIMIT` or `RETURNING`. A returned-row mismatch alone does not
+undo an autocommitted write; use `affectedRows` for write bounds that roll back on failure.
+
+Functions accepting `QueryClient` can use either `Database` or `Transaction`. Public types also
+include `QueryOptions`, `QueryReturnMode`, and `QueryOutput<Row, Mode>`.
 
 ## SQL parameters and identifiers
 
-The `sql` tag binds ordinary interpolations as `$1`, `$2`, etc. Never quote interpolations or author
-manual parameter placeholders inside templates. Every public query executes one statement, including
-parameterless queries.
-
-Values use Postgres.js's native conversions. An undefined bound parameter is rejected. Objects and
-arrays destined for JSON columns are serialized by the driver; passing pre-serialized JSON text
-stores a JSON string. Arrays bound to PostgreSQL array columns retain null elements. SQL context
-establishes array and JSON parameter types; cast standalone parameters to the intended SQL type.
-Tenon uses the driver's raw-query path with the extended protocol so every public call executes
-one statement, including calls without parameters. Application queries explicitly disable prepared
-statement caching, including when the supplied driver client has `prepare: true`. Parameters remain
-bound separately from SQL text.
-
-Use an array parameter for a set of values:
+Ordinary `sql` interpolations bind values. Do not quote them or write manual `$n` placeholders
+inside templates. `undefined` bound parameters fail; `null` means SQL null. Pass JSON objects and
+arrays directly. SQL context distinguishes PostgreSQL arrays from JSON; cast standalone parameters
+when that context is absent.
 
 ```ts
+const ids = [1, 2, 3];
 const query = sql<{ id: number }>`SELECT id FROM public.users
   WHERE id = ANY(${ids}::integer[])`;
 ```
 
-`identifier(schema, table)` quotes each component separately. Names must be nonempty, contain no
-NUL, and fit PostgreSQL's 63-byte identifier limit. Choose names from application-approved
-alternatives; quoting does not authorize access. Ordinary strings such as `'DESC'` are bound values,
-not SQL syntax. For ordering, use complete query alternatives or application-selected fragments
-containing `ASC` or `DESC`.
+`identifier(schema, table)` quotes components separately. Names must contain 1–63 UTF-8 bytes and
+no NUL. Choose application-approved names; quoting does not authorize access. SQL syntax such as
+`DESC` belongs in fixed query alternatives or fragments, not a string parameter.
 
-`unsafeSql<Row>(text, values)` accepts externally authored, trusted SQL and an explicit values
-array, including `[]` when empty. Never concatenate request input into its text.
-Full `sql` or `unsafeSql` queries cannot be inserted into other queries; use
-fragments for partial SQL.
+`unsafeSql<Row>(text, values)` accepts trusted external SQL and an explicit values array, including
+`[]`. Never concatenate request input into its text. Full `sql` and `unsafeSql` queries cannot be
+nested; use fragments for partial SQL.
+
+Each Tenon query executes one statement through the extended protocol. Application execution
+explicitly disables prepared-statement caching, including on supplied clients with `prepare: true`.
+Values remain bound separately. Migrations deliberately support multi-statement scripts.
 
 ## SQL fragments and joins
 
-`sql.fragment` creates an immutable piece of SQL with bound values. It has no row type and cannot
-execute alone. Insert it into a complete `sql<Row>` query. Use fragments to share predicates or
-other SQL expressions between queries. Blank fragments throw.
+`sql.fragment` creates immutable partial SQL with bound values. It has no row type, cannot execute
+alone, and rejects blank SQL. Insert it into a complete `sql<Row>` query.
 
-`sql.join(fragments, separator)` combines fragments into a new fragment. Use it when the number of
-parts varies: optional filters, a condition for each search term, or a list of SQL expressions.
-Write fixed structure directly in SQL. Supported separators are:
-
-| Argument | Inserted SQL | Typical use                |
-| -------- | ------------ | -------------------------- |
-| `'AND'`  | `AND`        | All conditions must hold   |
-| `'OR'`   | `OR`         | Any condition may hold     |
-| `','`    | `, `         | Projections or assignments |
+`sql.join(fragments, separator)` requires a nonempty list. Separators are `'AND'`, `'OR'`, and `','`.
+It does not add parentheses or change SQL precedence. Each fragment use receives correctly ordered
+parameters, including repeated and nested uses; literal `$1` text in strings/comments is unchanged.
 
 ```ts
+const email: string | undefined = 'reader@example.test';
 const conditions = [sql.fragment`active = ${true}`];
 if (email !== undefined) conditions.push(sql.fragment`email = ${email}`);
-if (afterId !== undefined) conditions.push(sql.fragment`id > ${afterId}`);
-
 const query = sql<{ id: number }>`SELECT id FROM public.users
   WHERE ${sql.join(conditions, 'AND')} ORDER BY id`;
 ```
 
-The list must be nonempty; the example keeps the active condition even when both optional filters
-are absent. Joins insert separators without adding parentheses or changing SQL precedence. Group
-mixed AND/OR expressions with parentheses, as in ordinary SQL.
-
-Each fragment use receives correctly ordered parameters, including repeated and nested uses. SQL
-strings and comments containing literal `$1` text are left intact.
+The mandatory predicate keeps the list nonempty. If every filter is optional, choose a complete
+query without `WHERE` for the empty case. Group mixed `AND`/`OR` expressions explicitly.
 
 ## Object-based mutation fragments
 
-`sql.insertValues(input, columns?)` and `sql.assignments(input, columns?)` return fragments. Keep the
-operation, table, authorization predicate, conflict policy, expressions, and `RETURNING` in SQL:
+`sql.insertValues(input, columns?)` and `sql.assignments(input, columns?)` return fragments. Keep
+operation, table, predicates, expressions, conflict policy, and `RETURNING` in SQL:
 
 ```ts
-const created = await db.query(
-  sql<{ id: number }>`
-  INSERT INTO profiles ${sql.insertValues([
-    { name: 'Ada', bio: null },
-    { name: 'Lin', score: 4 },
-  ])}
-  ON CONFLICT (name) DO NOTHING
-  RETURNING id
-`,
-  { returns: 'many' },
-);
-
-await db.query(sql`
-  UPDATE profiles SET ${sql.assignments({ name: input.name, bio: input.bio })},
-    revision = revision + 1
-  WHERE id = ${id} AND owner_id = ${viewer}
-`);
+const query = sql<{ id: number }>`INSERT INTO public.users
+  ${sql.insertValues({ email: 'reader@example.test' })} RETURNING id`;
+await db.query(query, { returns: 'one' });
+await db.query(sql`UPDATE public.users SET ${sql.assignments({ active: false })} WHERE id = ${42}`);
 ```
 
-Both helpers accept plain objects (including null-prototype objects), quote each column as one
-identifier, and bind cell values as data. Inputs are read when the fragment is created; replacing a
-field afterward does not change its captured value. Nested values retain the driver's usual
-serialization behavior. Only own data properties are read; accessors are rejected.
+Both accept plain objects, including null-prototype objects. Columns are quoted as individual
+identifiers. Only own data properties are read; accessors are rejected. Fields are captured at
+fragment construction; nested objects retain ordinary driver serialization behavior.
 
-| Input                                        | Insert behavior                    | Assignment behavior                     |
-| -------------------------------------------- | ---------------------------------- | --------------------------------------- |
-| Missing or `undefined` field                 | PostgreSQL `DEFAULT` for that cell | Omitted; the stored column is unchanged |
-| Explicit `null`                              | Bound SQL null                     | Bound SQL null                          |
-| Other value                                  | Bound parameter                    | Bound parameter                         |
-| SQL fragment, identifier, or query as a cell | Rejected                           | Rejected                                |
+| Input                                        | Insert                 | Assignment      |
+| -------------------------------------------- | ---------------------- | --------------- |
+| Missing or `undefined`                       | `DEFAULT` for the cell | Omitted         |
+| `null`                                       | Bound SQL null         | Bound SQL null  |
+| Other value                                  | Bound parameter        | Bound parameter |
+| SQL fragment, identifier, or query as a cell | Rejected               | Rejected        |
 
-Without `columns`, inserts infer the union of enumerable keys with defined values across all rows,
-in first-seen order. Heterogeneous rows stay aligned; missing cells use `DEFAULT`. One object or a
-one-row batch with no defined fields emits `DEFAULT VALUES`. An empty batch throws. A multi-row
-batch with no inferred columns throws; supply explicit columns to emit multiple default rows.
+Inserts accept one object or an array. Without `columns`, they infer the union of enumerable keys
+with defined values in first-seen order. Heterogeneous rows stay aligned. A single default-only
+row emits `DEFAULT VALUES`. Empty batches fail; multiple default-only rows need explicit columns.
+Assignments omit undefined values and fail when no assignments remain, even if surrounding SQL
+has other assignments.
 
-Assignments infer enumerable keys and omit undefined values. An empty object or a selection with
-no defined values throws, so the helper never emits an empty `SET` clause. This also applies when
-the surrounding statement contains arithmetic or other assignments: branch explicitly when the
-intended update consists only of those expressions.
+A supplied column list must be nonempty, unique, and valid. It selects and orders fields, ignoring
+unlisted keys. Missing insert cells use defaults; missing update fields are omitted. TypeScript
+checks selected names against known input keys, but selection can still discard required fields.
+Helpers have no schema metadata; PostgreSQL enforces identity, generated-column, and constraint
+rules. Use [generated inputs](#insert-and-update-inputs) and application validation.
 
-An optional nonempty column list selects and orders fields. It does not validate that the input
-object has no additional keys. Unlisted fields are ignored; missing insert cells use `DEFAULT`,
-while missing update fields are omitted. Duplicate or invalid column
-names throw. TypeScript checks selected names against the input's known keys:
-
-```ts
-const rows: { name: string; bio?: string | null }[] = buildRows();
-const insert = sql`INSERT INTO profiles ${sql.insertValues(rows, ['name', 'bio'])} RETURNING id`;
-
-const patch: { name?: string; bio?: string | null } = readPatch();
-const update = sql`UPDATE profiles SET ${sql.assignments(patch, ['name', 'bio'])} WHERE id = ${id}`;
-```
-
-The helpers have no runtime schema metadata. Use [generated input types](#insert-and-update-inputs)
-or application-owned contracts to check JavaScript values; PostgreSQL enforces identity,
-generation, required-column, and constraint rules. Retain application validation.
-To reset an update field to its default, write `column = DEFAULT` in the
-surrounding SQL. Put arithmetic and `excluded.column` expressions there too; these helpers accept
-values only, with no expression/default sentinel.
-
-A compiled query accepts at most 65,533 bound parameters, including surrounding interpolations.
-Tenon rejects larger queries and does not split them automatically. Choose batch sizes and
-transaction boundaries in the caller. Helper validation errors identify invalid rows/columns
-without printing cell values.
-
-See the [mutation cookbook](mutations.md) for common patterns and
-[query inspection](#query-inspection) for checking completed statements.
+Write arithmetic, `column = DEFAULT`, and `excluded.column` in the surrounding SQL. There is no
+expression/default sentinel. A complete query accepts at most 65,533 bound parameters, including
+surrounding interpolations; Tenon does not split batches. See the [mutation cookbook](mutations.md).
 
 ## Transactions, guarded writes, and errors
 
+For an existing user with id 42:
+
 ```ts
 await db.transaction(async (tx) => {
-  const id = 42;
-  await tx.query(sql`UPDATE public.users SET active = false WHERE id = ${id}`, {
+  await tx.query(sql`UPDATE public.users SET active = false WHERE id = ${42}`, {
     affectedRows: { exact: 1 },
   });
-  // Use tx for every query that belongs to this transaction.
 });
 ```
 
-Transactions belong to one database instance; they do not coordinate writes across databases. The
-callback commits on success and rolls back when an error escapes. Await all work before returning;
-the callback client expires afterward. A helper accepting `QueryClient` works with either `db` or
-`tx`. Nested callback transactions and automatic retries are not provided.
+Use `tx` for every operation that must commit together and await the work. The callback commits on
+success, rolls back on an escaping error, and expires before cleanup. Transactions belong to one
+database instance. Nested callbacks and automatic retries are not provided. Tenon owns direct
+BEGIN/COMMIT/ROLLBACK boundaries.
 
-`affectedRows: { exact: n }` requires n affected rows; `{ max: n }` permits up to n. Both require
-nonnegative safe integers. Checks apply to INSERT, UPDATE, DELETE, and MERGE, independent of
-`RETURNING`. A root call uses a transaction; a call on `tx` uses a savepoint. A mismatch rolls back
-before throwing. You may catch a guarded failure and continue the outer transaction. Unguarded
-PostgreSQL errors normally abort that transaction, even when caught.
+`affectedRows: { exact: n }` or `{ max: n }` accepts a nonnegative safe integer. It checks the final
+INSERT/UPDATE/DELETE/MERGE count independently of `RETURNING`. A guarded root call uses a
+transaction; a guarded callback call uses a savepoint. Failed checks and other errors from that
+guarded operation roll it back before throwing. A caught guarded failure permits continued work;
+unguarded SQL errors normally abort the transaction.
 
-The count covers the final command, excluding additional trigger, cascade, or CTE effects. It cannot
-identify the wrong single row. Returned-row checks alone do not undo autocommitted writes. Rollback
-cannot undo sequence advances or external side effects of database functions.
+Counts exclude extra trigger/cascade and CTE effects and cannot identify the wrong single row.
+Sequence advances and external effects are not reversible. A lost commit acknowledgment can leave
+the outcome unknown; applications own retry and idempotency policy.
 
-Set isolation and timeouts with SQL, for example `SET TRANSACTION ISOLATION LEVEL SERIALIZABLE`
-before data queries and `SET LOCAL statement_timeout = '5s'`. Manual savepoints are available
-through SQL; reserve `tenon_affected_rows_` names for Tenon. Direct BEGIN/COMMIT/ROLLBACK boundaries
-are owned by `transaction`.
+Set isolation before data queries with `SET TRANSACTION ISOLATION LEVEL SERIALIZABLE`, and use
+`SET LOCAL statement_timeout = '5s'` to bound statements in that transaction. Manual savepoints are supported;
+reserve names beginning with `tenon_affected_rows_` for Tenon.
 
-SQL errors retain Postgres.js's codes and details. Invalid inputs and returned-row mismatches throw ordinary
+SQL errors retain native driver details. Invalid inputs and cardinality mismatches throw ordinary
 `Error` objects. `AffectedRowsError` carries `expected`, `actual`, `command`, and code
-`TENON_AFFECTED_ROWS_MISMATCH` or `TENON_AFFECTED_ROWS_UNSUPPORTED`. When both work and cleanup
-fail, `AggregateError` preserves both failures. A lost commit acknowledgment can leave the outcome
-unknown; retry only when the application's operation makes that safe.
+`TENON_AFFECTED_ROWS_MISMATCH` or `TENON_AFFECTED_ROWS_UNSUPPORTED`. Work/cleanup failures can
+produce `AggregateError`.
 
-Optional `createTenon({ connection, onQuery })` observes completed calls with `label`, `durationMs`,
-`outcome`, and available `command`, `rowCount`, `errorCode`. It receives no SQL or values. Observers
-are not awaited; failures emit warnings. A successful callback query does not mean its outer
-transaction has committed.
+Optional `onQuery` observes completed calls with `label`, `durationMs`, `outcome`, and available
+`command`, `rowCount`, and `errorCode`. It receives no SQL or values. Validation failures before
+execution are not observed. Observers are not awaited; failures emit warnings without changing
+the query outcome. Query success inside a callback does not establish outer commit.
 
 ## Generated types and checking
 
-`generateDefinitions({ connection, namespace?, onWarning? })` returns TypeScript source for the
-connected schema. It does not need migration files or history. Table type generation is optional.
-Generated files provide reusable row and mutation input types. The CLI writes that source
-atomically. This command checks
-the existing file without rewriting it:
+`generateDefinitions({ connection, namespace?, onWarning? })` returns TypeScript declarations
+from a consistent read-only snapshot; it does not need migration files or history. The CLI writes
+them atomically. Default namespace is `public`; default output is `src/generated-schema.ts`.
+Both `.ts` and `.d.ts` outputs are supported. Commit exact output and exclude it from formatting.
 
 ```sh
+npx tenon generate --out src/generated-schema.d.ts
 npx tenon generate --out src/generated-schema.d.ts --check
 ```
 
-`--check` reports a missing file or shows a short text diff when the saved output differs from the
-current database. It never rewrites the file. Pending migration files
-are a separate concern. The representation includes table columns, constraints, indexes, and
-referenced domains, not every PostgreSQL object.
+`--check` never rewrites the file. Missing/stale output fails with a diagnostic and a short diff
+for changes. It compares the generated representation, not pending migrations or every database
+object. Output includes relation/constraint/index summaries and referenced domains, not function
+bodies, grants, or a complete schema fingerprint.
 
-Generation reads a consistent snapshot of ordinary tables and partitioned roots. `Rows['users']`
-describes one returned row. Application type names can use PascalCase:
+Generation covers ordinary tables and partitioned roots. Views, foreign tables, and attached
+partitions need query-specific types. A missing namespace fails; an existing empty schema is valid.
+Exact table names are available through `Rows['users']`; valid nonreserved identifiers also receive
+named aliases. Use `Pick` for projections; a join or aggregate needs its actual selected shape.
 
-```ts
-import type { Rows } from './generated-schema.js';
+| PostgreSQL type                                | Read representation  | Generated write input                                        |
+| ---------------------------------------------- | -------------------- | ------------------------------------------------------------ |
+| smallint, integer, oid, real, double precision | `number`             | `number`                                                     |
+| bigint                                         | `string`             | `string \| bigint`                                           |
+| numeric                                        | `string`             | `string \| number`                                           |
+| boolean                                        | `boolean`            | `boolean`                                                    |
+| text, name, varchar, char, uuid, time, timetz  | `string`             | `string`                                                     |
+| date, timestamp, timestamptz                   | `Date`               | `Date \| string`                                             |
+| enum                                           | String literal union | Same union; `never` for an empty enum                        |
+| json, jsonb                                    | `unknown`            | `Exclude<JSONValue, null>`; `JSONValue` is exported by Tenon |
+| bytea                                          | `Buffer`             | `Buffer`                                                     |
 
-type User = Rows['users'];
-type UserSummary = Pick<User, 'id' | 'email'>;
-```
+Nullable columns add null; `unknown` already includes it. Domains retain verified base mappings
+and the column's read nullability. Verified arrays use `PgArray<T> = (T | null | PgArray<T>)[]` for
+null elements and multiple dimensions. Numeric arrays contain strings; enum arrays and arrays of
+domains are unverified. Unmapped types warn and use `unknown` reads / `never` non-null writes.
+Custom parsers need matching application types.
 
-Use `sql<User>` for a full row or `sql<UserSummary>` for that projection. Generated table keys and
-named aliases preserve exact SQL names; the generated `users` alias also means `Rows['users']`.
-`type AuditRow = Rows['audit-log']` works for names that cannot be exported as identifiers.
-Views, foreign tables, and attached partitions use query-specific types. A missing namespace
-fails; an existing empty schema is valid.
+Date-only parsing uses UTC; timestamps without time zone use Node's local timezone. Infinite
+temporal reads become invalid dates: check `Number.isFinite(value.getTime())` before date methods.
+Bound temporal values require finite dates; use SQL literals for PostgreSQL infinity.
 
-| PostgreSQL type                                | Returned value                           | Generated write input                   |
-| ---------------------------------------------- | ---------------------------------------- | --------------------------------------- |
-| smallint, integer, oid, real, double precision | `number`                                 | `number`                                |
-| bigint                                         | `string`                                 | `string \| bigint`                      |
-| numeric                                        | `string`                                 | `string \| number`                      |
-| boolean                                        | `boolean`                                | `boolean`                               |
-| text, name, varchar, char, uuid, time, timetz  | `string`                                 | `string`                                |
-| date, timestamp, timestamptz                   | `Date` (infinities become invalid dates) | `Date \| string`                        |
-| enum                                           | String literal union                     | Same union; `never` for an empty enum   |
-| json, jsonb                                    | `unknown`                                | `Exclude<JSONValue, null>` (from Tenon) |
-| bytea                                          | `Buffer`                                 | `Buffer`                                |
+### Persistence and domain values
 
-For returned rows, nullable columns add null. Domains use verified underlying mappings and the
-column's own nullability. Unverified types warn and become `unknown`. Verified arrays use
-`PgArray<T> = (T | null | PgArray<T>)[]` for null elements and multiple dimensions. Numeric arrays
-contain exact strings, like numeric scalars. Enum arrays and arrays of
-domains are unverified. Date-only values use the driver's UTC date parsing; timestamps without time zone use Node's local timezone.
-Infinite timestamps remain invalid `Date` objects: check validity before using date methods.
-Custom Postgres.js parsers need matching application types.
+Generated types describe storage representations. Text `CHECK` constraints do not become unions,
+and JSON reads remain unknown; validate before narrowing to domain types. Convert third-party
+payloads into validated native JSON-compatible objects rather than asserting compatibility or
+pre-serializing them. A bound null means SQL null; use `'null'::jsonb` for JSON null.
+
+Bigint and `count(*)` reads are decimal strings. Use SQL or BigInt for exact arithmetic and decimal
+strings at JSON boundaries; convert to number only when bounded or approximate values are intended.
 
 ### Insert and update inputs
 
-The same file provides `Rows.Insert['table']` and `Rows.Update['table']` for bound write inputs.
-These are ordinary TypeScript types. `--out` accepts `.ts` or `.d.ts`; the examples use `.d.ts`
-because the file contains only declarations.
-
 ```ts
 import type { Rows } from './generated-schema.js';
 
-type NewProfile = Rows.Insert['profiles'];
-type ProfilePatch = Pick<Rows.Update['profiles'], 'name' | 'bio'>;
-
-const profile: NewProfile = { name: 'Ada' };
-const patch: ProfilePatch = { name: undefined, bio: null };
-sql.insertValues(profile, ['name', 'bio', 'score']);
-sql.assignments(patch, ['name', 'bio']);
+const input: Rows.Insert['users'] = { email: 'reader@example.test' };
+const patch: Pick<Rows.Update['users'], 'active'> = { active: false };
+sql.insertValues(input);
+sql.assignments(patch);
 ```
 
-Insert fields are required when nonnullable and without a default. Other writable insert fields
-are optional; every writable update field is optional. `undefined` requests a default on insert
-and omits an assignment on update. Explicit `null` is accepted only when the column and its domain
-chain permit it. Domain defaults count; column defaults take precedence.
+Insert fields are required when nonnullable, writable, and without a default. Other writable insert
+fields and all writable update fields are optional and accept explicit undefined, including with
+`exactOptionalPropertyTypes`. Explicit null requires both column and domain-chain permission.
+Domain defaults count; column defaults take precedence.
 
-Computed columns and `GENERATED ALWAYS` identity columns cannot receive values. Serial and
-`GENERATED BY DEFAULT` identity columns are optional on insert and writable on update. Other
-primary keys remain writable. Use `Pick` or `Omit` for application-specific restrictions and keep
-expressions, `DEFAULT`, and special identity overrides in SQL.
+Computed and `GENERATED ALWAYS` identity columns use optional `never` fields. Serial and
+`GENERATED BY DEFAULT` identities are optional on insert and writable on update; other primary
+keys remain writable. Use `Pick`/`Omit` for application restrictions. Apply the generated types
+through annotations, `satisfies`, or helper generic arguments; they do not validate constraints,
+JSON structure, authorization, or nonempty input.
 
-Write representations in the table above also apply to verified array elements. Pass JavaScript JSON
-values directly; do not pre-serialize them. A bound null is SQL null. To construct JSON null explicitly,
-use SQL such as `'null'::jsonb`. Native temporal serialization requires finite dates; strings such as
-`'infinity'` are not valid bound date values. Use SQL literals for these PostgreSQL values. Unverified non-null write values use `never` and warn;
-nullable fields still accept null. Supply an application-owned replacement when needed, for example
-`Omit<Rows.Insert['events'], 'delay'> & { delay: string }` for a reviewed interval-text input.
-
-Apply these types through annotations, `satisfies`, or helper generic arguments such as
-`sql.insertValues<NewProfile>(input)`. They check shapes and representations, not authorization,
-constraints, JSON contents, or nonempty inputs. Optional fields accept explicit `undefined`,
-including with `exactOptionalPropertyTypes`. Selected columns can discard required fields; see
-the [cookbook example](mutations.md#input-types-and-runtime-validation).
+For unverified write mappings, provide a reviewed application-owned replacement, for example
+`Omit<Rows.Insert['events'], 'delay'> & { delay: string }` for interval text input. Selected columns
+can discard required fields; see [the cookbook](mutations.md#input-types-and-runtime-validation).
 
 ## Query inspection
 
-`describeQuery({ connection, query, session?, timeouts? })` accepts a PostgreSQL connection URI
-and a finished SQL string or `{ text }` query object. It returns parameter/result type metadata,
-source constraints, conservative row declaration, effective session context, and coded findings.
-It does not bind query values, execute the inspected statement, or verify `sql<Row>`.
+`describeQuery({ connection, query, session?, timeouts? })` accepts a PostgreSQL URI and a finished
+SQL string or `{ text }` object. It returns PostgreSQL metadata, conservative read mappings and
+row declaration, session context, and coded findings. It does not bind values, execute the
+statement, or verify `sql<Row>`.
 
-`tenon describe <query.sql>` prints that report as JSON using `DATABASE_URL`. Session flags are
-`--role`, `--search-path`, and `--time-zone`. Timeout flags are `--connect-timeout-ms`,
-`--statement-timeout-ms`, and `--lock-timeout-ms`; defaults are 3000, 5000, and 1000 ms.
-
-Inspection owns a separate connection and uses Postgres.js mappings. Match the application's role
-and settings; temporary tables, uncommitted changes, transaction-local settings, and custom parsers
-are not inherited. Result nullability remains unknown. CLI exit 0 means description succeeded,
-including reports with unresolved issues; execution and type annotations remain unchecked.
-
-See [query inspection](query-inspection.md) for public types, finding codes, session behavior, and
-the workflow combining inspection with persistent application database tests.
+Inspection owns a separate session with bounded timeouts. Match runtime settings; temporary tables,
+uncommitted changes, and custom parsers are not inherited. Nullability stays unknown. See
+[query inspection](query-inspection.md) for settings, result fields, issue codes, and testing.
 
 ## Command reference
 
-All database commands use `DATABASE_URL`; environment files are not loaded automatically. For
-multiple databases, run commands with the intended database's URL and migration directory, and use
-distinct generated output files if generating table types.
+Database commands require `DATABASE_URL`. `new` and `--help` work offline. No environment files
+are loaded. Paths are relative to the working directory. Explicit flags unsupported by a command
+are rejected; `--check` is only a generation check, not a migration dry run.
 
 ```text
 tenon new <name> [--directory migrations]
 tenon migrate [--directory migrations] [--namespace public]
 tenon status [--directory migrations] [--namespace public]
 tenon rollback [--directory migrations] [--namespace public] [--steps 1]
-tenon generate [--namespace public] [--out path] [--check]
+tenon generate [--namespace public] [--out src/generated-schema.ts] [--check]
 tenon describe <query.sql> [--role name] [--search-path value] [--time-zone value]
-tenon baseline capture|adopt [--directory migrations] [--namespace public]
+  [--connect-timeout-ms 3000] [--statement-timeout-ms 5000] [--lock-timeout-ms 1000]
+tenon baseline capture [--directory migrations] [--namespace public] [--schema name ...]
+tenon baseline adopt [--directory migrations] [--namespace public]
 ```
 
-Migration filenames are `<numeric-id>_<name>.up.sql` and optional matching down files. IDs sort
-numerically. Each migration and its history entry commit together; earlier files remain applied if a
-later file fails. Status reports applied/pending IDs. Rollback checks that every selected file has
-down SQL before executing any. Use dollar-quoted function bodies and explicit `E'...'` for backslash
-escapes. Nontransactional DDL such as `CREATE INDEX CONCURRENTLY` needs a separate procedure.
+`new` scaffolds empty `<numeric-id>_<name>.up.sql` and `.down.sql` files. Names contain letters,
+digits, underscores, or hyphens. Fill both files or remove the down file for an irreversible change.
+IDs sort numerically. Never edit applied files: checksums cover up and down SQL.
 
-Tools coordinate through session advisory locks per database/namespace. Use direct connections or
-session pooling, with PostgreSQL timeouts to bound waiting.
+Each migration and history entry commits together; earlier files remain applied if a later one
+fails. Runner search path is the selected namespace followed by `pg_catalog`. `status` returns
+applied/pending IDs as JSON and rejects history conflicts. `rollback` validates that every selected
+file has down SQL before executing any; `steps` is a positive safe integer. Use dollar-quoted
+function bodies and explicit `E'...'` backslash escapes. Nontransactional DDL such as
+`CREATE INDEX CONCURRENTLY` requires a separate procedure.
+
+Migration/status/rollback/adoption use session advisory locks per database and namespace;
+generation uses the same lock in shared mode. Use direct or session-pooled connections and server
+timeouts to bound waits. Baseline capture uses a local creation lock and native `pg_dump`;
+it does not acquire the runner's database advisory lock. See [adoption](adoption-guide.md).
 
 Programmatic `migrate`, `migrationStatus`, and `rollback` accept
-`{ connection, directory?, namespace? }`; rollback also accepts `steps`.
-`createMigration({ name, directory? })` scaffolds files; `readMigrations(directory?)` reads
-validated SQL and checksums. Baseline capture/adoption are covered in the
-[adoption guide](adoption-guide.md).
+`{ connection, directory?, namespace? }`; rollback also accepts `steps`. Migration/rollback return
+completed IDs. `createMigration({ name, directory? })` returns `{ id, upPath, downPath }`;
+`readMigrations(directory?)` returns validated SQL and checksums.

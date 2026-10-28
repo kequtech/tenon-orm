@@ -296,3 +296,31 @@ test('invalid session and timeout settings reject explicitly and database errors
   );
   await assertDisconnected(name);
 });
+
+test('undefined optional inspection settings use defaults without bypassing validation', async () => {
+  const description = await describeQuery({
+    connection: testConnection,
+    query: 'SELECT 1 AS id',
+    session: { role: undefined, searchPath: undefined, timeZone: undefined },
+    timeouts: { connectMs: undefined, statementMs: undefined, lockMs: undefined },
+  });
+  assert.equal(description.context.statementTimeoutMs, 5000);
+  assert.equal(description.context.lockTimeoutMs, 1000);
+  assert.equal(description.columns[0]!.readType, 'number');
+  for (const [settings, error] of [
+    [{ session: { unknown: undefined } }, /Unknown inspection session option/],
+    [{ timeouts: { unknown: undefined } }, /Unknown inspection timeout/],
+    [{ session: { role: null } }, /requires a nonempty string/],
+    [{ timeouts: { statementMs: null } }, /must be a positive integer/],
+    [{ timeouts: { statementMs: 0 } }, /must be a positive integer/],
+  ] as const) {
+    await assert.rejects(
+      describeQuery({
+        connection: 'postgresql://unused',
+        query: 'SELECT 1',
+        ...(settings as Pick<import('../src/index.js').DescribeOptions, 'session' | 'timeouts'>),
+      }),
+      error,
+    );
+  }
+});

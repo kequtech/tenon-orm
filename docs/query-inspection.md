@@ -1,12 +1,10 @@
 # Inspect and test queries
 
-`describeQuery` asks PostgreSQL what a completed SQL statement accepts and returns, without
-binding its values or executing it. Use it while writing a query or in a database test. It handles
-the actual SQL produced by fragments, helpers, loops, and conditional filters.
-Its `postgres` driver installs with Tenon; no extra
-consumer dependency or configuration is needed. Calling inspection opens a separate connection.
+`describeQuery` asks PostgreSQL for a completed statement's parameter/result metadata without
+binding its values or executing it. Inspection is included with Tenon and opens a separate,
+short-lived connection. It works with SQL assembled from fragments and mutation helpers.
 
-## Inspect the query you will execute
+## Inspect completed SQL
 
 ```ts
 import { describeQuery, sql } from '@kequtech/tenon-orm';
@@ -18,111 +16,123 @@ const query = sql<{ id: number; total: string }>`
   SELECT ${42}::integer AS id, count(*) AS total FROM pg_catalog.pg_class
 `;
 const description = await describeQuery({ connection, query });
-// description.columns reports number/string read types; nullability remains unknown.
 ```
 
-For an application, pass the same query object that will go to `db.query`. Use representative inputs when calling its query-building
-function. Keep authorization policy centralized inside that builder or its fragments.
+`query` accepts SQL text or an object with `text`, including `SqlQuery`. Pass the same completed
+query to inspection and execution. Strings use PostgreSQL `$1` placeholders; templates use
+`${value}`. Cast standalone parameters so PostgreSQL can infer their types without runtime values.
+Inspection does not read `sql<Row>`, check `query.values`, or compare an annotation with SQL.
 
-`query` accepts a SQL string or an object with a `text` property, including a Tenon `SqlQuery`.
-For SQL strings, use PostgreSQL placeholders such as `$1`. PostgreSQL infers their types from SQL
-context; `SELECT $1::integer AS id` can be described without supplying a value. Ordinary Tenon
-templates bind values with `${value}`.
-
-Inspection does not read the type argument of `sql<Row>`, validate `query.values`, or compare an
-annotation with the result. A successful description is useful schema/type evidence, not proof
-that the query will execute or do the intended job.
-
-## Match the application's context
+## Session and timeouts
 
 ```ts
 const description = await describeQuery({
   connection,
   query,
-  session: { searchPath: 'mail,public', timeZone: 'UTC' },
+  session: { searchPath: 'app,public', timeZone: 'UTC' },
   timeouts: { connectMs: 3000, statementMs: 5000, lockMs: 1000 },
 });
 ```
 
-Reuse the application's connection URI and the source of its session settings. All overrides are
-optional. Connection URI startup options are preserved. `session.role` can assume a role when the
-connecting account has permission; omitted settings use the new connection's defaults. `SET ROLE`
-does not load that role's login defaults. Unknown options and invalid settings fail explicitly.
+Reuse the runtime URI and session settings. Optional `session.role` uses SET ROLE when permitted;
+it does not load that role's login defaults. Omitted settings use the inspection connection's
+defaults. Explicit undefined behaves like omission. Unknown keys and invalid settings fail.
 
-The result's `context` reports the database, login/effective roles, configured and resolved search
-paths, timezone, and effective server timeouts. Compare these with the execution connection.
-Inspection reports `mode: 'separate-session'` and `readMappings: 'postgres'`. SQL NULL array
-elements are represented as JavaScript null.
+`context` reports login/effective roles, configured/resolved search paths, timezone, database, and
+effective statement/lock timeouts. Its mode is `separate-session` and read mapping profile is
+`postgres`. Custom parsers, temporary tables, uncommitted changes, and transaction-local settings
+are not inherited. `PGOPTIONS` is not automatically copied; use URI startup options or session
+settings. Array mappings include Tenon's SQL NULL correction.
 
-The default connection/authentication limit is 3 seconds. Every server statement, including
-metadata reads, has a 5-second limit, and each lock wait a 1-second limit. Cleanup is bounded to
-1 second. Timeout overrides are positive integer milliseconds; URI settings cannot disable these
-bounds. Limits apply to individual operations, not one overall deadline.
+Defaults are a 3-second connection/authentication timeout, a 5-second limit per server statement,
+and a 1-second lock wait. Overrides are positive integer milliseconds, at most 2,147,483,647.
+URI settings cannot disable the statement/lock bounds. Cleanup uses a 1-second driver shutdown
+timeout. These are operation limits, not a single overall deadline.
 
-The API owns and closes its connection. It does not borrow an application client or a Tenon transaction.
-Temporary tables, uncommitted changes, transaction-local settings, custom parsers, and other
-pool-only state are not inherited. `PGOPTIONS` environment settings are not automatically copied;
-use URI startup options or explicit session values. Standard read mappings describe Postgres.js
-values, so custom parser behavior needs a deliberate application decision.
+## Result fields
 
-## Read the result
+| Field                   | Meaning                                                                                    |
+| ----------------------- | ------------------------------------------------------------------------------------------ |
+| `parameters`            | OIDs, qualified PostgreSQL names, and read representations; not JavaScript input contracts |
+| `columns`               | Ordered names, PostgreSQL types, read representations, and source metadata where available |
+| `columns[].nullability` | Always `"unknown"`; source `notNull` is informational                                      |
+| `rowType`               | Conservative `DescribedRow` declaration, or null for no columns/duplicate names            |
+| `issues`                | Findings with stable `code` fields and descriptive messages                                |
+| `context`               | Effective inspection-session settings                                                      |
 
-| Field                   | Meaning                                                                                                                                                                     |
-| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `parameters`            | Parameter type OIDs, qualified PostgreSQL type names, and Postgres.js read representations. These are not accepted JavaScript input contracts.                              |
-| `columns`               | Ordered output names, PostgreSQL types, Postgres.js read representations, and source-column metadata where available.                                                       |
-| `columns[].nullability` | Always `"unknown"`. A source column's `notNull` constraint does not establish result nullability.                                                                           |
-| `rowType`               | A conservative `DescribedRow` TypeScript declaration. Fields include null; JSON/unmapped types stay unknown. Null when there are no output columns or names are duplicated. |
-| `issues`                | Findings with stable `code` fields, human-readable messages, and relevant column/type details.                                                                              |
-| `context`               | The separate inspection session's effective settings and read mapping profile.                                                                                              |
+Known read types in `rowType` include null; unknown types already include it. Source constraints
+cannot establish result nullability through joins, expressions, or grouping. JSON structure stays
+unknown. Handle findings by code:
 
-Use issue codes for tooling; message text is descriptive:
+| Code                  | Meaning                                                         |
+| --------------------- | --------------------------------------------------------------- |
+| `nullability-unknown` | Result nullability is unresolved                                |
+| `shape-unknown`       | Listed output columns have unknown shapes/read types            |
+| `unmapped-type`       | A parameter or result type has no verified driver mapping       |
+| `duplicate-column`    | Repeated result names would overwrite earlier object properties |
 
-- `nullability-unknown`: result nullability has not been established.
-- `shape-unknown`: listed columns have unknown read types; JSON object structure is not inferred.
-- `unmapped-type`: the PostgreSQL type/OID lacks a verified Postgres.js mapping.
-- `duplicate-column`: repeated names would overwrite earlier values in object rows.
+## Test the same statement
 
-Source `notNull` remains informational. Outer joins, grouping, and expressions can introduce nulls.
-An empty result set supplies no runtime samples. Unknown mappings and duplicate names are findings
-to handle explicitly, not a successful verification of a handwritten result type.
+For the `public.users` table from the [human guide](human-guide.md), assume a dedicated test fixture
+has rows `{ id: 1, email: 'ada@example.test', active: true }` and
+`{ id: 2, email: 'lin@example.test', active: false }`, and `db` is its runtime connection:
+
+```ts
+import assert from 'node:assert/strict';
+
+function usersQuery(activeOnly: boolean) {
+  const filters = [sql.fragment`email LIKE ${'%@example.test'}`];
+  if (activeOnly) filters.push(sql.fragment`active = ${true}`);
+  return sql<{ id: number; email: string }>`SELECT id, email FROM public.users
+    WHERE ${sql.join(filters, 'AND')} ORDER BY id`;
+}
+
+const ada = { id: 1, email: 'ada@example.test' };
+const lin = { id: 2, email: 'lin@example.test' };
+for (const activeOnly of [false, true]) {
+  const query = usersQuery(activeOnly);
+  const description = await describeQuery({ connection, query });
+  assert.deepEqual(
+    description.columns.map(({ name, readType }) => [name, readType]),
+    [
+      ['id', 'number'],
+      ['email', 'string'],
+    ],
+  );
+  assert.deepEqual(
+    description.issues.map(({ code }) => code),
+    ['nullability-unknown'],
+  );
+  assert.deepEqual(await db.query(query, { returns: 'many' }), activeOnly ? [ada] : [ada, lin]);
+}
+```
+
+Description and execution establish different facts. Describe can succeed for invalid bound values,
+a write that violates constraints, or an operation the runtime role cannot execute. Check actual
+rows/effects, JSON, permissions, and rollback in database tests, and run TypeScript. Inspect
+meaningful query variants; one instance does not cover unexercised branches. Expect only reviewed
+findings and keep unexpected ones visible.
+
+A query builder is optional. When a test needs to retain executed statements, a test-only
+`QueryClient` wrapper can forward them and retain `{ text }` without parameter values. Production
+`onQuery` deliberately supplies neither SQL nor values.
 
 ## CLI
 
-Save the statement in `query.sql`, using `$1`, `$2`, and so on for parameters:
+Save SQL with PostgreSQL placeholders in `query.sql`:
 
 ```sql
 SELECT $1::integer AS id, count(*) AS total FROM pg_catalog.pg_class;
 ```
 
-Supply `DATABASE_URL` through the application's normal environment setup:
-
 ```sh
 npx tenon describe query.sql
-npx tenon describe query.sql --search-path mail,public --time-zone UTC
+npx tenon describe query.sql --search-path app,public --time-zone UTC
 ```
 
-The CLI prints the description as JSON. Options are `--role`, `--search-path`, `--time-zone`,
-`--connect-timeout-ms`, `--statement-timeout-ms`, and `--lock-timeout-ms`. Migration/generation
-options such as `--namespace` and `--check` are rejected. No environment files are loaded.
+The CLI uses `DATABASE_URL` and prints JSON. Session flags are `--role`, `--search-path`, and
+`--time-zone`. Timeout flags are `--connect-timeout-ms`, `--statement-timeout-ms`, and
+`--lock-timeout-ms`. Migration/generation flags such as `--namespace` and `--check` are rejected.
 
-Exit code 0 means PostgreSQL described the statement, even if the report contains unresolved
-issues. Exit code 1 means input, connection, timeout, or PostgreSQL analysis failed. No query values
-are bound and no inspected statement is executed, including writes and locking statements.
-
-## Keep execution assertions
-
-For each meaningful query-builder variant, describe the finished SQL and run it through the
-application's actual Tenon/Postgres.js connection against its test database. Assert complete relevant rows
-and effects: nulls, JSON contents, precision, ordering, empty results, ownership, and rollback.
-Include absent relationships, pagination ties, and empty aggregates where relevant. Keep those
-tests alongside the query and run the application's normal TypeScript compiler.
-
-Description can succeed for an invalid bound value, a write that violates a constraint, or an
-operation the runtime role may not execute. Execution tests establish behavior for the exercised
-inputs; they are not a proof for every possible input. Inspecting one variant does not cover
-other branches or detect stale TypeScript annotations elsewhere in the application.
-
-Describe does not bind runtime values. Cast standalone parameter projections, for example
-`SELECT $1::boolean AS enabled`, so SQL establishes their types. Execution can otherwise infer a
-type from a JavaScript value that an inspection without values cannot establish.
+Exit 0 means description succeeded, including reports with unresolved findings. Exit 1 means input,
+connection, timeout, or PostgreSQL analysis failed. The inspected statement is never executed.

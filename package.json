@@ -51,8 +51,7 @@
     "prepublishOnly": "npm run check",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "benchmark": "npm run build && node scripts/benchmark.mjs",
-    "test:pilots": "npm run build && node test/pilots/run.mjs"
+    "benchmark": "npm run build && node scripts/benchmark.mjs"
   },
   "dependencies": {
     "postgres": "3.4.9"

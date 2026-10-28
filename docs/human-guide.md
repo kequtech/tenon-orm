@@ -4,9 +4,9 @@ Tenon lets you use PostgreSQL directly from TypeScript. You write SQL; Tenon bin
 executes it through Postgres.js. This guide follows a small application from its first table to reusable
 queries, transactions, and result checking.
 
-Use the [reference](reference.md) when you need exact options or unusual cases. The
-[agent guide](agent-guide.md) is a separate working guide for coding agents;
-[adoption](adoption-guide.md) covers moving an existing application to Tenon.
+Use the [reference](reference.md) for exact contracts and [adoption](adoption-guide.md) when
+replacing an existing ORM. Code blocks build on the connection and table introduced below;
+query-function examples belong in their own module.
 
 ## Connect to your database
 
@@ -29,15 +29,12 @@ if (!connection) throw new Error('DATABASE_URL is required');
 export const db = createTenon({ connection });
 ```
 
-Reuse this instance across the application and call `await db.close()` at shutdown. For multiple
-databases, create an instance for each connection. You can also supply an existing Postgres.js client; your
-application then closes that pool.
+Reuse this instance across the application and call `await db.close()` at shutdown. You can also supply an existing Postgres.js client; your application then owns its shutdown.
 
 ## Create a table
 
-If you already have a schema and migration runner, you can keep them. For new schemas, prefer plural
-`snake_case` table names and `snake_case` column names. Tenon preserves your schema's exact names.
-Create a migration:
+If you already have a schema and migration runner, keep them. For a fresh example database,
+create a migration:
 
 ```sh
 npx tenon new create_users
@@ -179,51 +176,31 @@ await db.query(sql`UPDATE public.users SET ${sql.assignments(patch, ['active'])}
   WHERE email = ${input.email}`);
 ```
 
-Generated insert types distinguish required fields from defaults and nullable fields. Update types
-make writable fields optional; use `Pick` to limit what an action may edit. See the
-[input-type reference](reference.md#insert-and-update-inputs) for write-value mappings.
-
-Keep expressions, authorization, conflict handling and `RETURNING` in SQL. Selected column lists
-choose which fields to write; they do not validate the complete object. See the
-[mutation cookbook](mutations.md) for batches and upserts.
+Use `Pick` to limit editable fields. Keep expressions, predicates, conflict handling, and
+`RETURNING` in SQL. Selected columns choose fields; they do not validate the complete object.
+See [input types](reference.md#insert-and-update-inputs) for mappings and the
+[mutation cookbook](mutations.md) for defaults, batches, and upserts.
 
 ## Check your SQL and result types
 
-Use `describeQuery({ connection, query })` on the completed query object, or
-`npx tenon describe query.sql` on a SQL file, to inspect the server's parameter and result types.
-This works with dynamic fragments and needs no additional checking setup. Match the application's
-connection settings and keep database assertions for actual rows, nulls, JSON, permissions, and
-transaction effects. See [query inspection](query-inspection.md).
+Use `describeQuery({ connection, query })` on completed SQL, or `npx tenon describe query.sql` on a
+file. It reports PostgreSQL metadata and a conservative `rowType` declaration; it does not update
+or verify the application's `sql<Row>` annotation. Inspection uses a separate session, so match
+the runtime role and settings. See [query inspection](query-inspection.md) for a worked test.
 
-TypeScript checks the application code and the result types you declare. Describe reports
-PostgreSQL metadata and a conservative `rowType` declaration for review; it does not update or
-verify the application's `sql<Row>` annotation. Use generated table types where appropriate,
-declare projections explicitly, and check complete returned rows in tests.
-
-1. Run `npm run db:migrate` against the development/test database.
-2. Inspect the completed SQL and review the reported types and unresolved findings.
-3. Run TypeScript and database tests. Keep these checks in routine CI validation.
-
-Input validation and authorization remain application responsibilities. Describe cannot establish
-that a request is authorized, that its values are valid, or that returned JSON has an
-application-specific shape.
+After migrating the development/test database, inspect meaningful query variants, run TypeScript,
+and test actual rows and effects. Keep those checks in CI. Execution assertions cover values,
+nulls, JSON, authorization, and rollback that description alone cannot establish.
 
 ## Reuse or assemble parts of SQL when needed
-
-For fixed conditions, write them directly:
-
-```ts
-const users = await db.query(
-  sql<UserSummary>`SELECT id, email FROM public.users WHERE active = ${true}`,
-  { returns: 'many' },
-);
-```
 
 A fragment is a piece of SQL that carries its bound values with it. It is useful when multiple
 queries share a condition. For example, a search can use the same predicate for its result page and
 its count:
 
 ```ts
+const pattern = '%example%';
+const limit = 20;
 const search = sql.fragment`active = ${true} AND email ILIKE ${pattern}`;
 const page = sql<UserSummary>`SELECT id, email FROM public.users
   WHERE ${search} ORDER BY id LIMIT ${limit}`;
@@ -231,8 +208,8 @@ const count = sql<{ count: string }>`SELECT count(*) AS count FROM public.users
   WHERE ${search}`;
 ```
 
-Here `pattern` is an application-supplied search pattern and `limit` is a validated page size.
-Execute each query with `db.query`. The complete query supplies the result type.
+Execute each query with `db.query`. Validate application-supplied patterns and page sizes before
+building queries. The complete query supplies the result type.
 
 Use `sql.join` when the number of fragments varies, such as one search condition per word or a set
 of optional filters. It combines fragments with `'AND'`, `'OR'`, or `','` and preserves their bound
@@ -250,9 +227,19 @@ const query = sql<UserSummary>`SELECT id, email FROM public.users
 ```
 
 This matches active users whose email contains every term. With no terms, the active condition
-still applies. The list must be nonempty; `join` inserts separators, so use parentheses as usual
+still applies. For an entirely optional set of filters, omit the whole `WHERE` clause when the list
+is empty:
+
+```ts
+const optionalFilters = terms.map((term) => sql.fragment`email ILIKE ${'%' + term + '%'}`);
+const unfilteredOrMatching = optionalFilters.length
+  ? sql<UserSummary>`SELECT id, email FROM public.users WHERE ${sql.join(optionalFilters, 'AND')} ORDER BY id`
+  : sql<UserSummary>`SELECT id, email FROM public.users ORDER BY id`;
+```
+
+`sql.join` and fragments require nonempty input. Keep mandatory authorization predicates in the
+initial list when applicable; an empty optional-filter list must not remove them. Use parentheses
 when mixing `AND` and `OR`. See the [composition reference](reference.md#sql-fragments-and-joins).
 
-For arrays, identifiers, type mappings, CLI options, and error behavior, use the
-[reference](reference.md). You do not need fragments or a query builder to use PostgreSQL joins,
-aggregates, upserts, or other SQL features.
+Use fixed SQL when composition is unnecessary. See the [reference](reference.md) for arrays,
+identifiers, value mappings, CLI options, and error behavior.

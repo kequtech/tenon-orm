@@ -14,6 +14,7 @@ export function inspectionOptions(
     if (!['role', 'searchPath', 'timeZone'].includes(key)) {
       throw new Error(`Unknown inspection session option: ${key}`);
     }
+    if (value === undefined) continue;
     if (typeof value !== 'string' || !value.trim() || value.includes('\0')) {
       throw new Error(`Inspection session ${key} requires a nonempty string without NUL.`);
     }
@@ -23,11 +24,16 @@ export function inspectionOptions(
   const defaults = { connectMs: 3000, statementMs: 5000, lockMs: 1000 };
   for (const [key, value] of Object.entries(timeouts)) {
     if (!Object.hasOwn(defaults, key)) throw new Error(`Unknown inspection timeout: ${key}`);
+    if (value === undefined) continue;
     if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > 2147483647) {
       throw new Error(`Inspection timeout ${key} must be a positive integer in milliseconds.`);
     }
   }
-  const limits = { ...defaults, ...timeouts };
+  const limits = {
+    connectMs: timeouts.connectMs ?? defaults.connectMs,
+    statementMs: timeouts.statementMs ?? defaults.statementMs,
+    lockMs: timeouts.lockMs ?? defaults.lockMs,
+  };
 
   // URL startup options must not disable the inspection's server-side bounds.
   let url: URL;

@@ -20,9 +20,9 @@ export async function runDescribe(
     connection,
     query: await readFile(filename, 'utf8'),
     session: {
-      ...(values.role !== undefined ? { role: values.role } : {}),
-      ...(values['search-path'] !== undefined ? { searchPath: values['search-path'] } : {}),
-      ...(values['time-zone'] !== undefined ? { timeZone: values['time-zone'] } : {}),
+      role: values.role,
+      searchPath: values['search-path'],
+      timeZone: values['time-zone'],
     },
     timeouts: {
       ...(values['connect-timeout-ms'] !== undefined

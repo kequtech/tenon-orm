@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { access, cp, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join, posix, resolve } from 'node:path';
 import { test } from 'node:test';
 import { promisify } from 'node:util';
 import postgres from 'postgres';
@@ -45,6 +45,7 @@ test('the packed package preserves API contracts and consumes generated .d.ts sc
       'docs/human-guide.md',
       'docs/reference.md',
       'docs/query-inspection.md',
+      'docs/mutations.md',
     ]) {
       assert.ok(paths.includes(required), `Package is missing ${required}`);
     }
@@ -94,6 +95,18 @@ test('the packed package preserves API contracts and consumes generated .d.ts sc
       { cwd: consumer, env: npmEnv },
     );
     const installed = join(consumer, 'node_modules/@kequtech/tenon-orm');
+    // Relative documentation links must also work for readers of the installed package.
+    for (const path of paths.filter((path) => path.endsWith('.md'))) {
+      const markdown = await readFile(join(installed, path), 'utf8');
+      for (const match of markdown.matchAll(/\[[^\]]*\]\(([^\s)]+)\)/g)) {
+        const target = match[1]!.split('#')[0]!;
+        if (!target || /^[a-z][a-z0-9+.-]*:/i.test(target)) continue;
+        const relative = posix.normalize(
+          posix.join(posix.dirname(path), decodeURIComponent(target)),
+        );
+        assert.ok(paths.includes(relative), `${path} links to missing package file ${target}`);
+      }
+    }
     const metadata = JSON.parse(await readFile(join(installed, 'package.json'), 'utf8')) as {
       name: string;
       license: string;
@@ -306,7 +319,7 @@ ${result.stderr ?? ''}`);
       assert.deepEqual(composed.values, [7]);
       const db = createTenon({ connection: 'postgresql://unused' });
       await db.close();
-      const owned = createTenon({ connection: process.env.TENON_TEST_DATABASE_URL });
+      const owned = createTenon({ connection: { url: process.env.TENON_TEST_DATABASE_URL, options: { max: 1 } } });
       assert.equal((await owned.native.unsafe('SELECT 42 AS value'))[0].value, 42);
       await owned.close();
       await assert.rejects(owned.native.unsafe('SELECT 1'), {code: 'CONNECTION_ENDED'});

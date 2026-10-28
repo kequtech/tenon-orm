@@ -2,21 +2,16 @@
 
 A PostgreSQL ORM designed for coding agents. Built for Node.js and TypeScript.
 
-Your coding agent already knows SQL. Tenon gives it a small API for parameterized queries,
-transactions, migrations, query inspection, and generated database types. Queries
-stay readable, reusable operations are ordinary functions, and humans can review exactly what will
-run against the database.
-
-Tenon takes the place of an ORM without hiding PostgreSQL behind a query builder. You or your agent
-write the SQL; Tenon handles binding values and returning results. Your application controls the
-connection configuration and validation. Tenon includes its pinned Postgres.js driver.
+Write SQL directly, bind values with a template tag, and reuse queries through ordinary functions.
+Tenon provides transactions, affected-row guards, SQL migrations, generated database types, and
+query inspection. It includes its pinned Postgres.js driver.
 
 ```sh
 npm install @kequtech/tenon-orm
 ```
 
-Requires Node.js 24+, PostgreSQL 16+, and ESM. TypeScript consumers need TypeScript 6+ and
-Node development typings.
+Requires Node.js 24+, PostgreSQL 16+, and ESM. TypeScript consumers need TypeScript 6+ and Node
+development typings.
 
 ```ts
 import { createTenon, sql } from '@kequtech/tenon-orm';
@@ -39,70 +34,32 @@ try {
 }
 ```
 
-This standalone example assumes the table exists. In a server, reuse an instance per database and
-close it at shutdown, not after each request. Use `returns: 'many'` for an array, `'one'` when a row
-must exist, or omit the option for the driver's full result.
+The example assumes `public.users` exists. In a server, reuse the instance and close it at shutdown.
+`oneOrNone` rejects multiple rows; use `one` for exactly one row, `many` for an array, or omit
+`returns` for the driver's result array and metadata.
 
-Use [`db.native`](docs/reference.md#native-driver-access) to access the underlying Postgres.js client
-for LISTEN, cursors, COPY, and other native features without installing another driver. Native calls
-use the pool directly and bypass Tenon's query and transaction guards.
+Joins, relationships, aggregates, and upserts use PostgreSQL SQL. Object-based writes can use
+`sql.insertValues` and `sql.assignments` while keeping the surrounding statement explicit.
+`db.native` exposes the driver for LISTEN, cursors, COPY, and other native features; those calls
+bypass Tenon's query and transaction guards.
 
-Tenon also provides:
-
-- Transactions and affected-row limits that roll back rejected writes.
-- SQL migration files and a CLI to apply, inspect, and roll back migrations.
-- TypeScript row, insert, and update types generated from your database.
-- SQL fragments for sharing query parts or assembling variable conditions.
-- Query descriptions from PostgreSQL, including parameter/result types and session context.
-
-Joins, relationships, aggregates, and upserts use ordinary PostgreSQL SQL. Tenon does not introduce
-model classes or automatically load related records. Input validation, authorization, and database
-performance remain application concerns. You can keep an existing migration runner; Tenon's
-migrations and table type generation are independent conveniences.
-
-## Here's what a coding agent says about it
-
-> "The appeal is that I can read the query, see where the transaction starts and ends, and put
-> reusable logic in a function. There isn't much framework machinery to learn. The tradeoff is that
-> someone still has to write the SQL and check the result types. I'm happy to do that part. Please
-> still review my SQL."
->
-> — Codex, after working on Tenon. An interested party, to put it mildly.
-
-## Object-based writes
-
-For object-based writes, `sql.insertValues(rows)` preserves database defaults across heterogeneous
-rows and `sql.assignments(patch)` omits undefined fields. Keep the surrounding SQL explicit. Both
-support selected columns.
-Use [generated input types](docs/reference.md#insert-and-update-inputs) to check those objects
-against your schema.
-
-## Checking query results
-
-The type in `sql<{ id: number; email: string }>` describes what you expect back. TypeScript alone
-cannot verify that your SQL actually selects those columns.
-
-Use `describeQuery({ connection, query })` to inspect the finished SQL, including dynamic fragments,
-or `npx tenon describe query.sql` for a SQL file. It reports PostgreSQL types, Postgres.js values,
-session context, and unresolved findings without executing the statement. No checking packages or
-compiler API are required. Keep database tests for actual values, nullability, authorization, and
-write effects; descriptions do not verify `sql<Row>`. See [query inspection](docs/query-inspection.md).
+`sql<Row>` declares an expected result type. `describeQuery` inspects the finished SQL through
+PostgreSQL without executing it; it does not verify that annotation. Keep database tests for actual
+rows and write effects. Validation, authorization, and retry policy belong to the application.
+Existing migration runners can be retained; Tenon's migrations and type generation are optional.
 
 ## Documentation
 
-- **[Changelog](CHANGELOG.md)** — release changes and upgrade notes.
-- **[Human guide](docs/human-guide.md)** — learn the workflow through practical examples.
-- **[Agent guide](docs/agent-guide.md)** — self-contained setup, API contracts, and implementation
-  conventions.
-- **[Reference](docs/reference.md)** — complete options, query inspection, type mappings, and
-  limitations.
-- **[Adoption guide](docs/adoption-guide.md)** — replace an existing ORM and, if needed, transfer
-  migration ownership, update local write helpers, and validate converted queries.
-- **[Mutation cookbook](docs/mutations.md)** — defaults, patches, upserts, arrays, batching, and
-  the boundaries between input typing and database validation.
+- **[Human guide](docs/human-guide.md)** — a table, queries, transactions, and generated types.
+- **[Agent guide](docs/agent-guide.md)** — implementation contracts and upgrade workflow.
+- **[Reference](docs/reference.md)** — API options, value mappings, CLI, and limitations.
+- **[Adoption guide](docs/adoption-guide.md)** — replace an ORM and transfer migration ownership.
+- **[Mutation cookbook](docs/mutations.md)** — defaults, patches, upserts, arrays, and batching.
+- **[Query inspection](docs/query-inspection.md)** — Describe reports and database tests.
+- **[Changelog](CHANGELOG.md)** — versioned changes and upgrade instructions.
 
-The complete `docs/` folder ships with the npm package. Maintainer instructions are in
-[CONTRIBUTING.md](https://github.com/kequtech/tenon-orm/blob/main/CONTRIBUTING.md), which is not
-bundled.
+These documents all ship with the npm package, including the changelog so an agent upgrading a
+project can read the relevant release entries locally. Repository maintenance instructions are in
+[CONTRIBUTING.md](https://github.com/kequtech/tenon-orm/blob/main/CONTRIBUTING.md).
 
 [ISC licensed](LICENSE). Maintained by [Kequtech](https://github.com/kequtech).

@@ -1,179 +1,135 @@
-# Adopting Tenon from another ORM
+# Adopting Tenon
 
-This guide covers replacing an existing ORM and, separately, transferring migration ownership. For a
-query tutorial use the [human guide](human-guide.md); for API details use the
-[reference](reference.md). Preserve the existing schema, connection configuration, data, and
-application behavior while replacing the old ORM. Tenon does not need to own migrations to execute
-queries or generate types; keep the existing migration runner if that is the intended scope.
+Replace application queries independently of migration ownership. Tenon can query an existing
+schema and generate types while the current migration runner stays in place. For a Tenon version
+upgrade, read the [Changelog](../CHANGELOG.md).
 
-## Preserve connection configuration
+## Preserve connections and behavior
 
-Reuse the existing connection URI, including its credentials and TLS parameters. Translate pg
-configuration using Postgres.js names and units rather than passing the old options object through:
-
-| pg configuration                | Tenon / Postgres.js equivalent                                                         |
-| ------------------------------- | -------------------------------------------------------------------------------------- |
-| `connectionString`              | `createTenon({ connection: connectionString })`                                        |
-| `connectionTimeoutMillis: 5000` | `connect_timeout: 5` (seconds)                                                         |
-| `idleTimeoutMillis: 10000`      | `idle_timeout: 10` (seconds)                                                           |
-| Session `search_path`           | Preserve URI startup settings or set the Postgres.js options' `connection.search_path` |
-
-Timeouts can be supplied as URI query parameters or Postgres.js options. Keep the deployment's TLS
-requirements and use the driver's SSL configuration when supplying options. CLI `--namespace`
-does not configure the runtime search path. See [connection options](reference.md#installation-and-connection)
-and the [pinned driver configuration](https://github.com/porsager/postgres/tree/v3.4.9#connection-details).
-
-## Replace application queries
-
-1. Locate the old ORM's connection setup, schema, migrations, and call sites. Identify behavior
-   supplied by the ORM: validation, IDs, timestamps, hooks, defaults, relation loading,
-   serialization, and transaction boundaries.
-2. If row and mutation input types will help your application, generate them from the existing database:
-
-   ```sh
-   npx tenon generate --out src/generated-schema.d.ts
-   ```
-
-   Use `--namespace name` for a non-public schema. Generation reads the actual database and requires
-   no Tenon migration history.
-
-3. Replace queries with parameterized SQL in ordinary functions with named object inputs where
-   useful. Preserve each caller's projection, null handling, ordering, and transaction behavior.
-   Generated types describe Postgres.js values: check bigint/numeric strings, dates, JSON, and arrays when
-   the old ORM transformed them.
-4. Inspect completed queries and test their behavior using the
-   [inspection workflow](#inspect-queries-during-adoption) below. Declare result types explicitly
-   and run tests against a dedicated test database. Verify
-   writes and rollback, relationships, validation, and any hooks you moved into application code or
-   SQL. A schema-preserving first release makes application rollback easier.
-5. Remove the old runtime dependency and unused generated code after its callers are gone. Keep the
-   migration tooling until the migration transition below is complete, if that transition is part of
-   the work.
-
-For driver features such as LISTEN or COPY, use [`db.native`](reference.md#native-driver-access).
-Preserve the application's notification recovery and resource ownership. Native pool queries do
-not join Tenon transactions; use `tx.query` for operations that must commit together.
-
-Check cardinality when replacing a "take first" API. Tenon's `oneOrNone` rejects multiple rows;
-`one` also rejects zero rows. If choosing one of several matches is intended, express that choice
-with a deterministic `ORDER BY` and `LIMIT 1`. Preserve a uniqueness contract when multiple matches
-would instead indicate an error. Return modes never add a SQL limit.
-
-## Replace local write helpers
-
-Use `sql.insertValues(rows)` and `sql.assignments(patch)` in place of local object-to-SQL utilities:
+Keep the existing database URI, credentials, TLS requirements, schema, and data. Tenon can add
+driver settings without parsing the URI:
 
 ```ts
-import { sql } from '@kequtech/tenon-orm';
+import { createTenon } from '@kequtech/tenon-orm';
 
-const insert = sql`INSERT INTO profiles ${sql.insertValues(rows)} RETURNING id`;
-const update = sql`UPDATE profiles SET ${sql.assignments(patch)} WHERE id = ${id}`;
+const db = createTenon({
+  connection: { url: existingUri, options: { connect_timeout: 5, idle_timeout: 10 } },
+});
 ```
 
-Compare omission, defaults, nulls, and empty-input behavior with the old helpers. Keep expressions
-in SQL and remove the local utilities after their callers move. Generated `Rows.Insert` and
-`Rows.Update` types can replace handwritten table inputs; retain application-specific refinements
-and validation. Run the existing write and rollback workflows. See the [mutation cookbook](mutations.md).
+Translate old driver configuration into Postgres.js options rather than passing it through.
+For example, pg's `connectionTimeoutMillis: 5000` becomes `connect_timeout: 5`, and
+`idleTimeoutMillis: 10000` becomes `idle_timeout: 10`; both native options use seconds. Preserve
+runtime `search_path` through URI startup parameters or `options.connection.search_path`.
+URI startup parameters take precedence when both are supplied. CLI `--namespace` does not change
+runtime queries. See [connection options](reference.md#installation-and-connection).
 
-## Inspect queries during adoption
+Before conversion, identify behavior supplied by the old ORM: IDs/defaults, timestamps,
+validation, hooks, serialization, relationships, and transaction boundaries. Preserve it explicitly
+in application code or SQL where required.
 
-Use `describeQuery` from `@kequtech/tenon-orm` on the completed query object, or
-`npx tenon describe query.sql` on a SQL file. Inspection is available with the normal Tenon
-installation and uses no TypeScript compiler API. It works with helpers and runtime-built
-fragments because it receives the final SQL. See [query inspection](query-inspection.md).
+## Replace queries
 
-Reuse the application's connection URI and session configuration; compare the reported role,
-search path, and timezone with execution. Inspection uses a separate connection and Postgres.js
-read mappings. Custom parsers and transaction-local state remain application responsibilities.
+1. Optionally generate persistence types from the existing schema:
 
-Pair descriptions with durable database tests of actual rows and effects. For each converted
-query, cover the meaningful filter/ownership branches, null relationships, JSON structure, empty
-results, ordering/cursors, and transaction failure/replay behavior as applicable. Describe's success
-does not verify a TypeScript annotation or prove that execution is permitted or succeeds. Preserve
-existing authorization policy and transaction boundaries while making queries available to tests.
+   ```sh
+   npx tenon generate --namespace public --out src/generated-schema.d.ts
+   ```
 
-Keep these tests in routine validation. A described query instance does not cover untested source
-queries or detect stale annotations elsewhere.
+   This needs no Tenon migration history. Use the application's namespace and commit exact output.
 
-## Move migration ownership to Tenon
+2. Replace queries with parameterized SQL in ordinary functions accepting `QueryClient` where
+   callers may supply `db` or `tx`. Retain projections, ordering, null handling, and authorization.
+3. Review value conversions against [Tenon's mappings](reference.md#generated-types-and-checking):
+   bigint/numeric strings, dates, arrays, and native JSON may differ from the previous driver.
+   Generated declarations do not replace domain validation.
+4. Inspect meaningful completed query variants and run database assertions for actual rows,
+   permissions, write effects, and rollback. See [query inspection](query-inspection.md).
+5. Remove unused runtime dependencies and generated code after their callers are gone. Dependencies
+   retained by other application code or installed transitively may still be needed.
 
-Choose one final schema checkpoint for the old runner and bring existing target databases to it.
-Disable its migration/schema synchronization before handing ownership to Tenon. The tools do not
-share locks.
+Check cardinality when replacing a first-row accessor. `oneOrNone` rejects multiple rows and `one`
+also rejects zero rows. Use deterministic `ORDER BY` plus `LIMIT 1` when choosing one of several
+matches is intended; modes do not add a limit.
 
-Capture one baseline from the reference database into an empty migration directory:
+Use `sql.insertValues` and `sql.assignments` to replace object-to-SQL utilities, checking omission,
+default, null, and empty-input semantics. Generated `Rows.Insert`/`Rows.Update` types can replace
+handwritten persistence inputs. See the [mutation cookbook](mutations.md).
+
+Use `tx.query` for work that must commit together. Native pool calls do not join Tenon transactions.
+For driver features, preserve resource ownership and recovery policy under the
+[native access contract](reference.md#native-driver-access).
+
+## Transfer migration ownership
+
+Choose one final checkpoint for the old runner. Bring existing databases to it and disable that
+runner before handover; the runners do not share locks. Capture from a trusted reference database,
+preferably a disposable replay of the legacy migrations.
+
+### Capture a baseline
+
+For an application owning `app` in a shared database:
 
 ```sh
-npx tenon baseline capture --directory migrations --namespace public
+npx tenon baseline capture --directory migrations --namespace app --schema app
 ```
 
-This uses native `pg_dump --schema-only --no-owner --no-privileges` and writes
-`0001_baseline.up.sql` without a down file. It requires a compatible `pg_dump` on PATH; prefer the
-server's major. Default scope is the whole database schema. Repeat `--schema name` to select schemas
-explicitly, accounting for dependencies, extensions, and required roles. Tenon's selected history
-table is excluded; old ORM metadata is preserved for deliberate cleanup later.
+The directory must contain no SQL files. Capture uses native `pg_dump --schema-only --no-owner
+--no-privileges` and writes `0001_baseline.up.sql` with no down file. Install compatible PostgreSQL
+client tools on PATH; prefer the server's major version.
 
-The baseline recreates application schema, not a complete deployment environment. It omits
-ownership, grants/revokes, and default privileges. PostgreSQL creates replayed objects under the
-migration role. Role definitions and memberships also remain outside the dump. Functions,
-policies, or other object definitions can still refer to roles; provision any referenced roles
-before replay. See the [PostgreSQL pg_dump reference](https://www.postgresql.org/docs/16/app-pgdump.html).
+| Option                | Scope                                                                                |
+| --------------------- | ------------------------------------------------------------------------------------ |
+| `--namespace app`     | Tenon history table to exclude from capture; history/runner scope for later commands |
+| `--schema app`        | Objects selected by native `pg_dump`; repeat to select additional schemas            |
+| Runtime `search_path` | Configured independently on the application connection                               |
 
-For `SECURITY DEFINER` functions, the owner determines execution authority, and newly created
-functions ordinarily permit `PUBLIC` execution. A captured function body alone does not preserve
-its original security boundary. Keep fixed application policy, such as revoking `PUBLIC` execution,
-in reviewed SQL in the baseline before its first adoption or in a subsequent application migration.
-Deployment provisioning assigns the intended owners, schema access, and grants to runtime roles.
-Keeping all security setup in provisioning is also supported, provided it runs before application access.
+Omitting `--schema` captures the whole database schema, even with a custom namespace. Capture does
+not modify source data/history or preserve sequence positions. It excludes Tenon's selected history
+table but can retain the old runner's metadata tables. Review and commit the SQL. Preserve the
+capture header, which opts this reviewed dump into native baseline parsing; do not add it to
+handwritten migrations.
 
-On fresh environments, provision required roles, apply migrations, then apply the deployment's
-ownership/grant policy before starting the application. Verify both allowed and denied operations,
-including execution of sensitive functions and access to their underlying tables. For a shared
-database, apply only the selected application's policy. On existing environments, confirm the same
-provisioning procedure is repeatable. After adoption, use subsequent migrations rather than editing
-checksummed history.
+A scoped dump can refer to objects it does not include. Provision external schemas, functions,
+extensions, and referenced roles before they are needed. A fresh replay must execute representative
+operations, not just reproduce generated relation types. Tenon requires no particular extension.
 
-Capture changes no source data, migration history, or sequence positions. Review and commit the SQL.
-Keep the capture header: it identifies native dump SQL that bypasses the authored-migration scanner.
-It is a convention, not proof of provenance; do not use it on handwritten migrations. Normal
-transactional execution and checksums still apply.
+### Check and adopt an existing database
 
-On each existing database already at that checkpoint:
+Verify the final legacy checkpoint before adoption. If using schema comparisons, freeze separate
+reference definitions rather than comparing against types regenerated after later migrations.
+`generateDefinitions` covers relation metadata, not functions or privileges; include reviewed
+catalog checks for other objects the application needs. Tenon does not perform these comparisons.
 
 ```sh
-npx tenon baseline adopt
+npx tenon baseline adopt --directory migrations --namespace app
+npx tenon migrate --directory migrations --namespace app
 ```
 
-Adoption records the baseline checksum without executing the SQL or comparing schemas. It requires
-the selected namespace to exist. Repeating matching adoption is harmless, including after later
-migrations; conflicting history fails.
+Adoption records the baseline checksum without executing its SQL. The namespace must already
+exist. Repeating matching adoption is harmless, including after later migrations; history conflicts
+fail. Once Tenon owns history, add forward migrations rather than editing the baseline.
 
-If application provisioning verifies a schema fingerprint before adoption, commit a separate frozen
-reference for the old runner's final checkpoint. Do not compare against generated definitions that
-will change with later Tenon migrations. Record the comparison's coverage and generator version:
-`generateDefinitions` represents tables, constraints and indexes, not every schema object, privilege
-or historical data change. It is not a complete schema-equivalence check.
+### Replay a fresh database
 
-On a fresh database, run migrations instead:
+Run `tenon migrate --directory migrations --namespace app`, without adoption. It executes the same
+committed baseline and subsequent migrations. Apply the deployment's required roles, ownership,
+and grants before application access.
 
-```sh
-npx tenon migrate
-```
+The portable baseline omits ownership, grants/revokes, and default privileges. Objects are recreated
+under the migration role. For `SECURITY DEFINER` functions, that owner controls execution authority,
+and new functions ordinarily permit `PUBLIC` execution. Keep fixed policy such as revoking public
+execution in reviewed baseline SQL before first adoption or in a forward migration. Deployment
+provisioning supplies named roles, owners, and grants. Verify permitted and denied operations on
+both adopted and fresh environments. See the
+[pg_dump contract](https://www.postgresql.org/docs/16/app-pgdump.html).
 
-That executes the baseline and subsequent migrations. Use the same committed baseline for every
-environment. Do not run adoption unconditionally on fresh databases. Existing databases adopt once
-and then use ordinary `migrate`.
+For development, generate types after migrating; production runs migrations and consumes committed
+types. Test existing-row preservation, repeatable adoption, subsequent migrations, and fresh replay.
+A schema-only baseline and down migration are not backups. The missing down file prevents rollback
+across the baseline; use the application's backup/recovery procedure for that boundary.
 
-Use the development [`db:migrate` script](human-guide.md#create-a-table) to apply subsequent
-migrations and update table types together. Production continues to run only `npx tenon migrate`.
-Verify both an existing database's upgrade and a fresh replay. Baselines contain schema only; they
-do not back up rows or sequence positions. The missing down file prevents normal rollback through
-the baseline. Keep the application's backup and recovery procedure.
-
-Programmatic equivalents:
-
-- `captureBaseline({ connection, directory?, namespace?, schemas?, onWarning? })` requires a
-  nonempty native libpq connection string and returns `{ id, upPath }`. Omit `schemas` for the whole
-  database schema; an explicitly empty list is rejected.
-- `adoptBaseline({ connection, directory?, namespace? })` accepts the usual Tenon connection options
-  and returns newly recorded migration IDs.
+Programmatic capture is `captureBaseline({ connection, directory?, namespace?, schemas?, onWarning? })`
+and returns `{ id, upPath }`. It requires a native libpq connection string; an explicitly empty
+`schemas` list fails. `adoptBaseline({ connection, directory?, namespace? })` accepts Tenon's runtime
+connection forms and returns newly recorded IDs.

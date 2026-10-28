@@ -1,5 +1,5 @@
 export type { JSONValue } from 'postgres';
-export type { Connection, ConnectionOptions, QueryResult } from './connection.js';
+export type { Connection, ConnectionOptions, ConnectionUri, QueryResult } from './connection.js';
 export type { AffectedRowsConstraint } from './affected-rows.js';
 export { createTenon } from './database.js';
 export type { TenonOptions } from './database.js';

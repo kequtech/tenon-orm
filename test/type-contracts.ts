@@ -1,4 +1,6 @@
 import type {
+  ConnectionUri,
+  ConnectionOptions,
   Database,
   DescribeOptions,
   QueryDescription,
@@ -8,7 +10,7 @@ import type {
   SqlQuery,
   UnknownRow,
 } from '../src/index.js';
-import { describeQuery, identifier, sql, unsafeSql } from '../src/index.js';
+import { createTenon, describeQuery, identifier, sql, unsafeSql } from '../src/index.js';
 import type { User } from './fixtures/generated-schema.js';
 import { echoValues } from './fixtures/queries.js';
 
@@ -197,4 +199,30 @@ function mutationContracts() {
   sql.insertValues('value');
   // @ts-expect-error updates require one object, not a scalar
   sql.assignments(1);
+}
+
+function connectionContracts() {
+  const options: ConnectionOptions = {
+    onnotify: (channel, payload) => {
+      const values: [string, string] = [channel, payload];
+      void values;
+    },
+  };
+  const connection: ConnectionUri = { url: 'postgresql://unused', options };
+  const db = createTenon({ connection });
+  // @ts-expect-error URI connections require a string
+  const invalid: ConnectionUri = { url: 42 };
+  const inspection: DescribeOptions = {
+    connection: connection.url,
+    query: 'SELECT 1',
+    session: { role: undefined, searchPath: undefined, timeZone: undefined },
+    timeouts: { connectMs: undefined, statementMs: undefined, lockMs: undefined },
+  };
+  const omitted: DescribeOptions = {
+    connection: connection.url,
+    query: 'SELECT 1',
+    session: undefined,
+    timeouts: undefined,
+  };
+  void [db, options, connection, invalid, inspection, omitted];
 }

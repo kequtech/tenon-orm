@@ -667,3 +667,42 @@ test('CLI describes a parameterized SQL file and reports failures as a nonzero e
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test('one completed conditional query is described and executed for every meaningful filter variant', async () => {
+  await fixture(async (namespace) => {
+    function accountQuery(name?: string, ids?: number[]) {
+      const filters = [sql.fragment`quota > ${0}`];
+      if (name !== undefined) filters.push(sql.fragment`name = ${name}`);
+      if (ids !== undefined) filters.push(sql.fragment`id = ANY(${ids}::integer[])`);
+      return sql<{ id: number; name: string; quota: string; payload: unknown }>`
+        SELECT id, name, quota, payload FROM ${identifier(namespace, 'accounts')}
+        WHERE ${sql.join(filters, 'AND')} ORDER BY id`;
+    }
+    const ada = { id: 1, name: 'Ada', quota: '9007199254740993', payload: { name: 'Ada' } };
+    const bea = { id: 2, name: 'Bea', quota: '20', payload: null };
+    for (const [name, ids, expected] of [
+      [undefined, undefined, [ada, bea]],
+      ['Ada', undefined, [ada]],
+      [undefined, [2], [bea]],
+      ['Ada', [2], []],
+      [undefined, [], []],
+    ] as const) {
+      const query = accountQuery(name, ids === undefined ? undefined : [...ids]);
+      const description = await describe(query);
+      assert.deepEqual(
+        description.columns.map(({ name, readType }) => [name, readType]),
+        [
+          ['id', 'number'],
+          ['name', 'string'],
+          ['quota', 'string'],
+          ['payload', 'unknown'],
+        ],
+      );
+      assert.deepEqual(description.issues.map(({ code }) => code).sort(), [
+        'nullability-unknown',
+        'shape-unknown',
+      ]);
+      assert.deepEqual(await execute(query), expected);
+    }
+  });
+});

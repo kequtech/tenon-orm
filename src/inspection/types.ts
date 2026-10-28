@@ -1,16 +1,16 @@
 import type { SqlQuery } from '../query.js';
 
 export interface InspectionSession {
-  readonly role?: string;
+  readonly role?: string | undefined;
   /** PostgreSQL's search_path setting, as used in the application's connection options. */
-  readonly searchPath?: string;
-  readonly timeZone?: string;
+  readonly searchPath?: string | undefined;
+  readonly timeZone?: string | undefined;
 }
 
 export interface InspectionTimeouts {
-  readonly connectMs?: number;
-  readonly statementMs?: number;
-  readonly lockMs?: number;
+  readonly connectMs?: number | undefined;
+  readonly statementMs?: number | undefined;
+  readonly lockMs?: number | undefined;
 }
 
 export interface InspectionContext {
@@ -31,8 +31,8 @@ export interface DescribeOptions {
   readonly connection: string;
   /** Finished SQL; query values are neither bound nor executed. */
   readonly query: string | Pick<SqlQuery, 'text'>;
-  readonly session?: InspectionSession;
-  readonly timeouts?: InspectionTimeouts;
+  readonly session?: InspectionSession | undefined;
+  readonly timeouts?: InspectionTimeouts | undefined;
 }
 
 export type DescriptionIssue =

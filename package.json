@@ -1,6 +1,6 @@
 {
   "name": "@kequtech/tenon-orm",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "license": "ISC",
   "type": "module",
   "description": "A PostgreSQL ORM designed for coding agents, with explicit SQL, typed queries, and migrations",
@@ -54,7 +54,8 @@
     "benchmark": "npm run build && node scripts/benchmark.mjs"
   },
   "dependencies": {
-    "postgres": "3.4.9"
+    "pg": "8.23.1",
+    "@types/pg": "8.23.1"
   },
   "devDependencies": {
     "@types/node": "^24.19.2",

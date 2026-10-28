@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { after, before, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import postgres from 'postgres';
+import { Pool } from 'pg';
 import { qualified } from '../src/sql.js';
 import { recordMigrations } from './fixtures/record-migrations.js';
 import {
@@ -13,7 +13,7 @@ import {
   testConnection as connection,
   migrationProject,
 } from './helpers/database.js';
-const pool = postgres(connection);
+const pool = new Pool({ connectionString: connection });
 const project = migrationProject(pool);
 before(() => assertTestDatabase(pool));
 after(() => pool.end());
@@ -62,7 +62,7 @@ test('CLI migration and .d.ts generation remain separate; check mode catches sta
         return true;
       },
     );
-    await pool.unsafe(
+    await pool.query(
       `ALTER TABLE ${qualified(options.namespace, 'Record')} ALTER COLUMN name SET DEFAULT 'draft'`,
     );
     await assert.rejects(
@@ -82,7 +82,7 @@ test('CLI migration and .d.ts generation remain separate; check mode catches sta
     assert.equal(await readFile(output, 'utf8'), first);
     await run(process.execPath, [cli, 'generate', ...generation], { env });
     assert.notEqual(await readFile(output, 'utf8'), first);
-    await pool.unsafe(
+    await pool.query(
       `ALTER TABLE ${qualified(options.namespace, 'Record')} ALTER COLUMN name DROP DEFAULT`,
     );
     await run(process.execPath, [cli, 'generate', ...generation], { env });
@@ -125,10 +125,10 @@ test('CLI migration and .d.ts generation remain separate; check mode catches sta
     await run(process.execPath, [cli, 'generate', ...generation], { env });
     const withPartition = await readFile(output, 'utf8');
     await run(process.execPath, [cli, 'generate', ...generation, '--check'], { env });
-    await pool.unsafe(`CREATE TABLE ${qualified(options.namespace, 'PartitionedDaily')}
+    await pool.query(`CREATE TABLE ${qualified(options.namespace, 'PartitionedDaily')}
       PARTITION OF ${qualified(options.namespace, 'Partitioned')} DEFAULT`);
     await run(process.execPath, [cli, 'generate', ...generation, '--check'], { env });
-    await pool.unsafe(`DROP TABLE ${qualified(options.namespace, 'PartitionedDaily')}`);
+    await pool.query(`DROP TABLE ${qualified(options.namespace, 'PartitionedDaily')}`);
     await run(process.execPath, [cli, 'generate', ...generation, '--check'], { env });
     assert.equal(await readFile(output, 'utf8'), withPartition);
     // Migration file edits do not affect schema introspection.
@@ -174,9 +174,9 @@ test('flags for other commands reject before changing files or the database', as
     ]) {
       await assert.rejects(run(process.execPath, [cli, ...args, ...common], { env }));
     }
-    const rows = await pool.unsafe('SELECT 1 FROM pg_namespace WHERE nspname = $1', [
-      options.namespace,
-    ]);
+    const rows = (
+      await pool.query('SELECT 1 FROM pg_namespace WHERE nspname = $1', [options.namespace])
+    ).rows;
     assert.deepEqual([...rows], []);
     await assert.rejects(readFile(join(options.directory, '0002_unexpected.up.sql')), {
       code: 'ENOENT',

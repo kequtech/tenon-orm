@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
-import postgres from 'postgres';
+import { Pool } from 'pg';
 import { createTenon, identifier, sql } from '../src/index.js';
 import { withMigrationLock } from '../src/migrations/connection.js';
 import { qualified } from '../src/sql.js';
 import { assertTestDatabase, migrationProject, testConnection } from './helpers/database.js';
 
-const admin = postgres(testConnection);
+const admin = new Pool({ connectionString: testConnection });
 const project = migrationProject(admin);
 before(() => assertTestDatabase(admin));
 after(() => admin.end());
@@ -15,16 +15,18 @@ function observedConnection() {
   const ended = new Promise<void>((resolve) => {
     closed = resolve;
   });
-  const pool = postgres(testConnection, { max: 1, onclose: () => closed() });
+  const pool = new Pool({ connectionString: testConnection, max: 1 });
+  pool.on('connect', (client) => client.once('end', closed));
+  pool.on('error', () => {});
   return { pool, ended };
 }
 async function disconnect(pid: number) {
-  const [row] = await admin`SELECT pg_terminate_backend(${pid}) AS stopped`;
+  const [row] = (await admin.query('SELECT pg_terminate_backend($1) AS stopped', [pid])).rows;
   assert.equal(row!.stopped, true);
 }
 function lostConnection(error: unknown): boolean {
   assert.ok(error instanceof AggregateError);
-  assert.equal(error.errors[0].code, 'CONNECTION_CLOSED');
+  assert.match(error.errors[0].message, /connection|terminat/i);
   assert.equal(error.errors.length, 2);
   return true;
 }
@@ -35,34 +37,35 @@ test(
   async () => {
     await project({}, async ({ namespace }) => {
       const target = qualified(namespace, 'writes');
-      await admin.unsafe(`CREATE SCHEMA "${namespace}"; CREATE TABLE ${target} (id integer)`);
+      await admin.query(`CREATE SCHEMA "${namespace}"; CREATE TABLE ${target} (id integer)`);
       const { pool, ended } = observedConnection();
       const db = createTenon({ connection: pool });
       let originalPid = 0;
       try {
         await assert.rejects(
           db.transaction(async (tx) => {
-            const [row] = await tx.query(sql<{ pid: number }>`SELECT pg_backend_pid() AS pid`);
+            const [row] = (await tx.query(sql<{ pid: number }>`SELECT pg_backend_pid() AS pid`))
+              .rows;
             originalPid = row!.pid;
             await tx.query(sql`INSERT INTO ${identifier(namespace, 'writes')} VALUES (1)`);
             await disconnect(originalPid);
             await ended;
             await assert.rejects(
               tx.query(sql`INSERT INTO ${identifier(namespace, 'writes')} VALUES (2)`),
-              { code: 'CONNECTION_CLOSED' },
+              /connection|terminat/i,
             );
             return 'must not succeed';
           }),
           lostConnection,
         );
-        assert.equal((await admin.unsafe(`SELECT * FROM ${target}`)).length, 0);
+        assert.equal((await admin.query(`SELECT * FROM ${target}`)).rows.length, 0);
         const replacement = await db.transaction((tx) =>
           tx.query(sql<{ pid: number }>`SELECT pg_backend_pid() AS pid`, { returns: 'one' }),
         );
         assert.notEqual(replacement.pid, originalPid);
       } finally {
         await db.close();
-        await pool.end({ timeout: 1 });
+        await pool.end();
       }
     });
   },
@@ -77,7 +80,8 @@ test(
       try {
         await assert.rejects(
           withMigrationLock({ connection: pool, namespace }, 'exclusive', async (client) => {
-            const [row] = await client.unsafe<{ pid: number }[]>('SELECT pg_backend_pid() AS pid');
+            const [row] = (await client.query<{ pid: number }>('SELECT pg_backend_pid() AS pid'))
+              .rows;
             await disconnect(row!.pid);
             await ended;
           }),
@@ -88,7 +92,7 @@ test(
           42,
         );
       } finally {
-        await pool.end({ timeout: 1 });
+        await pool.end();
       }
     });
   },
@@ -112,7 +116,7 @@ test(
       assert.notEqual(next.pid, first.pid);
     } finally {
       await db.close();
-      await pool.end({ timeout: 1 });
+      await pool.end();
     }
   },
 );
@@ -122,14 +126,16 @@ test(
   { timeout: 10000 },
   async () => {
     await project({}, async ({ namespace }) => {
-      await admin.unsafe(
+      await admin.query(
         `CREATE SCHEMA "${namespace}"; CREATE TABLE ${qualified(namespace, 'writes')} (id integer)`,
       );
       let closed!: () => void;
       const ended = new Promise<void>((resolve) => {
         closed = resolve;
       });
-      const pool = postgres(testConnection, { max: 2, onclose: () => closed() });
+      const pool = new Pool({ connectionString: testConnection, max: 2 });
+      pool.on('connect', (client) => client.once('end', closed));
+      pool.on('error', () => {});
       const db = createTenon({ connection: pool });
       let proceed!: () => void;
       const resumed = new Promise<void>((resolve) => {
@@ -162,13 +168,13 @@ test(
         proceed();
         await Promise.all([failed, operations[1]]);
         assert.deepEqual(
-          [...(await admin.unsafe(`SELECT id FROM ${qualified(namespace, 'writes')}`))],
+          [...(await admin.query(`SELECT id FROM ${qualified(namespace, 'writes')}`)).rows],
           [{ id: 2 }],
         );
       } finally {
         proceed();
         await db.close();
-        await pool.end({ timeout: 1 });
+        await pool.end();
       }
     });
   },

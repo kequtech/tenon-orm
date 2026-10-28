@@ -1,5 +1,4 @@
 import type {
-  ConnectionUri,
   ConnectionOptions,
   CloseOptions,
   Database,
@@ -27,15 +26,15 @@ type Equal<A, B> =
 type Assert<T extends true> = T;
 
 async function contracts(db: Database, options?: QueryOptions) {
-  const nativeRows = await db.native<{ value: number }[]>`SELECT ${1}::integer AS value`;
-  const nativeType: Assert<Equal<(typeof nativeRows)[number], { value: number }>> = true;
+  const nativeRows = await db.native.query<{ value: number }>('SELECT $1::integer AS value', [1]);
+  const nativeType: Assert<Equal<(typeof nativeRows.rows)[number], { value: number }>> = true;
   void nativeType;
-  const subscription = await db.native.listen('updates', (payload) => {
-    const text: string = payload;
-    void text;
+  const client = await db.native.connect();
+  client.on('notification', (event) => {
+    const channel: string = event.channel;
+    void channel;
   });
-  const unsubscribe: Promise<void> = subscription.unlisten();
-  void unsubscribe;
+  client.release();
   // @ts-expect-error the driver reference is readonly
   db.native = db.native;
   type Summary = Pick<User, 'id' | 'email'>;
@@ -211,23 +210,25 @@ function mutationContracts() {
 
 function connectionContracts() {
   const options: ConnectionOptions = {
-    onnotify: (channel, payload) => {
-      const values: [string, string] = [channel, payload];
-      void values;
-    },
+    max: 2,
+    connectionTimeoutMillis: 5000,
+    application_name: 'tenon',
   };
-  const connection: ConnectionUri = { url: 'postgresql://unused', options };
+  const connection = {
+    ...options,
+    connectionString: 'postgresql://unused',
+  } satisfies ConnectionOptions;
   const db = createTenon({ connection });
-  // @ts-expect-error URI connections require a string
-  const invalid: ConnectionUri = { url: 42 };
+  // @ts-expect-error pg connectionString requires a string
+  const invalid: ConnectionOptions = { connectionString: 42 };
   const inspection: DescribeOptions = {
-    connection: connection.url,
+    connection: connection.connectionString,
     query: 'SELECT 1',
     session: { role: undefined, searchPath: undefined, timeZone: undefined },
     timeouts: { connectMs: undefined, statementMs: undefined, lockMs: undefined },
   };
   const omitted: DescribeOptions = {
-    connection: connection.url,
+    connection: connection.connectionString,
     query: 'SELECT 1',
     session: undefined,
     timeouts: undefined,

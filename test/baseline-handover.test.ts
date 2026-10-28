@@ -1,9 +1,10 @@
+import { fixtureTransaction } from './helpers/database.js';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { after, before, test } from 'node:test';
-import postgres from 'postgres';
+import { Pool } from 'pg';
 import {
   adoptBaseline,
   captureBaseline,
@@ -14,7 +15,7 @@ import {
 import { qualified, quote } from '../src/sql.js';
 import { assertTestDatabase, migrationProject, testConnection } from './helpers/database.js';
 
-const pool = postgres(testConnection);
+const pool = new Pool({ connectionString: testConnection });
 before(() => assertTestDatabase(pool));
 after(() => pool.end());
 
@@ -27,11 +28,11 @@ test('scoped handover checks a frozen checkpoint, preserves existing rows and ex
     const history = qualified(options.namespace, 'legacy_history');
     const provision = qualified(options.namespace, 'provision');
     const helper = qualified(dependency, 'next_id');
-    await pool.unsafe(
+    await pool.query(
       `CREATE SCHEMA ${quote(options.namespace)}; CREATE SCHEMA ${quote(dependency)}`,
     );
     try {
-      await pool.unsafe(`
+      await pool.query(`
         CREATE TABLE ${qualified(dependency, 'unrelated')} (id integer PRIMARY KEY);
         INSERT INTO ${qualified(dependency, 'unrelated')} VALUES (99);
         CREATE FUNCTION ${helper}() RETURNS integer LANGUAGE sql AS 'SELECT 7';
@@ -43,9 +44,9 @@ test('scoped handover checks a frozen checkpoint, preserves existing rows and ex
           SET search_path TO pg_catalog AS 'SELECT ${helper}()';
       `);
       const functions = async () => {
-        const rows = await pool.begin(async (client) => {
-          await client.unsafe('SET LOCAL search_path TO pg_catalog');
-          return client.unsafe<{ definition: string }[]>(
+        const rows = await fixtureTransaction(pool, async (client) => {
+          await client.query('SET LOCAL search_path TO pg_catalog');
+          return client.query<{ definition: string }>(
             `
             SELECT pg_catalog.pg_get_functiondef(p.oid) AS definition
             FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid=p.pronamespace
@@ -73,7 +74,7 @@ test('scoped handover checks a frozen checkpoint, preserves existing rows and ex
         const state = await migrationStatus(options);
         if (!state.applied.length) {
           assert.deepEqual(
-            [...(await pool.unsafe(`SELECT id FROM ${history} ORDER BY id`))],
+            [...(await pool.query(`SELECT id FROM ${history} ORDER BY id`)).rows],
             checkpoint.history,
           );
           assert.equal(await generateDefinitions(options), checkpoint.definitions);
@@ -82,13 +83,13 @@ test('scoped handover checks a frozen checkpoint, preserves existing rows and ex
         await adoptBaseline(options);
         return migrate(options);
       };
-      await pool.unsafe(`DELETE FROM ${history} WHERE id='002'`);
+      await pool.query(`DELETE FROM ${history} WHERE id='002'`);
       await assert.rejects(adoptChecked(), assert.AssertionError);
-      await pool.unsafe(`INSERT INTO ${history} VALUES ('002')`);
-      await pool.unsafe(`ALTER TABLE ${accounts} ADD COLUMN drift text`);
+      await pool.query(`INSERT INTO ${history} VALUES ('002')`);
+      await pool.query(`ALTER TABLE ${accounts} ADD COLUMN drift text`);
       await assert.rejects(adoptChecked(), assert.AssertionError);
-      await pool.unsafe(`ALTER TABLE ${accounts} DROP COLUMN drift`);
-      await pool.unsafe(`CREATE OR REPLACE FUNCTION ${provision}() RETURNS integer LANGUAGE sql
+      await pool.query(`ALTER TABLE ${accounts} DROP COLUMN drift`);
+      await pool.query(`CREATE OR REPLACE FUNCTION ${provision}() RETURNS integer LANGUAGE sql
         SET search_path TO pg_catalog AS 'SELECT 999'`);
       assert.equal(
         await generateDefinitions(options),
@@ -97,7 +98,7 @@ test('scoped handover checks a frozen checkpoint, preserves existing rows and ex
       );
       await assert.rejects(adoptChecked(), assert.AssertionError);
       assert.deepEqual((await migrationStatus(options)).applied, []);
-      await pool.unsafe(`CREATE OR REPLACE FUNCTION ${provision}() RETURNS integer LANGUAGE sql
+      await pool.query(`CREATE OR REPLACE FUNCTION ${provision}() RETURNS integer LANGUAGE sql
         SET search_path TO pg_catalog AS 'SELECT ${helper}()'`);
       await writeFile(
         join(options.directory, '0002_active.up.sql'),
@@ -110,26 +111,26 @@ test('scoped handover checks a frozen checkpoint, preserves existing rows and ex
         'later migrations do not change the frozen cutover guard',
       );
       assert.deepEqual(
-        [...(await pool.unsafe(`SELECT * FROM ${accounts}`))],
+        [...(await pool.query(`SELECT * FROM ${accounts}`)).rows],
         [{ id: 1, name: 'existing', active: true }],
       );
       const definitions = await generateDefinitions(options);
-      await pool.unsafe(
+      await pool.query(
         `DROP SCHEMA ${quote(options.namespace)} CASCADE; DROP FUNCTION ${helper}()`,
       );
       await migrate(options);
       assert.equal(await generateDefinitions(options), definitions);
-      await assert.rejects(pool.unsafe(`SELECT ${provision}()`), { code: '42883' });
+      await assert.rejects(pool.query(`SELECT ${provision}()`), { code: '42883' });
       // A scoped dump does not provision dependencies in another schema.
-      await pool.unsafe(`CREATE FUNCTION ${helper}() RETURNS integer LANGUAGE sql AS 'SELECT 7'`);
-      assert.deepEqual([...(await pool.unsafe(`SELECT ${provision}() AS id`))], [{ id: 7 }]);
-      assert.deepEqual([...(await pool.unsafe(`SELECT * FROM ${accounts}`))], []);
+      await pool.query(`CREATE FUNCTION ${helper}() RETURNS integer LANGUAGE sql AS 'SELECT 7'`);
+      assert.deepEqual([...(await pool.query(`SELECT ${provision}() AS id`)).rows], [{ id: 7 }]);
+      assert.deepEqual([...(await pool.query(`SELECT * FROM ${accounts}`)).rows], []);
       assert.deepEqual(
-        [...(await pool.unsafe(`SELECT * FROM ${qualified(dependency, 'unrelated')}`))],
+        [...(await pool.query(`SELECT * FROM ${qualified(dependency, 'unrelated')}`)).rows],
         [{ id: 99 }],
       );
     } finally {
-      await pool.unsafe(`DROP SCHEMA ${quote(dependency)} CASCADE`);
+      await pool.query(`DROP SCHEMA ${quote(dependency)} CASCADE`);
     }
   });
 });

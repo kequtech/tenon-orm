@@ -6,7 +6,7 @@ import { join, resolve } from 'node:path';
 import { after, before, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import postgres from 'postgres';
+import { Pool } from 'pg';
 import {
   createTenon,
   generateDefinitions,
@@ -24,7 +24,7 @@ import {
   migrationProject,
 } from './helpers/database.js';
 import { checkGeneratedTypes, typeAssertions } from './helpers/generation.js';
-const pool = postgres(connection);
+const pool = new Pool({ connectionString: connection });
 const project = migrationProject(pool);
 before(() => assertTestDatabase(pool));
 after(() => pool.end());
@@ -94,7 +94,7 @@ test('ordinary generated row types compose with Pick and indexed access across m
 
 test('generation reads an existing schema without migration files or history', async () => {
   await project({}, async (options) => {
-    await pool.unsafe(`CREATE SCHEMA ${quote(options.namespace)};
+    await pool.query(`CREATE SCHEMA ${quote(options.namespace)};
       CREATE TABLE ${qualified(options.namespace, 'Account')} (id integer PRIMARY KEY);`);
     const source = await generateDefinitions({ connection: pool, namespace: options.namespace });
     await checkGeneratedTypes(
@@ -108,9 +108,7 @@ test('generation reads an existing schema without migration files or history', a
     // Even an unfinished migration is unrelated to the connected schema.
     await writeFile(join(options.directory, '0001_draft.up.sql'), '');
     assert.equal(await generateDefinitions(options), source);
-    await pool.unsafe(
-      `ALTER TABLE ${qualified(options.namespace, 'Account')} ADD COLUMN name text`,
-    );
+    await pool.query(`ALTER TABLE ${qualified(options.namespace, 'Account')} ADD COLUMN name text`);
     assert.notEqual(await generateDefinitions(options), source);
   });
 });
@@ -171,7 +169,7 @@ test('generated types preserve unusual SQL names, module-name collisions and dat
       `
       import type { Rows, Inserts, Updates, Date as DateRow, 東京 } from './definitions.js';
       ${typeAssertions}
-      type Expected = { id: number; 'created at': globalThis.Date; 'nullable-value': string | null; '__proto__': string };
+      type Expected = { id: number; 'created at': globalThis.Date | number; 'nullable-value': string | null; '__proto__': string };
       type Matches = { [Name in keyof Rows]: Equal<Rows[Name], Expected> };
       type AllRows = Assert<Equal<Matches[keyof Rows], true>>;
       type NamedInserts = Assert<Equal<Inserts, Rows['Inserts']>>;
@@ -179,7 +177,7 @@ test('generated types preserve unusual SQL names, module-name collisions and dat
       type ReservedInsert = Assert<Equal<Rows.Insert['Inserts']['id'], number>>;
       type ReservedUpdate = Assert<Equal<Rows.Update['Updates']['id'], number | undefined>>;
       type UnicodeAlias = Assert<Equal<東京, Expected>>;
-      type DateAlias = Assert<Equal<DateRow['created at'], globalThis.Date>>;
+      type DateAlias = Assert<Equal<DateRow['created at'], globalThis.Date | number>>;
       type ExactName = Assert<Equal<Pick<Rows['user-details'], 'nullable-value'>, { 'nullable-value': string | null }>>;
       // @ts-expect-error SQL column names are preserved rather than converted
       type Renamed = Rows['user-details']['createdAt'];
@@ -278,10 +276,10 @@ test('generation includes ordinary tables and partitioned roots while skipping a
     `,
       );
       // Routine partition maintenance changes neither row types nor schema summaries.
-      await pool.unsafe(`CREATE TABLE ${qualified(options.namespace, 'EventsTomorrow')}
+      await pool.query(`CREATE TABLE ${qualified(options.namespace, 'EventsTomorrow')}
       PARTITION OF ${qualified(options.namespace, 'Events')} FOR VALUES FROM (200) TO (300)`);
       assert.equal(await generateDefinitions({ ...options, onWarning: () => {} }), source);
-      await pool.unsafe(`DROP TABLE ${qualified(options.namespace, 'EventsTomorrow')}`);
+      await pool.query(`DROP TABLE ${qualified(options.namespace, 'EventsTomorrow')}`);
       assert.equal(await generateDefinitions({ ...options, onWarning: () => {} }), source);
       const db = createTenon({ connection: pool });
       try {
@@ -322,7 +320,7 @@ test('generation includes ordinary tables and partitioned roots while skipping a
           { code: '23502' },
         );
         // Detachment makes the table an independent model with its own constraints.
-        await pool.unsafe(`ALTER TABLE ${qualified(options.namespace, 'EventsRecent')}
+        await pool.query(`ALTER TABLE ${qualified(options.namespace, 'EventsRecent')}
         DETACH PARTITION ${qualified(options.namespace, 'EventsRecentA')}`);
         await checkGeneratedTypes(
           { ...options, onWarning: () => {} },
@@ -333,7 +331,7 @@ test('generation includes ordinary tables and partitioned roots while skipping a
         type IndependentNullability = Assert<Equal<EventsRecentA['label'], string>>;
       `,
         );
-        await pool.unsafe(`ALTER TABLE ${qualified(options.namespace, 'EventsRecent')}
+        await pool.query(`ALTER TABLE ${qualified(options.namespace, 'EventsRecent')}
         ATTACH PARTITION ${qualified(options.namespace, 'EventsRecentA')} FOR VALUES IN (1)`);
         assert.equal(await generateDefinitions({ ...options, onWarning: () => {} }), source);
         await writeFile(
@@ -370,8 +368,8 @@ test('foreign tables use authored types without affecting ordinary table generat
   const server = `tenon_server_${randomUUID().replaceAll('-', '')}`;
   try {
     // Declaration-only wrapper: no extension, handler or external connection.
-    await pool.unsafe(`CREATE FOREIGN DATA WRAPPER ${quote(wrapper)} NO HANDLER NO VALIDATOR`);
-    await pool.unsafe(`CREATE SERVER ${quote(server)} FOREIGN DATA WRAPPER ${quote(wrapper)}`);
+    await pool.query(`CREATE FOREIGN DATA WRAPPER ${quote(wrapper)} NO HANDLER NO VALIDATOR`);
+    await pool.query(`CREATE SERVER ${quote(server)} FOREIGN DATA WRAPPER ${quote(wrapper)}`);
     await project(
       {
         '0001_tables.up.sql': `
@@ -385,10 +383,10 @@ test('foreign tables use authored types without affecting ordinary table generat
         const source = await generateDefinitions(options);
         const output = join(options.directory, 'definitions.ts');
         await writeFile(output, source);
-        await pool.unsafe(`CREATE FOREIGN TABLE ${qualified(options.namespace, 'ForeignRecord')}
+        await pool.query(`CREATE FOREIGN TABLE ${qualified(options.namespace, 'ForeignRecord')}
         (id integer, duration ${qualified(options.namespace, 'ForeignOnly')}, tags integer[])
         SERVER ${quote(server)}`);
-        await pool.unsafe(`CREATE FOREIGN TABLE ${qualified(options.namespace, 'ForeignDaily')}
+        await pool.query(`CREATE FOREIGN TABLE ${qualified(options.namespace, 'ForeignDaily')}
         PARTITION OF ${qualified(options.namespace, 'Root')} DEFAULT SERVER ${quote(server)}`);
         const warnings: string[] = [];
         assert.equal(
@@ -418,8 +416,8 @@ test('foreign tables use authored types without affecting ordinary table generat
         import type { PgArray } from './definitions.js';
       `,
         );
-        await pool.unsafe(`DROP TABLE ${qualified(options.namespace, 'Local')}`);
-        await pool.unsafe(`DROP TABLE ${qualified(options.namespace, 'Root')}`);
+        await pool.query(`DROP TABLE ${qualified(options.namespace, 'Local')}`);
+        await pool.query(`DROP TABLE ${qualified(options.namespace, 'Root')}`);
         const onlyForeign = await generateDefinitions(options);
         assert.equal(onlyForeign, await generateDefinitions(options));
         await checkGeneratedTypes(
@@ -434,9 +432,9 @@ test('foreign tables use authored types without affecting ordinary table generat
     );
   } finally {
     try {
-      await pool.unsafe(`DROP SERVER IF EXISTS ${quote(server)} CASCADE`);
+      await pool.query(`DROP SERVER IF EXISTS ${quote(server)} CASCADE`);
     } finally {
-      await pool.unsafe(`DROP FOREIGN DATA WRAPPER IF EXISTS ${quote(wrapper)}`);
+      await pool.query(`DROP FOREIGN DATA WRAPPER IF EXISTS ${quote(wrapper)}`);
     }
   }
 });
@@ -473,14 +471,14 @@ test('views always use authored types and do not block table generation', async 
         const view = await db.query(
           sql<AuthoredView>`SELECT id, name, age::text AS age FROM ${identifier(options.namespace, 'RecordView')}`,
         );
-        assert.deepEqual([...view], [{ id: 1, name: 'example', age: '1 day' }]);
+        assert.deepEqual([...view.rows], [{ id: 1, name: 'example', age: '1 day' }]);
         const snapshot = await db.query(
           sql<{
             id: number;
             name: string;
           }>`SELECT id, name FROM ${identifier(options.namespace, 'RecordSnapshot')}`,
         );
-        assert.deepEqual([...snapshot], [{ id: 1, name: 'example' }]);
+        assert.deepEqual([...snapshot.rows], [{ id: 1, name: 'example' }]);
       } finally {
         await db.close();
       }

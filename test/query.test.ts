@@ -141,7 +141,7 @@ test('diagnostics report metadata without SQL or values and cannot change query 
       },
     ]) {
       const observed = createTenon({ connection: pool, onQuery });
-      assert.equal((await observed.query(sql`SELECT 1`)).count, 1);
+      assert.equal((await observed.query(sql`SELECT 1`)).rowCount, 1);
       await new Promise((resolve) => setImmediate(resolve));
       await observed.close();
     }

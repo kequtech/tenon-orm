@@ -1,7 +1,7 @@
-import { assertInvalidDate } from './helpers/values.js';
+import { assertInfinity } from './helpers/values.js';
 import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
-import postgres from 'postgres';
+import { Pool } from 'pg';
 import {
   createTenon,
   generateDefinitions,
@@ -17,12 +17,12 @@ import {
   migrationProject,
 } from './helpers/database.js';
 import { checkGeneratedTypes, typeAssertions } from './helpers/generation.js';
-const pool = postgres(connection);
+const pool = new Pool({ connectionString: connection });
 const project = migrationProject(pool);
 before(() => assertTestDatabase(pool));
 after(() => pool.end());
 
-test('generated PostgreSQL name columns match Postgres.js strings and preserve nullability', async () => {
+test('generated PostgreSQL name columns match pg strings and preserve nullability', async () => {
   await project(
     { '0001_names.up.sql': 'CREATE TABLE "Names" (value name NOT NULL, optional name);' },
     async (options) => {
@@ -39,15 +39,17 @@ test('generated PostgreSQL name columns match Postgres.js strings and preserve n
         `,
       );
       assert.deepEqual(warnings, []);
-      const result = await pool.unsafe(
-        `INSERT INTO ${qualified(options.namespace, 'Names')} VALUES ('example', NULL) RETURNING *`,
-      );
+      const result = (
+        await pool.query(
+          `INSERT INTO ${qualified(options.namespace, 'Names')} VALUES ('example', NULL) RETURNING *`,
+        )
+      ).rows;
       assert.deepEqual([...result], [{ value: 'example', optional: null }]);
     },
   );
 });
 
-test('generated values follow Postgres.js parsing for bigint, numeric, JSON and bytea', async () => {
+test('generated values follow pg parsing for bigint, numeric, JSON and bytea', async () => {
   await project(
     {
       '0001_values.up.sql': `
@@ -98,7 +100,7 @@ test('generated values follow Postgres.js parsing for bigint, numeric, JSON and 
       const db = createTenon({ connection: pool });
       try {
         const row = await db.query(
-          sql<ValueRow>`INSERT INTO ${identifier(options.namespace, 'Values')} (id, big, decimal, payload, document, bytes) VALUES (${1}, ${big}, ${decimal}, ${{ nested: [1, false, null] }}, ${'null'}::json, ${bytes}) RETURNING *`,
+          sql<ValueRow>`INSERT INTO ${identifier(options.namespace, 'Values')} (id, big, decimal, payload, document, bytes) VALUES (${1}, ${big}, ${decimal}, ${{ nested: [1, false, null] }}, ${JSON.stringify('null')}::json, ${bytes}) RETURNING *`,
           { returns: 'one' },
         );
         assert.deepEqual(row, {
@@ -118,7 +120,7 @@ test('generated values follow Postgres.js parsing for bigint, numeric, JSON and 
           sql<{
             payload: unknown;
             document: unknown;
-          }>`UPDATE ${identifier(options.namespace, 'Values')} SET payload = ${42}::jsonb, document = ${'text'}::json WHERE id = 1 RETURNING payload, document`,
+          }>`UPDATE ${identifier(options.namespace, 'Values')} SET payload = ${42}::jsonb, document = ${JSON.stringify('text')}::json WHERE id = 1 RETURNING payload, document`,
           { returns: 'one' },
         );
         assert.deepEqual(scalar, { payload: 42, document: 'text' });
@@ -135,7 +137,7 @@ test('generated values follow Postgres.js parsing for bigint, numeric, JSON and 
   );
 });
 
-test('recursive generated arrays match every supported Postgres.js array parser', async () => {
+test('recursive generated arrays match every supported pg array parser', async () => {
   await project(
     {
       '0001_arrays.up.sql': `
@@ -159,9 +161,9 @@ test('recursive generated arrays match every supported Postgres.js array parser'
       import type { Buffer as NodeBuffer } from 'node:buffer';
       ${typeAssertions}
       type Expected = {
-        id: number; ints: PgArray<number>; bigs: PgArray<string>; decimals: PgArray<string>;
+        id: number; ints: PgArray<number>; bigs: PgArray<string>; decimals: PgArray<number>;
         texts: PgArray<string>; strings: PgArray<string>; flags: PgArray<boolean>;
-        ids: PgArray<string>; times: PgArray<globalThis.Date>; bytes: PgArray<NodeBuffer>;
+        ids: PgArray<string>; times: PgArray<globalThis.Date | number>; bytes: PgArray<NodeBuffer>;
         docs: PgArray<unknown>; payloads: PgArray<unknown>; optional: PgArray<number> | null;
       };
       type Complete = Assert<Equal<ArrayValues, Expected>>;
@@ -195,7 +197,7 @@ test('recursive generated arrays match every supported Postgres.js array parser'
           ARRAY['{"nested":[1]}'::json, 'null'::json, NULL],
           ARRAY['42'::jsonb, '"text"'::jsonb, NULL]) RETURNING *`);
         assert.deepEqual(
-          [...inserted],
+          [...inserted.rows],
           [
             {
               id: 1,
@@ -204,7 +206,7 @@ test('recursive generated arrays match every supported Postgres.js array parser'
                 [2, 3],
               ],
               bigs: ['9223372036854775807', null, '-9223372036854775808'],
-              decimals: ['9007199254740993.125', null, '1.25'],
+              decimals: [9007199254740994, null, 1.25],
               texts: ['NULL', 'comma, braces{}', 'quote"slash\\', '', null],
               strings: ['bounded', null],
               flags: [false, null, true],
@@ -245,7 +247,7 @@ test('recursive generated arrays match every supported Postgres.js array parser'
           ),
         );
         assert.deepEqual(
-          [...empty],
+          [...empty.rows],
           [{ id: 1, ...Object.fromEntries(columns.map((name) => [name, []])) }],
         );
       } finally {
@@ -331,9 +333,11 @@ test('unverified array parsers warn and generate unknown without changing driver
     },
     async (options) => {
       await migrate(options);
-      const result = await pool.unsafe(
-        `SELECT ARRAY['a'::${qualified(options.namespace, 'Kind')}, NULL] AS kinds`,
-      );
+      const result = (
+        await pool.query(
+          `SELECT ARRAY['a'::${qualified(options.namespace, 'Kind')}, NULL] AS kinds`,
+        )
+      ).rows;
       assert.equal(typeof result[0]!.kinds, 'string');
       assert.equal(result[0]!.kinds, '{a,NULL}');
       const warnings: string[] = [];
@@ -380,21 +384,24 @@ test('timestamp scalars, arrays and domains include the driver infinity values',
       import type { Times, PgArray } from './definitions.js';
       ${typeAssertions}
       type Complete = Assert<Equal<Times, {
-        value: Date; optional: Date | null;
-        values: PgArray<Date>; domain: Date;
+        value: Date | number; optional: Date | number | null;
+        values: PgArray<Date | number>; domain: Date | number;
       }>>;
-      // Date includes invalid dates; validity is checked at runtime.
-      ({} as Times).value.toISOString();
+      // Infinity requires narrowing before using Date methods.
+      const value = ({} as Times).value;
+      if (value instanceof Date) value.toISOString();
     `,
       );
-      const result = await pool.unsafe(`
+      const result = (
+        await pool.query(`
       INSERT INTO ${qualified(options.namespace, 'Times')}
       VALUES ('infinity', NULL, ARRAY['infinity'::timestamptz, '-infinity'::timestamptz, NULL], '-infinity')
-      RETURNING *`);
-      assertInvalidDate(result[0]!.value);
-      assertInvalidDate(result[0]!.domain);
-      assertInvalidDate(result[0]!.values[0]);
-      assertInvalidDate(result[0]!.values[1]);
+      RETURNING *`)
+      ).rows;
+      assertInfinity(result[0]!.value);
+      assertInfinity(result[0]!.domain);
+      assertInfinity(result[0]!.values[0]);
+      assertInfinity(result[0]!.values[1]);
       assert.deepEqual(
         [...result],
         [
@@ -410,7 +417,7 @@ test('timestamp scalars, arrays and domains include the driver infinity values',
   );
 });
 
-test('common numeric, character and temporal scalars and arrays match Postgres.js values', async () => {
+test('common numeric, character and temporal scalars and arrays match pg values', async () => {
   await project(
     {
       '0001_common.up.sql': `
@@ -435,33 +442,34 @@ test('common numeric, character and temporal scalars and arrays match Postgres.j
       ${typeAssertions}
       type Expected = Assert<Equal<Common, {
         small: number; real_value: number; double_value: number; object_id: number;
-        fixed: string; day: Date; local_time: Date;
+        fixed: string; day: Date | number; local_time: Date | number;
         clock: string; zoned_clock: string;
         smalls: PgArray<number>; reals: PgArray<number>; doubles: PgArray<number>;
-        object_ids: PgArray<number>; fixeds: PgArray<string>; days: PgArray<Date>;
-        local_times: PgArray<Date>; clocks: PgArray<string>; zoned_clocks: PgArray<string>;
-        domain: number | null; optional_date: Date | null;
+        object_ids: PgArray<number>; fixeds: PgArray<string>; days: PgArray<Date | number>;
+        local_times: PgArray<Date | number>; clocks: PgArray<string>; zoned_clocks: PgArray<string>;
+        domain: number | null; optional_date: Date | number | null;
       }>>;
     `,
       );
       assert.deepEqual(warnings, []);
-      const result =
-        await pool.unsafe(`INSERT INTO ${qualified(options.namespace, 'Common')} VALUES (
+      const result = (
+        await pool.query(`INSERT INTO ${qualified(options.namespace, 'Common')} VALUES (
       -32768, 1.5, 'Infinity', 42, 'a', '2025-01-02', '2025-01-02 03:04:05', '03:04:05', '03:04:05+02',
       ARRAY[-32768,NULL]::smallint[], ARRAY[1.5,'NaN',NULL]::real[], ARRAY['-Infinity',NULL]::double precision[],
       ARRAY[42,NULL]::oid[], ARRAY['a',NULL]::char(3)[], ARRAY['infinity',NULL]::date[],
       ARRAY['-infinity',NULL]::timestamp[], ARRAY['03:04:05',NULL]::time[], ARRAY['03:04:05+02',NULL]::timetz[],
       3, NULL
-    ) RETURNING *`);
-      assertInvalidDate(result[0]!.days[0]);
-      assertInvalidDate(result[0]!.local_times[0]);
+    ) RETURNING *`)
+      ).rows;
+      assertInfinity(result[0]!.days[0]);
+      assertInfinity(result[0]!.local_times[0]);
       assert.deepEqual(result[0], {
         small: -32768,
         real_value: 1.5,
         double_value: Infinity,
         object_id: 42,
         fixed: 'a  ',
-        day: new Date('2025-01-02'),
+        day: new Date(2025, 0, 2),
         local_time: new Date(2025, 0, 2, 3, 4, 5),
         clock: '03:04:05',
         zoned_clock: '03:04:05+02',
@@ -477,11 +485,11 @@ test('common numeric, character and temporal scalars and arrays match Postgres.j
         domain: 3,
         optional_date: null,
       });
-      const infinite = await pool.unsafe(
-        `SELECT 'infinity'::date AS day, '-infinity'::timestamp AS stamp`,
-      );
-      assertInvalidDate(infinite[0]!.day);
-      assertInvalidDate(infinite[0]!.stamp);
+      const infinite = (
+        await pool.query(`SELECT 'infinity'::date AS day, '-infinity'::timestamp AS stamp`)
+      ).rows;
+      assertInfinity(infinite[0]!.day);
+      assertInfinity(infinite[0]!.stamp);
     },
   );
 });

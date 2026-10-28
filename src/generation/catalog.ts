@@ -1,4 +1,4 @@
-import type { SqlConnection } from '../connection.js';
+import type { PoolClient } from 'pg';
 import { migrationTable } from '../migrations/history.js';
 
 export interface ColumnRow {
@@ -22,8 +22,8 @@ export interface TableRow {
   columns: ColumnRow[];
 }
 
-export async function readTables(client: SqlConnection, namespace: string): Promise<TableRow[]> {
-  const tables = await client.unsafe<{ oid: string; name: string }[]>(
+export async function readTables(client: PoolClient, namespace: string): Promise<TableRow[]> {
+  const tables = await client.query<{ oid: string; name: string }>(
     `
       SELECT c.oid::text AS oid, c.relname AS name
       FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
@@ -33,9 +33,9 @@ export async function readTables(client: SqlConnection, namespace: string): Prom
     [namespace, migrationTable],
   );
   const definitions: TableRow[] = [];
-  for (const table of tables) {
+  for (const table of tables.rows) {
     // Attached descendants are storage details, not separate generated models.
-    const columns = await client.unsafe<ColumnRow[]>(
+    const columns = await client.query<ColumnRow>(
       `
         WITH RECURSIVE resolved AS (
           SELECT a.attnum, t.oid, t.typbasetype, t.typnotnull AS domain_not_null
@@ -61,7 +61,7 @@ export async function readTables(client: SqlConnection, namespace: string): Prom
         WHERE a.attrelid = $1::oid AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum`,
       [table.oid],
     );
-    definitions.push({ ...table, columns: columns });
+    definitions.push({ ...table, columns: columns.rows });
   }
   return definitions;
 }

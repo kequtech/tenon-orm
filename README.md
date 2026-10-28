@@ -4,7 +4,7 @@ A PostgreSQL ORM designed for coding agents. Built for Node.js and TypeScript.
 
 Write SQL directly, bind values with a template tag, and reuse queries through ordinary functions.
 Tenon provides transactions, affected-row guards, SQL migrations, generated database types, and
-query inspection. It includes its pinned Postgres.js driver.
+query inspection. It includes its pinned pg driver.
 
 ```sh
 npm install @kequtech/tenon-orm
@@ -36,12 +36,12 @@ try {
 
 The example assumes `public.users` exists. In a server, reuse the instance and close it at shutdown.
 `oneOrNone` rejects multiple rows; use `one` for exactly one row, `many` for an array, or omit
-`returns` for the driver's result array and metadata.
+`returns` for the driver's result object and metadata.
 
 Joins, relationships, aggregates, and upserts use PostgreSQL SQL. Object-based writes can use
 `sql.insertValues` and `sql.assignments` while keeping the surrounding statement explicit.
-`db.native` exposes the driver for LISTEN, cursors, COPY, and other native features; those calls
-bypass Tenon's query and transaction guards.
+`db.native` exposes the underlying `pg.Pool` for LISTEN, cursors, COPY, and other driver features;
+those calls bypass Tenon's query and transaction guards.
 
 `sql<Row>` declares an expected result type. `describeQuery` inspects the finished SQL through
 PostgreSQL without executing it; it does not verify that annotation. Keep database tests for actual

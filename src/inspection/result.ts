@@ -8,7 +8,7 @@ import type {
   QueryDescription,
 } from './types.js';
 
-/** Convert database metadata to conservative Postgres.js types and diagnostics. */
+/** Convert database metadata to conservative pg types and diagnostics. */
 export function queryDescription(
   { statement, types, sources }: StatementMetadata,
   context: InspectionContext,
@@ -33,14 +33,14 @@ export function queryDescription(
         code: 'unmapped-type',
         oid,
         postgres: `${type.schema}.${type.name}`,
-        message: `No verified Postgres.js mapping for ${type.schema}.${type.name} (OID ${oid}).`,
+        message: `No verified pg mapping for ${type.schema}.${type.name} (OID ${oid}).`,
       });
     }
     return { oid, postgres: `${type.schema}.${type.name}`, readType };
   }
   const sourceMap = new Map(sources.map((s) => [`${s.oid}:${s.number}`, s]));
   const names = new Set<string>();
-  const columns = statement.columns.map((column): DescribedColumn => {
+  const columns = statement.fields.map((column): DescribedColumn => {
     if (names.has(column.name)) {
       issues.set(`column:${column.name}`, {
         code: 'duplicate-column',
@@ -49,10 +49,10 @@ export function queryDescription(
       });
     }
     names.add(column.name);
-    const source = sourceMap.get(`${column.table}:${column.number}`);
+    const source = sourceMap.get(`${column.tableID}:${column.columnID}`);
     return {
       name: column.name,
-      ...describeType(column.type),
+      ...describeType(column.dataTypeID),
       nullability: 'unknown',
       source: source
         ? {
@@ -64,7 +64,7 @@ export function queryDescription(
         : null,
     };
   });
-  const parameters = statement.types.map(describeType);
+  const parameters = statement.parameters.map(describeType);
   if (columns.length) {
     issues.set('nullability', {
       code: 'nullability-unknown',

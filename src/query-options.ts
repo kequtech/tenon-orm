@@ -52,13 +52,13 @@ export function queryOutput(
   result: QueryResult<UnknownRow>,
 ): object | undefined {
   if (options.returns === 'native') return result;
-  if (options.returns === 'many') return [...result];
-  if (result.length > 1 || (options.returns === 'one' && result.length === 0)) {
+  if (options.returns === 'many') return result.rows;
+  if (result.rows.length > 1 || (options.returns === 'one' && result.rows.length === 0)) {
     throw new CardinalityError(
       options.returns === 'oneOrNone' ? 'oneOrNone' : 'one',
-      result.length,
+      result.rows.length,
       options.label,
     );
   }
-  return result[0];
+  return result.rows[0];
 }

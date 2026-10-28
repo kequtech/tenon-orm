@@ -6,6 +6,7 @@ export async function postgresProxy(connection: string) {
   const target = new URL(connection);
   const sockets = new Set<Socket>();
   let available = true;
+  let paused = false;
   let attempts = 0;
   const server = createServer((client) => {
     attempts++;
@@ -27,6 +28,10 @@ export async function postgresProxy(connection: string) {
       });
     }
     client.pipe(upstream).pipe(client);
+    if (paused) {
+      client.pause();
+      upstream.pause();
+    }
   });
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
@@ -46,6 +51,10 @@ export async function postgresProxy(connection: string) {
     setAvailable(value: boolean) {
       available = value;
       if (!value) for (const socket of sockets) socket.destroy();
+    },
+    setPaused(value: boolean) {
+      paused = value;
+      for (const socket of sockets) value ? socket.pause() : socket.resume();
     },
     async close() {
       for (const socket of sockets) socket.destroy();

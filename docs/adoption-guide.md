@@ -1,32 +1,34 @@
 # Adopting Tenon
 
-Replace application queries independently of migration ownership. Tenon can query an existing
-schema and generate types while the current migration runner stays in place. For a Tenon version
-upgrade, read the [Changelog](../CHANGELOG.md).
+Replace application queries independently of migration ownership. Tenon can query an existing schema
+and generate types while the current migration runner stays in place. For a Tenon version upgrade,
+read the [Changelog](../CHANGELOG.md).
 
 ## Preserve connections and behavior
 
 Keep the existing database URI, credentials, TLS requirements, schema, and data. Tenon can add
-driver settings without parsing the URI:
+driver settings through pg configuration:
 
 ```ts
 import { createTenon } from '@kequtech/tenon-orm';
 
 const db = createTenon({
-  connection: { url: existingUri, options: { connect_timeout: 5, idle_timeout: 10 } },
+  connection: {
+    connectionString: existingUri,
+    connectionTimeoutMillis: 5000,
+  },
 });
 ```
 
-Translate old driver configuration into Postgres.js options rather than passing it through.
-For example, pg's `connectionTimeoutMillis: 5000` becomes `connect_timeout: 5`, and
-`idleTimeoutMillis: 10000` becomes `idle_timeout: 10`; both native options use seconds. Preserve
-runtime `search_path` through URI startup parameters or `options.connection.search_path`.
-URI startup parameters take precedence when both are supplied. CLI `--namespace` does not change
-runtime queries. See [connection options](reference.md#installation-and-connection).
+Translate old driver configuration into pg `PoolConfig` rather than passing it through. Pool
+timeouts use milliseconds. Preserve runtime `search_path` through the pg startup options string, for
+example `options: '-c search_path=app,public'`. URI startup options take precedence when both are
+supplied. CLI `--namespace` does not change runtime queries. See
+[connection options](reference.md#installation-and-connection).
 
-Before conversion, identify behavior supplied by the old ORM: IDs/defaults, timestamps,
-validation, hooks, serialization, relationships, and transaction boundaries. Preserve it explicitly
-in application code or SQL where required.
+Before conversion, identify behavior supplied by the old ORM: IDs/defaults, timestamps, validation,
+hooks, serialization, relationships, and transaction boundaries. Preserve it explicitly in
+application code or SQL where required.
 
 ## Replace queries
 
@@ -41,7 +43,7 @@ in application code or SQL where required.
 2. Replace queries with parameterized SQL in ordinary functions accepting `QueryClient` where
    callers may supply `db` or `tx`. Retain projections, ordering, null handling, and authorization.
 3. Review value conversions against [Tenon's mappings](reference.md#generated-types-and-checking):
-   bigint/numeric strings, dates, arrays, and native JSON may differ from the previous driver.
+   numeric values, dates, arrays, and JSON serialization may differ from the previous driver.
    Generated declarations do not replace domain validation.
 4. Inspect meaningful completed query variants and run database assertions for actual rows,
    permissions, write effects, and rollback. See [query inspection](query-inspection.md).
@@ -74,9 +76,9 @@ For an application owning `app` in a shared database:
 npx tenon baseline capture --directory migrations --namespace app --schema app
 ```
 
-The directory must contain no SQL files. Capture uses native `pg_dump --schema-only --no-owner
---no-privileges` and writes `0001_baseline.up.sql` with no down file. Install compatible PostgreSQL
-client tools on PATH; prefer the server's major version.
+The directory must contain no SQL files. Capture uses native
+`pg_dump --schema-only --no-owner --no-privileges` and writes `0001_baseline.up.sql` with no down
+file. Install compatible PostgreSQL client tools on PATH; prefer the server's major version.
 
 | Option                | Scope                                                                                |
 | --------------------- | ------------------------------------------------------------------------------------ |
@@ -106,15 +108,15 @@ npx tenon baseline adopt --directory migrations --namespace app
 npx tenon migrate --directory migrations --namespace app
 ```
 
-Adoption records the baseline checksum without executing its SQL. The namespace must already
-exist. Repeating matching adoption is harmless, including after later migrations; history conflicts
-fail. Once Tenon owns history, add forward migrations rather than editing the baseline.
+Adoption records the baseline checksum without executing its SQL. The namespace must already exist.
+Repeating matching adoption is harmless, including after later migrations; history conflicts fail.
+Once Tenon owns history, add forward migrations rather than editing the baseline.
 
 ### Replay a fresh database
 
 Run `tenon migrate --directory migrations --namespace app`, without adoption. It executes the same
-committed baseline and subsequent migrations. Apply the deployment's required roles, ownership,
-and grants before application access.
+committed baseline and subsequent migrations. Apply the deployment's required roles, ownership, and
+grants before application access.
 
 The portable baseline omits ownership, grants/revokes, and default privileges. Objects are recreated
 under the migration role. For `SECURITY DEFINER` functions, that owner controls execution authority,
@@ -129,7 +131,8 @@ types. Test existing-row preservation, repeatable adoption, subsequent migration
 A schema-only baseline and down migration are not backups. The missing down file prevents rollback
 across the baseline; use the application's backup/recovery procedure for that boundary.
 
-Programmatic capture is `captureBaseline({ connection, directory?, namespace?, schemas?, onWarning? })`
-and returns `{ id, upPath }`. It requires a native libpq connection string; an explicitly empty
-`schemas` list fails. `adoptBaseline({ connection, directory?, namespace? })` accepts Tenon's runtime
-connection forms and returns newly recorded IDs.
+Programmatic capture is
+`captureBaseline({ connection, directory?, namespace?, schemas?, onWarning? })` and returns
+`{ id, upPath }`. It requires a native libpq connection string; an explicitly empty `schemas` list
+fails. `adoptBaseline({ connection, directory?, namespace? })` accepts Tenon's runtime connection
+forms and returns newly recorded IDs.

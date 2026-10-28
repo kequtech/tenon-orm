@@ -1,17 +1,17 @@
-import type postgres from 'postgres';
-import { reserveConnection } from './driver/session.js';
+import type { Pool } from 'pg';
 import type { QueryExecutor } from './connection.js';
-import { executeSql } from './connection.js';
+import { executeSql, watchClient } from './connection.js';
 
 /** The callback owns one connection and expires before commit or rollback begins. */
 export async function withTransaction<T>(
-  pool: postgres.Sql,
+  pool: Pool,
   work: (query: QueryExecutor) => Promise<T>,
 ): Promise<T> {
-  const connection = await reserveConnection(pool, 'BEGIN');
-  const client = connection.sql;
+  const client = await pool.connect();
+  const connection = watchClient(client);
   let active = true;
-  let discard = false;
+  let began = false;
+  let releaseError: Error | undefined;
   let savepointId = 0;
   let pending: Promise<void> = Promise.resolve();
   let recoveryFailure: AggregateError | undefined;
@@ -27,15 +27,15 @@ export async function withTransaction<T>(
       if (!guarded) return readResult(await executeSql(client, text, input));
 
       const savepoint = `tenon_affected_rows_${++savepointId}`;
-      await client.unsafe(`SAVEPOINT ${savepoint}`);
+      await client.query(`SAVEPOINT ${savepoint}`);
       try {
         const result = readResult(await executeSql(client, text, input));
-        await client.unsafe(`RELEASE SAVEPOINT ${savepoint}`);
+        await client.query(`RELEASE SAVEPOINT ${savepoint}`);
         return result;
       } catch (error) {
         try {
-          await client.unsafe(`ROLLBACK TO SAVEPOINT ${savepoint}`);
-          await client.unsafe(`RELEASE SAVEPOINT ${savepoint}`);
+          await client.query(`ROLLBACK TO SAVEPOINT ${savepoint}`);
+          await client.query(`RELEASE SAVEPOINT ${savepoint}`);
         } catch (rollbackError) {
           // Even if application code catches this error, the outer transaction
           // must not commit when the rejected write could still be present.
@@ -56,12 +56,14 @@ export async function withTransaction<T>(
   };
 
   try {
+    await client.query('BEGIN');
+    began = true;
     const result = await work(query);
     active = false;
     await pending;
     connection.check();
     if (recoveryFailure) throw recoveryFailure;
-    const committed = await client.unsafe('COMMIT');
+    const committed = await client.query('COMMIT');
     if (committed.command !== 'COMMIT') {
       throw new Error('PostgreSQL rolled back the aborted transaction.');
     }
@@ -69,15 +71,18 @@ export async function withTransaction<T>(
   } catch (error) {
     active = false;
     await pending;
+    if (!began) {
+      releaseError = error instanceof Error ? error : new Error('BEGIN failed.');
+      throw error;
+    }
     try {
-      connection.check();
-      await client.unsafe('ROLLBACK');
+      await client.query('ROLLBACK');
     } catch (rollbackError) {
-      discard = true;
+      releaseError = rollbackError instanceof Error ? rollbackError : new Error('Rollback failed.');
       throw new AggregateError([error, rollbackError], 'Transaction and rollback failed.');
     }
     throw error;
   } finally {
-    await connection.release(discard);
+    connection.release(releaseError);
   }
 }

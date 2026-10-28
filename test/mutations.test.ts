@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import postgres from 'postgres';
+import { Pool } from 'pg';
 import { createTenon, identifier, migrate, sql, unsafeSql } from '../src/index.js';
 import { assertTestDatabase, migrationProject, testConnection } from './helpers/database.js';
 
@@ -82,9 +82,9 @@ test('query compilation enforces the combined PostgreSQL bind limit without impl
   assert.equal(
     unsafeSql(
       'SELECT 1',
-      Array.from({ length: 65533 }, () => 1),
+      Array.from({ length: 65535 }, () => 1),
     ).values.length,
-    65533,
+    65535,
   );
   assert.throws(
     () =>
@@ -92,17 +92,17 @@ test('query compilation enforces the combined PostgreSQL bind limit without impl
         'SELECT 1',
         Array.from({ length: 65537 }, () => 1),
       ),
-    /65533 bound parameters; received 65537/,
+    /65535 bound parameters; received 65537/,
   );
-  const rows = Array.from({ length: 65533 }, () => ({ value: 1 }));
+  const rows = Array.from({ length: 65535 }, () => ({ value: 1 }));
   assert.throws(
     () => sql`INSERT INTO users ${sql.insertValues(rows)} RETURNING ${1}`,
-    /65533 bound parameters; received 65534/,
+    /65535 bound parameters; received 65536/,
   );
 });
 
 test('mutation fragments execute defaults, upserts, partial updates and generated-column rules', async () => {
-  const pool = postgres(testConnection);
+  const pool = new Pool({ connectionString: testConnection });
   const db = createTenon({ connection: pool });
   try {
     await assertTestDatabase(pool);
@@ -168,7 +168,7 @@ test('mutation fragments execute defaults, upserts, partial updates and generate
         const arrays = await db.query(
           sql<Row>`INSERT INTO ${table} ${sql.insertValues({
             name: 'arrays',
-            payload: handles,
+            payload: JSON.stringify(handles),
             tags: handles,
           })} RETURNING *`,
           { returns: 'one' },

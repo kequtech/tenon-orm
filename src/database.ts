@@ -1,8 +1,6 @@
 import { createClient } from './client.js';
 import type { Connection, QueryExecutor } from './connection.js';
 import { createConnection, executeSql } from './connection.js';
-import { prepareArrays } from './driver/array.js';
-import { guardListenerShutdown } from './driver/listener.js';
 import { withTransaction } from './transaction.js';
 import type { CloseOptions, Database, QueryEvent } from './types.js';
 import { plainObject } from './validation.js';
@@ -39,8 +37,7 @@ export function createTenon(options: TenonOptions): Database {
   if (options.onQuery !== undefined && typeof options.onQuery !== 'function') {
     throw new Error('onQuery must be a function.');
   }
-  const { sql: pool, owned } = createConnection(options.connection);
-  const stopListeners = owned ? guardListenerShutdown(pool) : undefined;
+  const { pool, run, close } = createConnection(options.connection);
   let closing: Promise<void> | undefined;
 
   function checkOpen() {
@@ -49,13 +46,14 @@ export function createTenon(options: TenonOptions): Database {
     }
   }
 
-  const query: QueryExecutor = async (text, input, readResult, guarded) => {
+  const query: QueryExecutor = (text, input, readResult, guarded) => {
     checkOpen();
-    if (guarded) {
-      return withTransaction(pool, (query) => query(text, input, readResult, false));
-    }
-    await prepareArrays(pool);
-    return readResult(await executeSql(pool, text, input));
+    return run(async () => {
+      if (guarded) {
+        return withTransaction(pool, (query) => query(text, input, readResult, false));
+      }
+      return readResult(await executeSql(pool, text, input));
+    });
   };
 
   return {
@@ -63,19 +61,16 @@ export function createTenon(options: TenonOptions): Database {
     native: pool,
     async transaction(callback) {
       checkOpen();
-      return withTransaction(pool, (query) => callback(createClient(query, options.onQuery)));
+      return run(() =>
+        withTransaction(pool, (query) => callback(createClient(query, options.onQuery))),
+      );
     },
     close(options) {
       if (closing) return closing;
       try {
         const timeoutMs = closeTimeout(options);
         // Cache before invoking driver callbacks, so reentrant/concurrent callers share shutdown.
-        closing = Promise.resolve().then(() => {
-          if (owned) {
-            stopListeners!();
-            return pool.end({ timeout: timeoutMs / 1000 });
-          }
-        });
+        closing = Promise.resolve().then(() => close(timeoutMs));
         return closing;
       } catch (error) {
         return Promise.reject(error);

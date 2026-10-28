@@ -1,3 +1,4 @@
+import { fixtureTransaction } from './helpers/database.js';
 import { executeSql } from '../src/connection.js';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
@@ -5,7 +6,7 @@ import { join, resolve } from 'node:path';
 import { after, before, test } from 'node:test';
 import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
-import postgres from 'postgres';
+import { Pool } from 'pg';
 import { migrate, type SqlQuery } from '../src/index.js';
 import { qualified } from '../src/sql.js';
 import {
@@ -16,7 +17,7 @@ import {
 } from './helpers/database.js';
 import { checkGeneratedTypes, typeAssertions } from './helpers/generation.js';
 
-const pool = postgres(connection);
+const pool = new Pool({ connectionString: connection });
 const project = migrationProject(pool);
 const run = promisify(execFile);
 before(() => assertTestDatabase(pool));
@@ -113,7 +114,7 @@ test('generated mutation types enforce required fields and generated columns whi
         `,
       );
       assert.deepEqual(
-        [...(await executeSql(pool, queries.insert!.text, queries.insert!.values))],
+        [...(await executeSql(pool, queries.insert!.text, queries.insert!.values)).rows],
         [
           {
             id: 1,
@@ -138,7 +139,7 @@ test('generated mutation types enforce required fields and generated columns whi
         ],
       );
       assert.deepEqual(
-        [...(await executeSql(pool, queries.update!.text, queries.update!.values))],
+        [...(await executeSql(pool, queries.update!.text, queries.update!.values)).rows],
         [
           {
             id: 2,
@@ -197,35 +198,40 @@ test('domain defaults and nested NOT NULL constraints govern writes without narr
       );
       const table = qualified(options.namespace, 'Inputs');
       assert.deepEqual(
-        [...(await pool.unsafe(`INSERT INTO ${table} (required) VALUES ($1) RETURNING *`, [1]))],
+        [
+          ...(await pool.query(`INSERT INTO ${table} (required) VALUES ($1) RETURNING *`, [1]))
+            .rows,
+        ],
         [{ required: 1, defaulted: 3, overridden: 9, loose: 5 }],
       );
-      await assert.rejects(pool.unsafe(`INSERT INTO ${table} (required) VALUES ($1)`, [null]), {
+      await assert.rejects(pool.query(`INSERT INTO ${table} (required) VALUES ($1)`, [null]), {
         code: '23502',
       });
-      await assert.rejects(pool.unsafe(`INSERT INTO ${table} (required) VALUES ($1)`, [0]), {
+      await assert.rejects(pool.query(`INSERT INTO ${table} (required) VALUES ($1)`, [0]), {
         code: '23514',
       });
-      await pool.begin(async (client) => {
-        await client.unsafe(
+      await fixtureTransaction(pool, async (client) => {
+        await client.query(
           `ALTER DOMAIN ${qualified(options.namespace, 'Required')} DROP NOT NULL`,
         );
-        await client.unsafe(
+        await client.query(
           `ALTER DOMAIN ${qualified(options.namespace, 'NestedDefault')} DROP DEFAULT`,
         );
       });
       // PostgreSQL 16 can retain cached checks for nested domains after their base changes.
       // A fresh backend tests the new schema rather than that backend-local cached constraint.
-      const changed = postgres(connection, { max: 1 });
+      const changed = new Pool({ connectionString: connection, max: 1 });
       try {
-        await assert.rejects(changed.unsafe(`INSERT INTO ${table} (required) VALUES (1)`), {
+        await assert.rejects(changed.query(`INSERT INTO ${table} (required) VALUES (1)`), {
           code: '23502',
         });
         assert.deepEqual(
           [
-            ...(await changed.unsafe(
-              `INSERT INTO ${table} (required, defaulted) VALUES (NULL, 4) RETURNING *`,
-            )),
+            ...(
+              await changed.query(
+                `INSERT INTO ${table} (required, defaulted) VALUES (NULL, 4) RETURNING *`,
+              )
+            ).rows,
           ],
           [{ required: null, defaulted: 4, overridden: 9, loose: 5 }],
         );
@@ -250,7 +256,7 @@ test('domain defaults and nested NOT NULL constraints govern writes without narr
   );
 });
 
-test('generated write representations bind bigint, numeric, temporal, JSON and array inputs through Postgres.js', async () => {
+test('generated write representations bind bigint, numeric, temporal, JSON and array inputs through pg', async () => {
   await project(
     {
       '0001_values.up.sql': `
@@ -272,25 +278,25 @@ test('generated write representations bind bigint, numeric, temporal, JSON and a
         ${typeAssertions}
         type New = Rows.Insert['Values'];
         type BigRead = Assert<Equal<Rows['Values']['big'], string>>;
-        type TimeRead = Assert<Equal<Rows['Values']['time'], Date>>;
+        type TimeRead = Assert<Equal<Rows['Values']['time'], Date | number>>;
         type BigWrite = Assert<Equal<New['big'], string | bigint>>;
         type DecimalWrite = Assert<Equal<New['decimal'], string | number>>;
         type TimeWrite = Assert<Equal<New['time'], Date | string>>;
-        type JsonWrite = Assert<Equal<New['payload'], Exclude<import('@kequtech/tenon-orm').JSONValue, null>>>;
+        type JsonWrite = Assert<Equal<New['payload'], string>>;
         type BigArray = Assert<Equal<New['bigs'], PgArray<string | bigint>>>;
         type DecimalArray = Assert<Equal<New['decimals'], PgArray<string | number>>>;
         type TimeArray = Assert<Equal<New['times'], PgArray<Date | string>>>;
-        type JsonArray = Assert<Equal<New['payloads'], PgArray<Exclude<import('@kequtech/tenon-orm').JSONValue, null>>>>;
+        type JsonArray = Assert<Equal<New['payloads'], PgArray<string>>>;
         const value: New = {
           big: 9007199254740993n, decimal: '12345678901234567890.125', time: new Date('2026-01-01T00:00:00Z'),
-          payload: ['one', null], document: 'null', bytes: Buffer.from([0, 255]), kind: 'reader',
+          payload: JSON.stringify(['one', null]), document: JSON.stringify('null'), bytes: Buffer.from([0, 255]), kind: 'reader',
           bigs: ['9007199254740993', 2n, null], decimals: ['1.25', 2.5, null],
           times: [new Date('2026-01-01T00:00:00Z'), '2026-01-02T00:00:00Z', null],
-          payloads: [{ nested: true }, 'null', null],
+          payloads: [JSON.stringify({ nested: true }), JSON.stringify('null'), null],
         };
         const target = identifier(${JSON.stringify(options.namespace)}, 'Values');
         const patch: Rows.Update['Values'] = { big: '2', decimal: 1.5, time: new Date('2026-01-01T00:00:00Z'),
-          payload: 'null', document: null };
+          payload: JSON.stringify('null'), document: null };
         export const queries = {
           insert: sql\`INSERT INTO \${target} \${sql.insertValues(value)} RETURNING *\`,
           update: sql\`UPDATE \${target} SET \${sql.assignments(patch)} RETURNING big, decimal, time, payload, document\`,
@@ -312,7 +318,7 @@ test('generated write representations bind bigint, numeric, temporal, JSON and a
         `,
       );
       assert.deepEqual(
-        [...(await executeSql(pool, queries.insert!.text, queries.insert!.values))],
+        [...(await executeSql(pool, queries.insert!.text, queries.insert!.values)).rows],
         [
           {
             big: '9007199254740993',
@@ -323,14 +329,14 @@ test('generated write representations bind bigint, numeric, temporal, JSON and a
             bytes: Buffer.from([0, 255]),
             kind: 'reader',
             bigs: ['9007199254740993', '2', null],
-            decimals: ['1.25', '2.5', null],
+            decimals: [1.25, 2.5, null],
             times: [new Date('2026-01-01T00:00:00Z'), new Date('2026-01-02T00:00:00Z'), null],
             payloads: [{ nested: true }, 'null', null],
           },
         ],
       );
       assert.deepEqual(
-        [...(await executeSql(pool, queries.update!.text, queries.update!.values))],
+        [...(await executeSql(pool, queries.update!.text, queries.update!.values)).rows],
         [
           {
             big: '2',

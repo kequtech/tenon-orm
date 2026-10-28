@@ -2,7 +2,7 @@ import type { QueryClient } from '../src/index.js';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { after, before, beforeEach, test } from 'node:test';
-import postgres from 'postgres';
+import { Pool } from 'pg';
 import type { Transaction, SqlQuery, QueryReturnMode } from '../src/index.js';
 import {
   CardinalityError,
@@ -17,7 +17,7 @@ import type { User } from './fixtures/generated-schema.js';
 
 import { assertTestDatabase, testConnection as connection } from './helpers/database.js';
 const namespace = `tenon_test_${randomUUID().replaceAll('-', '')}`;
-const pool = postgres(connection, { max: 4 });
+const pool = new Pool({ connectionString: connection, max: 4 });
 const db = createTenon({ connection: pool });
 const target = qualified(namespace, 'User');
 let ownsNamespace = false;
@@ -38,7 +38,7 @@ beforeEach(async () => {
 });
 after(async () => {
   try {
-    if (ownsNamespace) await pool.unsafe(`DROP SCHEMA IF EXISTS ${quote(namespace)} CASCADE`);
+    if (ownsNamespace) await pool.query(`DROP SCHEMA IF EXISTS ${quote(namespace)} CASCADE`);
   } finally {
     await db.close();
     await pool.end();
@@ -144,9 +144,9 @@ test('inline command results preserve native fields and explicitly requested RET
     },
   );
   assert.equal(inserted.command, 'INSERT');
-  assert.equal(inserted.count, 2);
-  assert.deepEqual([...inserted], []);
-  assert.deepEqual(inserted.columns, []);
+  assert.equal(inserted.rowCount, 2);
+  assert.deepEqual([...inserted.rows], []);
+  assert.deepEqual(inserted.fields, []);
   assert.notEqual(Object.getPrototypeOf(inserted), Object.prototype);
   const changed = await db.query(
     sql<
@@ -155,16 +155,16 @@ test('inline command results preserve native fields and explicitly requested RET
     { returns: 'native' },
   );
   assert.equal(changed.command, 'UPDATE');
-  assert.equal(changed.count, 2);
+  assert.equal(changed.rowCount, 2);
   assert.deepEqual(
-    [...changed.sort((a, b) => a.id - b.id)],
+    [...changed.rows.sort((a, b) => a.id - b.id)],
     [
       { id: 1, active: true },
       { id: 2, active: true },
     ],
   );
   assert.deepEqual(
-    changed.columns.map((field) => field.name),
+    changed.fields.map((field) => field.name),
     ['id', 'active'],
   );
   const absent = await db.query(
@@ -173,13 +173,13 @@ test('inline command results preserve native fields and explicitly requested RET
       returns: 'native',
     },
   );
-  assert.equal(absent.count, 0);
+  assert.equal(absent.rowCount, 0);
   const ddl = await db.query(sql`CREATE TABLE ${identifier(namespace, 'Scratch')} (id integer)`, {
     returns: 'native',
   });
   try {
-    assert.equal(ddl.command, 'CREATE TABLE');
-    assert.equal(ddl.count, null);
+    assert.equal(ddl.command, 'CREATE');
+    assert.equal(ddl.rowCount, null);
   } finally {
     await db.query(sql`DROP TABLE ${identifier(namespace, 'Scratch')}`, { returns: 'many' });
   }
@@ -190,28 +190,33 @@ test('native is the default for reads and writes while explicit modes extract on
   const text = 'SELECT ARRAY[1, NULL, 3] AS values';
   const native = await db.query(unsafeSql<ArrayRow>(text, []));
   assert.equal(native.command, 'SELECT');
-  assert.equal(native.count, 1);
-  assert.deepEqual([...native], [{ values: [1, null, 3] }]);
-  assert.equal(native.columns[0]!.name, 'values');
-  assert.deepEqual(await db.query(unsafeSql<ArrayRow>(text, []), { returns: 'many' }), [...native]);
+  assert.equal(native.rowCount, 1);
+  assert.deepEqual([...native.rows], [{ values: [1, null, 3] }]);
+  assert.equal(native.fields[0]!.name, 'values');
+  assert.deepEqual(await db.query(unsafeSql<ArrayRow>(text, []), { returns: 'many' }), [
+    ...native.rows,
+  ]);
   assert.deepEqual(
     await db.query(unsafeSql<ArrayRow>(text, []), { returns: 'oneOrNone' }),
-    native[0],
+    native.rows[0],
   );
-  assert.deepEqual(await db.query(unsafeSql<ArrayRow>(text, []), { returns: 'one' }), native[0]);
+  assert.deepEqual(
+    await db.query(unsafeSql<ArrayRow>(text, []), { returns: 'one' }),
+    native.rows[0],
+  );
   // Omitting the row generic restricts static access; it never removes real data.
-  assert.deepEqual([...(await db.query(unsafeSql(text, [])))], [...native]);
+  assert.deepEqual([...(await db.query(unsafeSql(text, []))).rows], [...native.rows]);
   const inserted = await db.query(
     sql`INSERT INTO ${identifier(namespace, 'User')} (email) VALUES (${'native'})`,
   );
   assert.equal(inserted.command, 'INSERT');
-  assert.equal(inserted.count, 1);
-  assert.deepEqual([...inserted], []);
+  assert.equal(inserted.rowCount, 1);
+  assert.deepEqual([...inserted.rows], []);
   const unchangedShape = await db.query(
     sql<User>`SELECT * FROM ${identifier(namespace, 'User')} WHERE email = 'missing'`,
   );
-  assert.deepEqual([...unchangedShape], []);
-  assert.equal(unchangedShape.count, 0);
+  assert.deepEqual([...unchangedShape.rows], []);
+  assert.equal(unchangedShape.rowCount, 0);
   assert.equal(
     await db.query(sql<User>`UPDATE ${identifier(namespace, 'User')} SET score = 1`, {
       returns: 'oneOrNone',
@@ -369,7 +374,7 @@ test('rejected transaction boundaries cannot commit writes early or abort a caug
       );
     }
     assert.deepEqual(
-      [...(await db.query(sql<User>`SELECT * FROM ${identifier(namespace, 'User')}`))],
+      [...(await db.query(sql<User>`SELECT * FROM ${identifier(namespace, 'User')}`)).rows],
       [],
     );
     await client.transaction(async (tx) => {
@@ -470,9 +475,9 @@ test('transaction words in values, identifiers and SQL bodies pass through uncha
             END: string;
           }>`/* COMMIT */ SELECT 'ROLLBACK; COMMIT;' AS "BEGIN", $body$BEGIN; END;$body$ AS "END"`,
         );
-        assert.deepEqual([...inline], [{ BEGIN: 'ROLLBACK; COMMIT;', END: 'BEGIN; END;' }]);
+        assert.deepEqual([...inline.rows], [{ BEGIN: 'ROLLBACK; COMMIT;', END: 'BEGIN; END;' }]);
         assert.deepEqual(
-          [...(await queries.echo(tx, { value: 'PREPARE TRANSACTION' }))],
+          [...(await queries.echo(tx, { value: 'PREPARE TRANSACTION' })).rows],
           [{ COMMIT: 'PREPARE TRANSACTION' }],
         );
         await queries.body(tx);
@@ -492,7 +497,7 @@ test('transaction words in values, identifiers and SQL bodies pass through uncha
           await tx.query(unsafeSql(prepared.sql, []));
           try {
             assert.deepEqual(
-              [...(await tx.query(unsafeSql<{ value: number }>(prepared.execute, [])))],
+              [...(await tx.query(unsafeSql<{ value: number }>(prepared.execute, []))).rows],
               [{ value: prepared.value }],
             );
           } finally {
@@ -516,7 +521,7 @@ test('PostgreSQL errors retain constraint details and foreign-key actions', asyn
       sql`INSERT INTO ${identifier(namespace, 'Post')} ("userId", title) VALUES (${99}, ${'orphan'})`,
       { returns: 'many' },
     ),
-    { code: '23503', table_name: 'Post' },
+    { code: '23503', table: 'Post' },
   );
   const user = await db.query(
     sql<User>`INSERT INTO ${identifier(namespace, 'User')} (email) VALUES ('parent') RETURNING *`,

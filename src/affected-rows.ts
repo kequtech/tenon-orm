@@ -28,16 +28,16 @@ export function checkAffectedRows(
 ): void {
   if (
     !['INSERT', 'UPDATE', 'DELETE', 'MERGE'].includes(result.command) ||
-    result.count === null ||
-    !Number.isSafeInteger(result.count) ||
-    result.count < 0
+    result.rowCount === null ||
+    !Number.isSafeInteger(result.rowCount) ||
+    result.rowCount < 0
   ) {
-    throw new AffectedRowsError(constraint, result.count, result.command, false);
+    throw new AffectedRowsError(constraint, result.rowCount, result.command, false);
   }
   const expected = constraint.exact ?? constraint.max;
   const matches =
-    constraint.exact === undefined ? result.count <= expected : result.count === expected;
+    constraint.exact === undefined ? result.rowCount <= expected : result.rowCount === expected;
   if (!matches) {
-    throw new AffectedRowsError(constraint, result.count, result.command, true);
+    throw new AffectedRowsError(constraint, result.rowCount, result.command, true);
   }
 }

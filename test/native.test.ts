@@ -2,11 +2,11 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { setTimeout as pause } from 'node:timers/promises';
 import { after, before, test } from 'node:test';
-import postgres from 'postgres';
+import { Pool, type PoolClient } from 'pg';
 import { createTenon, sql, type QueryEvent } from '../src/index.js';
 import { assertTestDatabase, testConnection } from './helpers/database.js';
 
-const admin = postgres(testConnection);
+const admin = new Pool({ connectionString: testConnection });
 before(() => assertTestDatabase(admin));
 after(() => admin.end());
 
@@ -14,13 +14,17 @@ function markedConnection(max: number) {
   const name = `tenon_native_${randomUUID().replaceAll('-', '')}`;
   const url = new URL(testConnection);
   url.searchParams.set('application_name', name);
-  url.searchParams.set('max', String(max));
-  return { name, connection: url.toString() };
+
+  return { name, connection: { connectionString: url.toString(), max } };
 }
 
 async function sessions(name: string) {
-  return admin<{ pid: number }[]>`SELECT pid FROM pg_stat_activity
-    WHERE application_name=${name} AND datname=current_database()`;
+  return (
+    await admin.query<{ pid: number }>(
+      'SELECT pid FROM pg_stat_activity\n    WHERE application_name=$1 AND datname=current_database()',
+      [name],
+    )
+  ).rows;
 }
 
 async function assertDisconnected(name: string) {
@@ -36,7 +40,7 @@ test(
   'native access shares the owned query pool and close shuts down queries and LISTEN',
   { timeout: 10000 },
   async (t) => {
-    const { connection, name } = markedConnection(1);
+    const { connection, name } = markedConnection(2);
     const events: QueryEvent[] = [];
     const db = createTenon({
       connection,
@@ -44,9 +48,11 @@ test(
         events.push(event);
       },
     });
-    t.after(() => db.native.end({ timeout: 1 }));
+    t.after(() => db.close());
 
-    const [native] = await db.native<{ pid: number }[]>`SELECT pg_backend_pid() AS pid`;
+    const {
+      rows: [native],
+    } = await db.native.query<{ pid: number }>('SELECT pg_backend_pid() AS pid');
     const row = await db.query(sql<{ pid: number }>`SELECT pg_backend_pid() AS pid`, {
       returns: 'one',
       label: 'tenon-query',
@@ -59,15 +65,20 @@ test(
     const delivered = new Promise<string>((resolve) => {
       receive = resolve;
     });
-    await db.native.listen(name, receive);
+    const listener = await db.native.connect();
+    listener.on('error', () => {});
+    listener.on('notification', (event) => receive(event.payload ?? ''));
+    await listener.query(`LISTEN "${name}"`);
     await db.query(sql`SELECT pg_notify(${name}, ${'before-close'})`);
     assert.equal(await delivered, 'before-close');
     assert.equal((await sessions(name)).length, 2, 'LISTEN owns a separate physical connection');
 
+    await listener.query('UNLISTEN *');
+    listener.release();
     await db.close();
     await db.close();
     await assertDisconnected(name);
-    await assert.rejects(db.native`SELECT 1`, { code: 'CONNECTION_ENDED' });
+    await assert.rejects(db.native.query('SELECT 1'), /after calling end/);
     await assert.rejects(db.query(sql`SELECT 1`), /closed/);
   },
 );
@@ -76,28 +87,36 @@ test(
   'closing a borrowed client wrapper preserves its native queries and listener',
   { timeout: 10000 },
   async (t) => {
-    const { connection, name } = markedConnection(1);
-    const native = postgres(connection);
+    const { connection, name } = markedConnection(2);
+    const native = new Pool(connection);
     const db = createTenon({ connection: native });
-    t.after(() => native.end({ timeout: 1 }));
+    t.after(() => (native.ending ? undefined : native.end()));
     assert.equal(db.native, native, 'native is the supplied client, without a wrapper');
     let receive!: (payload: string) => void;
     const delivered = new Promise<string>((resolve) => {
       receive = resolve;
     });
-    await db.native.listen(name, receive);
+    const listener = await db.native.connect();
+    listener.on('error', () => {});
+    listener.on('notification', (event) => receive(event.payload ?? ''));
+    await listener.query(`LISTEN "${name}"`);
     await db.query(sql`SELECT 1`);
 
     await Promise.all([db.close({ timeoutMs: 0 }), db.close()]);
     await assert.rejects(db.query(sql`SELECT 1`), /closed/);
-    assert.equal((await db.native<{ value: number }[]>`SELECT 42 AS value`)[0]!.value, 42);
-    await admin`SELECT pg_notify(${name}, ${'after-wrapper-close'})`;
+    assert.equal(
+      (await db.native.query<{ value: number }>('SELECT 42 AS value')).rows[0]!.value,
+      42,
+    );
+    await admin.query('SELECT pg_notify($1, $2)', [name, 'after-wrapper-close']);
     assert.equal(await delivered, 'after-wrapper-close');
     assert.equal((await sessions(name)).length, 2);
 
+    await listener.query('UNLISTEN *');
+    listener.release();
     await db.native.end();
     await assertDisconnected(name);
-    await assert.rejects(native`SELECT 1`, { code: 'CONNECTION_ENDED' });
+    await assert.rejects(native.query('SELECT 1'), /after calling end/);
   },
 );
 
@@ -106,15 +125,17 @@ test(
   { timeout: 10000 },
   async (t) => {
     const { connection, name } = markedConnection(2);
-    const native = postgres(connection, { max: 2 });
+    const native = new Pool({ ...connection, max: 2 });
     const db = createTenon({ connection: native });
-    t.after(() => native.end({ timeout: 1 }));
+    t.after(() => (native.ending ? undefined : native.end()));
     await db.transaction(async (tx) => {
       assert.ok(!('native' in tx));
       const transaction = await tx.query(sql<{ pid: number }>`SELECT pg_backend_pid() AS pid`, {
         returns: 'one',
       });
-      const [native] = await db.native<{ pid: number }[]>`SELECT pg_backend_pid() AS pid`;
+      const {
+        rows: [native],
+      } = await db.native.query<{ pid: number }>('SELECT pg_backend_pid() AS pid');
       assert.notEqual(native!.pid, transaction.pid);
     });
     await db.close();
@@ -132,17 +153,15 @@ test('concurrent close callers share completion and the first timeout, including
   });
   t.after(async () => {
     finish();
-    await end({ timeout: 0 });
+    await end();
   });
   let calls = 0;
-  let timeout: number | undefined;
   let reentrant: Promise<void> | undefined;
-  db.native.end = (options) => {
+  t.mock.method(db.native, 'end', () => {
     calls++;
-    timeout = options?.timeout;
     reentrant = db.close({ timeoutMs: 0 });
     return pending;
-  };
+  });
   const options = { timeoutMs: 125 };
   const first = db.close(options);
   options.timeoutMs = 0;
@@ -158,26 +177,26 @@ test('concurrent close callers share completion and the first timeout, including
     /closed/,
   );
   assert.equal(calls, 1);
-  assert.equal(timeout, 0.125);
   assert.equal(reentrant, first);
   assert.equal(completed, false, 'every caller must wait for the actual shutdown');
+  await pause(20);
+  assert.equal(completed, false, 'later close calls must not shorten the first deadline');
   finish();
   await Promise.all([first, second]);
   assert.equal(completed, true);
   assert.equal(db.close(), first);
 });
 
-test('close uses a bounded default and preserves the same shutdown failure for later callers', async (t) => {
+test('close preserves the same shutdown failure for later callers', async (t) => {
   const db = createTenon({ connection: 'postgresql://unused' });
   const end = db.native.end.bind(db.native);
-  t.after(() => end({ timeout: 0 }));
+  t.after(() => end());
   const failure = new Error('Shutdown failed');
   let calls = 0;
-  db.native.end = (options) => {
+  t.mock.method(db.native, 'end', () => {
     calls++;
-    assert.equal(options?.timeout, 5);
     throw failure;
-  };
+  });
   const closing = db.close();
   await assert.rejects(closing, (error) => error === failure);
   assert.equal(db.close({ timeoutMs: 0 }), closing);
@@ -215,7 +234,8 @@ for (const force of [false, true]) {
       t.after(() => db.close({ timeoutMs: 0 }));
       t.after(async () => {
         // Ending a client is not a PostgreSQL CancelRequest. Cancel only this test's sleeper.
-        for (const { pid } of await sessions(name)) await admin`SELECT pg_cancel_backend(${pid})`;
+        for (const { pid } of await sessions(name))
+          await admin.query('SELECT pg_cancel_backend($1)', [pid]);
         await assertDisconnected(name);
       });
       await db.query(sql`SELECT 1`);
@@ -229,8 +249,12 @@ for (const force of [false, true]) {
       );
       // Observe the actual long-running statement before requesting shutdown.
       for (let attempt = 0; ; attempt++) {
-        const active =
-          await admin`SELECT 1 FROM pg_stat_activity WHERE application_name=${name} AND wait_event='PgSleep'`;
+        const active = (
+          await admin.query(
+            "SELECT 1 FROM pg_stat_activity WHERE application_name=$1 AND wait_event='PgSleep'",
+            [name],
+          )
+        ).rows;
         if (active.length) break;
         assert.ok(attempt < 100, 'The test query did not start');
         await pause(10);
@@ -255,3 +279,124 @@ for (const force of [false, true]) {
     },
   );
 }
+
+for (const expire of [false, true]) {
+  test(
+    `owned close ${expire ? 'rejects' : 'drains'} accepted queries queued behind a busy connection`,
+    { timeout: 10000 },
+    async (t) => {
+      const { connection, name } = markedConnection(1);
+      const db = createTenon({ connection });
+      t.after(async () => {
+        for (const { pid } of await sessions(name))
+          await admin.query('SELECT pg_cancel_backend($1)', [pid]);
+        await db.close({ timeoutMs: 0 });
+      });
+      const operations = Array.from({ length: 3 }, (_, id) =>
+        db.query(sql`SELECT pg_sleep(${expire ? 30 : 0.03}), ${id}::integer AS id`, {
+          returns: 'one',
+        }),
+      );
+      const results = Promise.allSettled(operations);
+      await db.close({ timeoutMs: expire ? 30 : 3000 });
+      const settled = await results;
+      if (expire) assert.ok(settled.every((r) => r.status === 'rejected'));
+      else
+        assert.deepEqual(
+          settled.map((r) => (r.status === 'fulfilled' ? r.value.id : r.reason)),
+          [0, 1, 2],
+        );
+      await assert.rejects(db.native.query('SELECT 1'), /after calling end/);
+    },
+  );
+}
+
+test(
+  'deadline shutdown ends idle clients once and expires a suspended transaction',
+  { timeout: 10000 },
+  async (t) => {
+    const db = createTenon({ connection: testConnection });
+    let entered!: () => void, resume!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      resume = resolve;
+    });
+    let lateQuery!: Promise<unknown>;
+    const transaction = db.transaction(async (tx) => {
+      await tx.query(sql`SELECT 1`);
+      entered();
+      await gate;
+      lateQuery = assert.rejects(tx.query(sql`SELECT 2`), /closed|connection/i);
+      await lateQuery;
+    });
+    const rejected = assert.rejects(transaction, /shutdown deadline/);
+    t.after(async () => {
+      resume();
+      await db.close({ timeoutMs: 0 });
+    });
+    await ready;
+    const idle = await db.native.connect();
+    const end = t.mock.method(idle, 'end');
+    idle.release();
+    await db.close({ timeoutMs: 0 });
+    await rejected;
+    assert.equal(end.mock.callCount(), 1, 'idle clients are ended by the pool, not again by Tenon');
+    resume();
+    for (let attempt = 0; !lateQuery; attempt++) {
+      assert.ok(attempt < 100);
+      await pause(5);
+    }
+    await lateQuery;
+  },
+);
+
+test(
+  'deadline termination failures reject the shared close promise',
+  { timeout: 10000 },
+  async (t) => {
+    const db = createTenon({ connection: testConnection });
+    let client!: PoolClient, entered!: () => void, resume!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      resume = resolve;
+    });
+    db.native.once('acquire', (acquired) => {
+      client = acquired;
+    });
+    const transaction = db.transaction(async (tx) => {
+      await tx.query(sql`SELECT 1`);
+      entered();
+      await gate;
+    });
+    const expired = assert.rejects(transaction, /shutdown deadline/);
+    t.after(async () => {
+      resume();
+      await db.close({ timeoutMs: 0 }).catch(() => {});
+    });
+    await ready;
+    const additional = await db.native.connect();
+    additional.on('error', () => {});
+    const additionalEnd = t.mock.method(additional, 'end');
+    t.after(() => {
+      additional.release(true);
+    });
+    const failure = new Error('Client termination failed');
+    const original = client.end.bind(client);
+    t.mock.method(client, 'end', (callback?: () => void) => {
+      if (callback) return original(callback);
+      void original();
+      throw failure;
+    });
+    const closing = db.close({ timeoutMs: 0 });
+    await assert.rejects(closing, (error) => error === failure);
+    assert.equal(db.close(), closing);
+    await assert.rejects(db.close(), (error) => error === failure);
+    await expired;
+    assert.equal(additionalEnd.mock.callCount(), 1, 'one failure must not skip other checkouts');
+    resume();
+  },
+);

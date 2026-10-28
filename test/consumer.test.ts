@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, posix, resolve } from 'node:path';
 import { test } from 'node:test';
 import { promisify } from 'node:util';
-import postgres from 'postgres';
+import { Pool } from 'pg';
 
 import { assertTestDatabase, migrationProject, testConnection } from './helpers/database.js';
 
@@ -13,7 +13,7 @@ const run = promisify(execFile);
 
 test('the packed package preserves API contracts and consumes generated .d.ts schemas under TypeScript 6 and 7', async () => {
   const temporary = await mkdtemp(join(tmpdir(), 'tenon-consumer-'));
-  const pool = postgres(testConnection);
+  const pool = new Pool({ connectionString: testConnection });
   // npm publish --dry-run passes this setting into its lifecycle tests. Exercise
   // that environment while explicitly creating the local pack/install fixtures.
   const npmEnv = { ...process.env, npm_config_dry_run: 'true' };
@@ -115,7 +115,7 @@ test('the packed package preserves API contracts and consumes generated .d.ts sc
     };
     assert.equal(metadata.name, '@kequtech/tenon-orm');
     assert.equal(metadata.license, 'ISC');
-    assert.deepEqual(metadata.dependencies, { postgres: '3.4.9' });
+    assert.deepEqual(metadata.dependencies, { pg: '8.23.1', '@types/pg': '8.23.1' });
     assert.equal(metadata.peerDependencies, undefined);
     assert.equal(
       await readFile(join(installed, 'LICENSE'), 'utf8'),
@@ -229,10 +229,10 @@ test('the packed package preserves API contracts and consumes generated .d.ts sc
       type UserRow = Rows['User'];
       const indexed = sql<UserRow>\`SELECT * FROM "${options.namespace}"."User"\`;
       const nickname: string | null = user.nickname;
-      const created: Date = user.createdAt;
+      const created: Date | number = user.createdAt;
       const balance: string = user.balance;
       const input: Rows.Insert['User'] = { id: 1, email: 'reader@example.test', createdAt: new Date(),
-        balance: 1.5, settings: { enabled: true } };
+        balance: 1.5, settings: JSON.stringify({ enabled: true }) };
       const patch: Rows.Update['User'] = { email: undefined, nickname: null };
       sql.insertValues(input, ['id', 'email', 'createdAt', 'balance', 'settings']);
       sql.assignments(patch, ['email', 'nickname']);
@@ -300,7 +300,10 @@ ${result.stderr ?? ''}`);
       { cwd: production, env: npmEnv },
     );
     await cp(join(installed, 'dist'), join(production, 'second-tenon'), { recursive: true });
-    for (const name of ['pg', '@types/pg', 'typescript']) {
+    await cp(join(production, 'node_modules/pg'), join(production, 'second-pg'), {
+      recursive: true,
+    });
+    for (const name of ['postgres', 'typescript']) {
       await assert.rejects(access(join(production, 'node_modules', name)), { code: 'ENOENT' });
     }
     await run(join(production, 'node_modules/.bin/tenon'), ['--help'], { cwd: production });
@@ -311,7 +314,7 @@ ${result.stderr ?? ''}`);
         '-e',
         `
       import assert from 'node:assert/strict';
-      import postgres from 'postgres';
+      import { Pool } from 'pg';
       const { CardinalityError, createTenon, describeQuery, sql } = await import('@kequtech/tenon-orm');
       const second = await import('./second-tenon/index.js');
       const composed = sql\`SELECT \${second.sql.fragment\`\${7}::int\`} AS id\`;
@@ -319,8 +322,8 @@ ${result.stderr ?? ''}`);
       assert.deepEqual(composed.values, [7]);
       const db = createTenon({ connection: 'postgresql://unused' });
       await db.close();
-      const owned = createTenon({ connection: { url: process.env.TENON_TEST_DATABASE_URL, options: { max: 1 } } });
-      assert.equal((await owned.native.unsafe('SELECT 42 AS value'))[0].value, 42);
+      const owned = createTenon({ connection: { connectionString: process.env.TENON_TEST_DATABASE_URL, max: 1 } });
+      assert.equal((await owned.native.query('SELECT 42 AS value')).rows[0].value, 42);
       await assert.rejects(owned.query(sql\`SELECT 1 WHERE false\`, { returns: 'one' }), error => {
         assert.ok(error instanceof CardinalityError);
         assert.equal(error.code, 'TENON_CARDINALITY_MISMATCH');
@@ -331,12 +334,14 @@ ${result.stderr ?? ''}`);
       const closing = owned.close({ timeoutMs: 100 });
       assert.equal(owned.close(), closing);
       await closing;
-      await assert.rejects(owned.native.unsafe('SELECT 1'), {code: 'CONNECTION_ENDED'});
-      const pool = postgres(process.env.TENON_TEST_DATABASE_URL);
+      await assert.rejects(owned.native.query('SELECT 1'), /after calling end/);
+      const { Pool: OtherPool } = await import('./second-pg/esm/index.mjs');
+      const pool = new OtherPool({connectionString:process.env.TENON_TEST_DATABASE_URL});
+      assert.ok(!(pool instanceof Pool));
       const shared = createTenon({ connection: pool });
       assert.equal(shared.native, pool);
       await shared.close();
-      assert.equal((await shared.native.unsafe('SELECT 1 AS value'))[0].value, 1);
+      assert.equal((await shared.native.query('SELECT 1 AS value')).rows[0].value, 1);
       await pool.end();
       const description = await describeQuery({
         connection: process.env.TENON_TEST_DATABASE_URL,

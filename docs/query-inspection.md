@@ -34,20 +34,22 @@ const description = await describeQuery({
 });
 ```
 
-Reuse the runtime URI and session settings. Optional `session.role` uses SET ROLE when permitted;
-it does not load that role's login defaults. Omitted settings use the inspection connection's
-defaults. Explicit undefined behaves like omission. Unknown keys and invalid settings fail.
+Reuse the runtime URI and session settings. Optional `session.role` uses SET ROLE when permitted; it
+does not load that role's login defaults. Omitted settings use the inspection connection's defaults.
+Explicit undefined behaves like omission. Unknown keys and invalid settings fail.
 
 `context` reports login/effective roles, configured/resolved search paths, timezone, database, and
-effective statement/lock timeouts. Its mode is `separate-session` and read mapping profile is
-`postgres`. Custom parsers, temporary tables, uncommitted changes, and transaction-local settings
-are not inherited. `PGOPTIONS` is not automatically copied; use URI startup options or session
-settings. Array mappings include Tenon's SQL NULL correction.
+effective statement/lock timeouts. Its mode is `separate-session` and read mapping profile is `pg`;
+reported read types assume pg's default parsers and do not infer application overrides. Temporary
+tables, uncommitted changes, and transaction-local settings are not inherited. pg reads its normal
+connection environment, including `PGOPTIONS` when URI options are absent. Use explicit URI/session
+settings for reproducibility.
 
 Defaults are a 3-second connection/authentication timeout, a 5-second limit per server statement,
-and a 1-second lock wait. Overrides are positive integer milliseconds, at most 2,147,483,647.
-URI settings cannot disable the statement/lock bounds. Cleanup uses a 1-second driver shutdown
-timeout. These are operation limits, not a single overall deadline.
+and a 1-second lock wait. Overrides are positive integer milliseconds, at most 2,147,483,647. URI
+settings cannot disable the statement/lock bounds. A URI `query_timeout` remains pg's separate
+client read timeout. The owned client closes after inspection. These are operation limits, not a
+single overall deadline.
 
 ## Result fields
 
@@ -112,10 +114,6 @@ a write that violates constraints, or an operation the runtime role cannot execu
 rows/effects, JSON, permissions, and rollback in database tests, and run TypeScript. Inspect
 meaningful query variants; one instance does not cover unexercised branches. Expect only reviewed
 findings and keep unexpected ones visible.
-
-A query builder is optional. When a test needs to retain executed statements, a test-only
-`QueryClient` wrapper can forward them and retain `{ text }` without parameter values. Production
-`onQuery` deliberately supplies neither SQL nor values.
 
 ## CLI
 

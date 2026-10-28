@@ -51,8 +51,8 @@ Annotations, `satisfies`, or helper generic arguments apply generated input type
 the file does not check writes. Use `Pick` to narrow accepted fields and retain runtime validation.
 Generated inputs describe defaults and driver representations, not authorization or constraints.
 
-Selected columns choose and order fields, ignoring unlisted keys. They can discard a required
-field even when the original object is valid:
+Selected columns choose and order fields, ignoring unlisted keys. They can discard a required field
+even when the original object is valid:
 
 ```ts
 const input: Rows.Insert['profiles'] = { name: 'Ada' };
@@ -97,21 +97,24 @@ if (bio !== undefined) {
 }
 ```
 
-The second query preserves an existing bio. Omitting an insert value uses its database default;
-that alone does not decide which fields a conflict update overwrites.
+The second query preserves an existing bio. Omitting an insert value uses its database default; that
+alone does not decide which fields a conflict update overwrites.
 
 ## JSON and PostgreSQL arrays
 
-For a table with `payload jsonb` and `tags text[]`, native arrays work in either context:
+For a table with `payload jsonb` and `tags text[]`, encode JSON separately from the PostgreSQL
+array:
 
 ```ts
 const tags = ['ada', 'lin'];
-await db.query(sql`INSERT INTO deliveries ${sql.insertValues({ payload: tags, tags })}`);
+await db.query(
+  sql`INSERT INTO deliveries ${sql.insertValues({ payload: JSON.stringify(tags), tags })}`,
+);
 ```
 
-PostgreSQL establishes the target types and the driver serializes values. Pass native JSON rather
-than `JSON.stringify` output, which would store a JSON string. Generated JSON writes accept Tenon's
-`JSONValue` type, excluding SQL null for nonnullable columns. Use `'null'::jsonb` for JSON null.
+Generated JSON writes accept encoded JSON strings. Use `JSON.stringify(value)` for objects, arrays,
+strings, and JSON null; a bound JavaScript null means SQL null. Arrays passed directly are
+PostgreSQL arrays. Tenon leaves serialization to pg.
 
 ## Batches in one transaction
 
@@ -127,5 +130,5 @@ await db.transaction(async (tx) => {
 ```
 
 A failure rolls back all batches. Empty input makes no insert calls. Choose a batch size below the
-query-wide 65,533-parameter limit, including surrounding parameters; default cells consume none.
+query-wide 65,535-parameter limit, including surrounding parameters; default cells consume none.
 Tenon does not split batches or choose transaction boundaries for you.

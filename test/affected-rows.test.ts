@@ -2,7 +2,7 @@ import type { QueryClient } from '../src/index.js';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { after, before, beforeEach, test } from 'node:test';
-import postgres from 'postgres';
+import { Pool } from 'pg';
 import type { QueryOptions, Transaction } from '../src/index.js';
 import { AffectedRowsError, createTenon, identifier, sql, unsafeSql } from '../src/index.js';
 import { qualified, quote } from '../src/sql.js';
@@ -10,25 +10,25 @@ import { assertTestDatabase, testConnection } from './helpers/database.js';
 
 const namespace = `tenon_test_${randomUUID().replaceAll('-', '')}`;
 const table = qualified(namespace, 'items');
-const pool = postgres(testConnection);
+const pool = new Pool({ connectionString: testConnection });
 const db = createTenon({ connection: pool });
 let ownsNamespace = false;
 
 before(async () => {
   await assertTestDatabase(pool);
-  await pool.unsafe(`CREATE SCHEMA ${quote(namespace)}`);
+  await pool.query(`CREATE SCHEMA ${quote(namespace)}`);
   ownsNamespace = true;
-  await pool.unsafe(
+  await pool.query(
     `CREATE TABLE ${table} (id integer PRIMARY KEY, value integer NOT NULL DEFAULT 0)`,
   );
 });
 beforeEach(async () => {
-  await pool.unsafe(`TRUNCATE ${table}`);
-  await pool.unsafe(`INSERT INTO ${table} (id) VALUES (1), (2)`);
+  await pool.query(`TRUNCATE ${table}`);
+  await pool.query(`INSERT INTO ${table} (id) VALUES (1), (2)`);
 });
 after(async () => {
   try {
-    if (ownsNamespace) await pool.unsafe(`DROP SCHEMA ${quote(namespace)} CASCADE`);
+    if (ownsNamespace) await pool.query(`DROP SCHEMA ${quote(namespace)} CASCADE`);
   } finally {
     await db.close();
     await pool.end();
@@ -49,8 +49,8 @@ test('max permits zero or one match and rolls back an overbroad UPDATE without R
       sql`UPDATE ${identifier(namespace, 'items')} SET value = value + 1 WHERE id = ${id}`,
       { affectedRows: { max: 1 } },
     );
-  assert.equal((await update(db, { id: -1 })).count, 0);
-  assert.equal((await update(db, { id: 1 })).count, 1);
+  assert.equal((await update(db, { id: -1 })).rowCount, 0);
+  assert.equal((await update(db, { id: 1 })).rowCount, 1);
   await assert.rejects(
     db.query(sql`UPDATE ${identifier(namespace, 'items')} SET value = value + 10`, {
       affectedRows: { max: 1 },
@@ -98,7 +98,7 @@ test('exact enforces zero, one and multiple matches independently of result mode
       await db.query(sql`UPDATE ${identifier(namespace, 'items')} SET value = 5`, {
         affectedRows: { exact: 2 },
       })
-    ).count,
+    ).rowCount,
     2,
   );
   assert.equal(
@@ -106,7 +106,7 @@ test('exact enforces zero, one and multiple matches independently of result mode
       await db.query(sql`DELETE FROM ${identifier(namespace, 'items')} WHERE false`, {
         affectedRows: { exact: 0 },
       })
-    ).count,
+    ).rowCount,
     0,
   );
   await assert.rejects(
@@ -115,7 +115,7 @@ test('exact enforces zero, one and multiple matches independently of result mode
     }),
     /at most 0 affected rows/,
   );
-  assert.equal((await remove(db, { id: 1 })).count, 1);
+  assert.equal((await remove(db, { id: 1 })).rowCount, 1);
 });
 
 test('guarded INSERT and MERGE roll back rejected writes', async () => {
@@ -134,7 +134,7 @@ test('guarded INSERT and MERGE roll back rejected writes', async () => {
     { id: 1, value: 0 },
     { id: 2, value: 0 },
   ]);
-  assert.equal((await db.query(unsafeSql(merge, []), { affectedRows: { exact: 2 } })).count, 2);
+  assert.equal((await db.query(unsafeSql(merge, []), { affectedRows: { exact: 2 } })).rowCount, 2);
 });
 
 test('caught constraint and SQL errors recover locally while surrounding writes commit', async () => {
@@ -252,7 +252,7 @@ test('the constraint checks only the final command count, not other CTE writes',
      INSERT INTO ${identifier(namespace, 'items')} (id) VALUES (3)`,
     { affectedRows: { exact: 1 } },
   );
-  assert.equal(result.count, 1);
+  assert.equal(result.rowCount, 1);
   assert.deepEqual(await rows(), [
     { id: 1, value: 7 },
     { id: 2, value: 7 },

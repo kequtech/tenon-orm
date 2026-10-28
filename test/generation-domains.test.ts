@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
-import postgres from 'postgres';
+import { Pool } from 'pg';
 import { createTenon, generateDefinitions, identifier, migrate, sql } from '../src/index.js';
 import { qualified, quote } from '../src/sql.js';
 import {
@@ -9,7 +9,7 @@ import {
   migrationProject,
 } from './helpers/database.js';
 import { checkGeneratedTypes, typeAssertions } from './helpers/generation.js';
-const pool = postgres(connection);
+const pool = new Pool({ connectionString: connection });
 const project = migrationProject(pool);
 before(() => assertTestDatabase(pool));
 after(() => pool.end());
@@ -73,9 +73,9 @@ test('domains use verified base parsers while retaining ordinary row types and S
       import type { Buffer } from 'node:buffer';
       ${typeAssertions}
       type Expected = { number: number; optional: number | null; big: string; decimal: string;
-        flag: boolean; label: string; text: string; id: string; time: Date; bytes: Buffer;
+        flag: boolean; label: string; text: string; id: string; time: Date | number; bytes: Buffer;
         doc: unknown; payload: unknown; role: 'reader' | 'writer';
-        ints: PgArray<number>; numbers: PgArray<string> | null };
+        ints: PgArray<number>; numbers: PgArray<number> | null };
       type Full = Assert<Equal<DomainValues, Expected>>;
       // Domain CHECK expressions do not create a separate branded type.
       const input: DomainValues['number'] = 42;
@@ -107,7 +107,7 @@ test('domains use verified base parsers while retaining ordinary row types and S
           payload: null,
           role: 'reader',
           ints: [1, null, 3],
-          numbers: ['1.25', null],
+          numbers: [1.25, null],
         });
         assert.deepEqual(
           await db.query(
@@ -120,22 +120,22 @@ test('domains use verified base parsers while retaining ordinary row types and S
           db.query(sql`UPDATE ${identifier(options.namespace, 'DomainValues')} SET number = 0`),
           {
             code: '23514',
-            constraint_name: 'positive_check',
+            constraint: 'positive_check',
           },
         );
         await assert.rejects(
           db.query(sql`UPDATE ${identifier(options.namespace, 'DomainValues')} SET number = 100`),
           {
             code: '23514',
-            constraint_name: 'nested_check',
+            constraint: 'nested_check',
           },
         );
       } finally {
         await db.close();
       }
       // Domain-only changes update the comments without changing row types/history.
-      await pool.unsafe(`ALTER DOMAIN ${qualified(options.namespace, 'Positive')} SET DEFAULT 4`);
-      await pool.unsafe(
+      await pool.query(`ALTER DOMAIN ${qualified(options.namespace, 'Positive')} SET DEFAULT 4`);
+      await pool.query(
         `ALTER DOMAIN ${qualified(options.namespace, 'Positive')} ADD CONSTRAINT small CHECK (VALUE < 50) NOT VALID`,
       );
       const changed = await generateDefinitions(options);
@@ -196,9 +196,11 @@ test('domains over arrays retain recursive parser contracts without treating arr
       import type { PgArray } from './definitions.js';
     `,
       );
-      const result = await pool.unsafe(`INSERT INTO ${qualified(options.namespace, 'Arrays')}
+      const result = (
+        await pool.query(`INSERT INTO ${qualified(options.namespace, 'Arrays')}
       (positive, wrapped, delay, kinds) VALUES (ARRAY[2,NULL], ARRAY[3,NULL], INTERVAL '1 day', '{a,b}')
-      RETURNING positive, wrapped, kinds`);
+      RETURNING positive, wrapped, kinds`)
+      ).rows;
       assert.deepEqual(
         [...result],
         [{ positive: '{2,NULL}', wrapped: '{3,NULL}', kinds: '{a,b}' }],
@@ -209,9 +211,9 @@ test('domains over arrays retain recursive parser contracts without treating arr
 
 test('domain comments include external and nested dependencies but preserve conservative column nullability', async () => {
   await project({}, async (external) => {
-    await pool.unsafe(`CREATE SCHEMA ${quote(external.namespace)}`);
+    await pool.query(`CREATE SCHEMA ${quote(external.namespace)}`);
     const base = qualified(external.namespace, 'Required');
-    await pool.unsafe(
+    await pool.query(
       `CREATE DOMAIN ${base} AS integer NOT NULL CONSTRAINT positive CHECK (VALUE > 0)`,
     );
     await project(
@@ -235,13 +237,15 @@ test('domain comments include external and nested dependencies but preserve cons
       `,
         );
         // PostgreSQL can admit an already-domain-typed NULL through an empty subquery.
-        await pool.unsafe(`INSERT INTO ${qualified(options.namespace, 'Values')} (optional, required)
+        await pool.query(`INSERT INTO ${qualified(options.namespace, 'Values')} (optional, required)
         VALUES ((SELECT optional FROM ${qualified(options.namespace, 'Values')} WHERE false), 1)`);
         assert.deepEqual(
           [
-            ...(await pool.unsafe(
-              `SELECT optional, required FROM ${qualified(options.namespace, 'Values')}`,
-            )),
+            ...(
+              await pool.query(
+                `SELECT optional, required FROM ${qualified(options.namespace, 'Values')}`,
+              )
+            ).rows,
           ],
           [{ optional: null, required: 1 }],
         );

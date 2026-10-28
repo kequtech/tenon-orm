@@ -1,4 +1,4 @@
-import { assertInvalidDate } from './helpers/values.js';
+import { assertInfinity } from './helpers/values.js';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
@@ -6,13 +6,13 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { after, before, test } from 'node:test';
 import { promisify } from 'node:util';
-import postgres from 'postgres';
+import { Pool } from 'pg';
 import { createTenon, describeQuery, identifier, migrate, sql, unsafeSql } from '../src/index.js';
 import type { SqlQuery, UnknownRow } from '../src/index.js';
 import { qualified, quote } from '../src/sql.js';
 import { assertTestDatabase, migrationProject, testConnection } from './helpers/database.js';
 
-const pool = postgres(testConnection);
+const pool = new Pool({ connectionString: testConnection });
 const project = migrationProject(pool);
 const run = promisify(execFile);
 before(() => assertTestDatabase(pool));
@@ -321,7 +321,7 @@ test('recursive CTEs, UNION, views and grouping sets do not need a client SQL pa
   });
 });
 
-test('described mappings agree with Postgres.js for precision, JSON, dates, arrays, enums and domains', async () => {
+test('described mappings agree with pg for precision, JSON, dates, arrays, enums and domains', async () => {
   await fixture(async (namespace) => {
     const query = sql`SELECT quota, amount, payload, at, tags, amounts, state, counter
       FROM ${identifier(namespace, 'accounts')} ORDER BY id`;
@@ -332,9 +332,9 @@ test('described mappings agree with Postgres.js for precision, JSON, dates, arra
         'string',
         'string',
         'unknown',
-        'globalThis.Date',
+        'globalThis.Date | number',
         'PgArray<string>',
-        'PgArray<string>',
+        'PgArray<number>',
         '"ready" | "waiting"',
         'string',
       ],
@@ -346,11 +346,11 @@ test('described mappings agree with Postgres.js for precision, JSON, dates, arra
       payload: { name: 'Ada' },
       at: new Date('2026-01-01T00:00:00Z'),
       tags: ['a', null],
-      amounts: ['1.25', null],
+      amounts: [1.25, null],
       state: 'ready',
       counter: '10',
     });
-    assert.ok(rows[1]!.at instanceof Date && Number.isNaN(rows[1]!.at.getTime()));
+    assert.equal(rows[1]!.at, Infinity);
     assert.equal(rows[1]!.payload, null);
     const arrays = sql`SELECT ARRAY[[1,NULL],[2,3]]::integer[] AS matrix,
       ARRAY[9007199254740993,NULL]::bigint[] AS big,
@@ -363,14 +363,14 @@ test('described mappings agree with Postgres.js for precision, JSON, dates, arra
       [
         'PgArray<number>',
         'PgArray<string>',
-        'PgArray<globalThis.Date>',
+        'PgArray<globalThis.Date | number>',
         'import("node:buffer").Buffer',
         'PgArray<unknown>',
       ],
     );
     const arrayRows = await execute(arrays);
     const invalid = (arrayRows[0]!.dates as unknown[])[1];
-    assertInvalidDate(invalid);
+    assertInfinity(invalid);
     assert.deepEqual(arrayRows, [
       {
         matrix: [
@@ -392,19 +392,19 @@ test('described mappings agree with Postgres.js for precision, JSON, dates, arra
   });
 });
 
-test('date and timestamp scalars preserve Postgres.js finite and invalid dates', async () => {
+test('date and timestamp scalars preserve pg finite dates and numeric infinities', async () => {
   const query = sql`SELECT DATE '2026-01-01' AS day, DATE 'infinity' AS infinite_day,
     TIMESTAMP '2026-01-01 12:30:00' AS local, TIMESTAMP '-infinity' AS infinite_local,
     TIMESTAMPTZ '2026-01-01T00:00:00Z' AS instant`;
   const result = await describe(query);
-  assert.ok(result.columns.every((c) => c.readType === 'globalThis.Date'));
+  assert.ok(result.columns.every((c) => c.readType === 'globalThis.Date | number'));
   const [row] = await execute(query);
   for (const name of ['day', 'local', 'instant']) {
     assert.ok(row![name] instanceof Date);
     assert.ok(Number.isFinite(row![name].getTime()));
   }
-  assert.ok(row!.infinite_day instanceof Date && Number.isNaN(row!.infinite_day.getTime()));
-  assert.ok(row!.infinite_local instanceof Date && Number.isNaN(row!.infinite_local.getTime()));
+  assert.equal(row!.infinite_day, Infinity);
+  assert.equal(row!.infinite_local, -Infinity);
   assert.deepEqual(row!.instant, new Date('2026-01-01T00:00:00Z'));
 });
 
@@ -421,8 +421,8 @@ test('the conservative declaration compiles under TypeScript 6 and 7 without cla
         const quota: string | null = row.quota;
         const state: 'ready' | 'waiting' | null = row.state;
         const tags: PgArray<string> | null = row.tags;
-        const amounts: PgArray<string> | null = row.amounts;
-        const at: Date | null = row.at;
+        const amounts: PgArray<number> | null = row.amounts;
+        const at: Date | number | null = row.at;
         const bytes: import('node:buffer').Buffer | null = row.bytes;
         // @ts-expect-error Describe cannot establish a non-null result
         const assumed: string = row.quota;
@@ -469,7 +469,10 @@ test('Describe accepts writes whose runtime constraints still fail', async () =>
       await assert.rejects(execute(query), { code });
     }
     assert.deepEqual(
-      [...(await pool.unsafe(`SELECT id FROM ${qualified(namespace, 'accounts')} ORDER BY id`))],
+      [
+        ...(await pool.query(`SELECT id FROM ${qualified(namespace, 'accounts')} ORDER BY id`))
+          .rows,
+      ],
       [{ id: 1 }, { id: 2 }],
     );
   });
@@ -496,9 +499,8 @@ test('Describe does not execute writes, writable CTEs, volatile functions, or ta
     }
     assert.deepEqual(
       [
-        ...(await pool.unsafe(
-          `SELECT id,name FROM ${qualified(namespace, 'accounts')} ORDER BY id`,
-        )),
+        ...(await pool.query(`SELECT id,name FROM ${qualified(namespace, 'accounts')} ORDER BY id`))
+          .rows,
       ],
       [
         { id: 1, name: 'Ada' },
@@ -506,28 +508,28 @@ test('Describe does not execute writes, writable CTEs, volatile functions, or ta
       ],
     );
     assert.equal(
-      (await pool.unsafe(`SELECT is_called FROM ${qualified(namespace, 'probe_sequence')}`))[0]!
+      (await pool.query(`SELECT is_called FROM ${qualified(namespace, 'probe_sequence')}`)).rows[0]!
         .is_called,
       false,
     );
     assert.equal(
       (
-        await pool.unsafe(
+        await pool.query(
           `SELECT count(*) FROM pg_catalog.pg_locks
       WHERE locktype='advisory' AND objid=($1::bigint & 4294967295)::oid`,
           [key],
         )
-      )[0]!.count,
+      ).rows[0]!.count,
       '0',
     );
-    const client = await pool.reserve();
+    const client = await pool.connect();
     try {
-      await client.unsafe('BEGIN');
-      await client.unsafe(
+      await client.query('BEGIN');
+      await client.query(
         `LOCK TABLE ${qualified(namespace, 'accounts')} IN ACCESS EXCLUSIVE MODE NOWAIT`,
       );
     } finally {
-      await client.unsafe('ROLLBACK');
+      await client.query('ROLLBACK');
       client.release();
     }
   });

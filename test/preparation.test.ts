@@ -1,57 +1,48 @@
 import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
-import postgres from 'postgres';
+import { Pool } from 'pg';
 import { createTenon, sql, unsafeSql } from '../src/index.js';
 import { assertTestDatabase, testConnection } from './helpers/database.js';
 
-const admin = postgres(testConnection);
+const admin = new Pool({ connectionString: testConnection });
 before(() => assertTestDatabase(admin));
 after(() => admin.end());
 
-for (const prepare of [true, false]) {
-  test(`compiled queries preserve corrected parsers and avoid cached parsers with client prepare=${prepare}`, async () => {
-    const native = postgres(testConnection, { max: 1, prepare });
-    const text = 'SELECT $1::integer[] AS values, $2::jsonb AS payload, $3::bigint AS big';
-    const options = { simple: false, prepare: true };
-    const value = [1, null, 3];
-    const payload = { nested: ['one', null] };
-    const big = 9007199254740993n;
-    const db = createTenon({ connection: native });
-    try {
-      // Describe before Tenon initializes: the native cached columns retain their old parsers.
-      const original = await native
-        .unsafe(text, [native.typed(value, 0), payload, native.typed(big, 20)], options)
-        .describe();
-      const query = unsafeSql(text, [value, payload, big]);
-      const first = await db.query(query);
-      const second = await db.query(query);
-      const transaction = await db.transaction((tx) => tx.query(query));
-      for (const result of [first, second, transaction]) {
-        assert.deepEqual([...result], [{ values: [1, null, 3], payload, big: String(big) }]);
-        assert.equal(result.statement.name, '');
-      }
-      assert.equal(first.statement.name, second.statement.name);
-      assert.equal(first.statement.name, transaction.statement.name);
-      if (prepare) assert.notEqual(first.statement.name, original.name);
-      assert.equal(query.text, text, 'driver preparation must not change the detached query');
-    } finally {
-      await db.close();
-      await native.end({ timeout: 1 });
-    }
-  });
-}
+test('compiled queries stay unnamed and retain native pg metadata', async (t) => {
+  const db = createTenon({ connection: { connectionString: testConnection, max: 1 } });
+  t.after(() => db.close());
+  const query = unsafeSql(
+    'SELECT $1::integer[] AS values, $2::jsonb AS payload, $3::bigint AS big',
+    [[1, null, 3], JSON.stringify({ nested: ['one', null] }), 9007199254740993n],
+  );
+  for (const result of [
+    await db.query(query),
+    await db.query(query),
+    await db.transaction((tx) => tx.query(query)),
+  ]) {
+    assert.deepEqual(result.rows, [
+      { values: [1, null, 3], payload: { nested: ['one', null] }, big: '9007199254740993' },
+    ]);
+    assert.equal(result.rowCount, 1);
+    assert.deepEqual(
+      result.fields.map((f) => f.dataTypeID),
+      [1007, 3802, 20],
+    );
+  }
+  assert.deepEqual((await db.native.query('SELECT name FROM pg_prepared_statements')).rows, []);
+});
 
 test(
   'a JSON serialization failure preserves guarded transaction recovery',
   { timeout: 10000 },
   async (t) => {
-    const native = postgres(testConnection, { max: 1 });
+    const native = new Pool({ connectionString: testConnection, max: 1 });
     const db = createTenon({ connection: native });
     t.after(async () => {
       await db.close();
-      await native.end({ timeout: 1 });
+      await native.end();
     });
-    await native.unsafe(`CREATE TEMP TABLE preparation_json (payload jsonb);
+    await native.query(`CREATE TEMP TABLE preparation_json (payload jsonb);
       CREATE TEMP TABLE preparation_audit (value text)`);
     const insert = (payload: object) =>
       sql`INSERT INTO preparation_json VALUES (${payload}::jsonb)`;
@@ -64,11 +55,11 @@ test(
       await tx.query(insert({ valid: true }), { affectedRows: { exact: 1 } });
     });
     assert.deepEqual(
-      [...(await native.unsafe('SELECT * FROM preparation_json'))],
+      [...(await native.query('SELECT * FROM preparation_json')).rows],
       [{ payload: { valid: true } }],
     );
     assert.deepEqual(
-      [...(await native.unsafe('SELECT * FROM preparation_audit'))],
+      [...(await native.query('SELECT * FROM preparation_audit')).rows],
       [{ value: 'kept' }],
     );
   },
@@ -78,11 +69,11 @@ test(
   'a concurrent serialization failure rejects its own query without shifting other results',
   { timeout: 10000 },
   async (t) => {
-    const native = postgres(testConnection, { max: 1 });
+    const native = new Pool({ connectionString: testConnection, max: 1 });
     const db = createTenon({ connection: native });
     t.after(async () => {
       await db.close();
-      await native.end({ timeout: 1 });
+      await native.end();
     });
     const query = (payload: object) => sql`SELECT ${payload}::jsonb AS payload`;
     // If execution starts preparing queries, this primes the cache and exposes the driver's pipeline bug.

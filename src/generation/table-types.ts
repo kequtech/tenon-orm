@@ -50,7 +50,7 @@ function columnTypes(
           ? ''
           : ` with underlying type ${JSON.stringify(value.typeSchema)}.${JSON.stringify(value.type)} (OID ${value.oid})`;
       onWarning(
-        `Column ${column} uses PostgreSQL type ${JSON.stringify(value.declaredSchema)}.${JSON.stringify(value.declaredType)} (OID ${value.declaredOid})${underlying} without a verified Postgres.js mapping; generated as unknown for reads and never for non-null writes.`,
+        `Column ${column} uses PostgreSQL type ${JSON.stringify(value.declaredSchema)}.${JSON.stringify(value.declaredType)} (OID ${value.declaredOid})${underlying} without a verified pg mapping; generated as unknown for reads and never for non-null writes.`,
       );
       types = { read: 'unknown', write: 'never' };
     }

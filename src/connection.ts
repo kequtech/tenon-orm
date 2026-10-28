@@ -1,28 +1,17 @@
-import postgres from 'postgres';
+import {
+  Pool,
+  type Client,
+  type PoolClient,
+  type PoolConfig,
+  type QueryConfig,
+  type QueryResult as PgResult,
+} from 'pg';
 import type { UnknownRow } from './query.js';
 import { plainObject } from './validation.js';
 
-// Postgres.js 3.4.9 implements onnotify but omits it from Options; see CONSIDERATIONS.md.
-export type ConnectionOptions = postgres.Options<{}> & {
-  readonly onnotify?: ((channel: string, payload: string) => void) | undefined;
-};
-export interface ConnectionUri {
-  readonly url: string;
-  readonly options?: ConnectionOptions | undefined;
-}
-export type Connection = string | ConnectionOptions | ConnectionUri | postgres.Sql;
-export type QueryResult<Row extends object = UnknownRow> = postgres.RowList<Row[]>;
-
-/** The driver operations shared by ordinary and reserved connections. */
-export interface SqlConnection {
-  unsafe<Rows extends object[] = UnknownRow[]>(
-    text: string,
-    input?: postgres.ParameterOrJSON<never>[],
-    options?: postgres.UnsafeQueryOptions & { simple?: boolean },
-  ): Promise<postgres.RowList<Rows>>;
-  array: postgres.Sql['array'];
-  typed: postgres.Sql['typed'];
-}
+export type ConnectionOptions = PoolConfig;
+export type Connection = string | ConnectionOptions | Pool;
+export type QueryResult<Row extends object = UnknownRow> = PgResult<Row>;
 export type QueryExecutor = <T>(
   text: string,
   input: readonly unknown[],
@@ -30,39 +19,139 @@ export type QueryExecutor = <T>(
   guarded: boolean,
 ) => Promise<T>;
 
-/** Own clients created from a URI/config; borrow explicitly supplied Postgres.js clients. */
-export function createConnection(connection: Connection): { sql: postgres.Sql; owned: boolean } {
-  if (typeof connection === 'function' && typeof connection.unsafe === 'function') {
-    return { sql: connection, owned: false };
-  }
-  if (typeof connection === 'string') {
-    if (!connection.trim()) throw new Error('Connection string must not be empty.');
-    return { sql: postgres(connection), owned: true };
-  }
-  plainObject(connection, 'Connection configuration');
-  if ('url' in connection) {
-    for (const key of Object.keys(connection)) {
-      if (key !== 'url' && key !== 'options') {
-        throw new Error(`Unknown URI connection option: ${key}`);
-      }
-    }
-    if (typeof connection.url !== 'string' || !connection.url.trim()) {
-      throw new Error('Connection string must not be empty.');
-    }
-    if (connection.options !== undefined) plainObject(connection.options, 'Connection options');
-    return { sql: postgres(connection.url, connection.options), owned: true };
-  }
-  return { sql: postgres(connection), owned: true };
+/** A supplied pool may come from another installed copy of pg. */
+function isPool(connection: Connection): connection is Pool {
+  return (
+    connection !== null &&
+    typeof connection === 'object' &&
+    'connect' in connection &&
+    typeof connection.connect === 'function' &&
+    'query' in connection &&
+    typeof connection.query === 'function' &&
+    'totalCount' in connection &&
+    typeof connection.totalCount === 'number' &&
+    'end' in connection &&
+    typeof connection.end === 'function'
+  );
 }
 
+/** Own constructed pools; supplied pools retain their application's ownership and error policy. */
+export function createConnection(connection: Connection): {
+  pool: Pool;
+  run<T>(work: () => Promise<T>): Promise<T>;
+  close(timeoutMs: number): Promise<void>;
+} {
+  if (isPool(connection)) return { pool: connection, run: (work) => work(), close: async () => {} };
+  let config: PoolConfig;
+  if (typeof connection === 'string') {
+    if (!connection.trim()) throw new Error('Connection string must not be empty.');
+    config = { connectionString: connection };
+  } else {
+    plainObject(connection, 'Connection configuration');
+    if ('url' in connection) {
+      throw new Error(
+        'Use pg connectionString in the connection configuration instead of url/options.',
+      );
+    }
+    config = connection;
+  }
+  const pool = new Pool(config);
+  const clients = new Set<Client>();
+  const pending = new Map<Promise<unknown>, (error: Error) => void>();
+  let terminating = false;
+  const terminate = (client: Client) => {
+    void client.end().catch(() => {});
+  };
+  // pool.end handles idle clients; the deadline also ends native checkouts.
+  pool.on('acquire', (client: Client) => {
+    clients.add(client);
+    if (terminating) terminate(client);
+  });
+  pool.on('release', (_error: Error | undefined, client: Client) => clients.delete(client));
+  pool.on('error', (error: Error) => process.emitWarning(error));
+  return {
+    pool,
+    run<T>(work: () => Promise<T>): Promise<T> {
+      let expire!: (error: Error) => void;
+      const task = new Promise<T>((resolve, reject) => {
+        expire = reject;
+        void Promise.resolve().then(work).then(resolve, reject);
+      });
+      pending.set(task, expire);
+      const forget = () => {
+        pending.delete(task);
+      };
+      void task.then(forget, forget);
+      return task;
+    },
+    async close(timeoutMs) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let ending: Promise<void> | undefined;
+      const end = () => (ending ??= pool.end());
+      try {
+        await Promise.race([
+          (async () => {
+            await Promise.allSettled([...pending.keys()]);
+            await end();
+          })(),
+          new Promise<void>((resolve) => {
+            timer = setTimeout(resolve, timeoutMs);
+          }).then(async () => {
+            // Native callbacks must reject close on failure, not escape a timer callback.
+            terminating = true;
+            const error = new Error('The database shutdown deadline expired.');
+            for (const reject of pending.values()) reject(error);
+            try {
+              void end().catch(() => {});
+            } finally {
+              // Attempt every checkout even when one native end call throws.
+              await Promise.all([...clients].map(async (client) => terminate(client)));
+            }
+          }),
+        ]);
+      } finally {
+        clearTimeout(timer);
+      }
+    },
+  };
+}
+
+/** A checked-out pg client remains tied to its session and is discarded after a failure. */
+export function watchClient(client: PoolClient) {
+  let failure: Error | undefined;
+  const onError = (error: Error) => {
+    failure ??= error;
+  };
+  const onEnd = () => {
+    failure ??= new Error('The PostgreSQL connection closed.');
+  };
+  client.on('error', onError);
+  client.on('end', onEnd);
+  return {
+    check() {
+      if (failure) throw failure;
+    },
+    release(error?: Error) {
+      try {
+        client.release(error ?? failure);
+      } finally {
+        client.removeListener('error', onError);
+        client.removeListener('end', onEnd);
+      }
+    },
+  };
+}
+
+/** Unnamed extended protocol enforces a single statement, even without parameters. */
 export function executeSql(
-  sql: SqlConnection,
+  connection: Pool | PoolClient,
   text: string,
   input: readonly unknown[] = [],
-): Promise<QueryResult> {
-  // Tenon compiles SQL separately from values; let PostgreSQL infer array/JSON types from the surrounding SQL.
-  const values = input.map((value) => (Array.isArray(value) ? sql.typed(value, 0) : value));
-  // Keep preparation off; CONSIDERATIONS.md records parser-cache and pipeline safety constraints.
-  const options = { simple: false, prepare: false };
-  return sql.unsafe<UnknownRow[]>(text, values as postgres.ParameterOrJSON<never>[], options);
+) {
+  const config: QueryConfig & { queryMode: 'extended' } = {
+    text,
+    values: [...input],
+    queryMode: 'extended',
+  };
+  return connection.query<UnknownRow>(config);
 }

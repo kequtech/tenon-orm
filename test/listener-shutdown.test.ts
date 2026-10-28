@@ -1,153 +1,186 @@
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
-import { PassThrough, type Duplex } from 'node:stream';
+import { once } from 'node:events';
+import { createServer, type Socket } from 'node:net';
 import { setTimeout as pause } from 'node:timers/promises';
-import { after, before, test } from 'node:test';
-import postgres from 'postgres';
-import { createTenon } from '../src/index.js';
-import { assertTestDatabase, testConnection } from './helpers/database.js';
+import { test } from 'node:test';
+import { createTenon, sql } from '../src/index.js';
+import { testConnection, migrationProject, assertTestDatabase } from './helpers/database.js';
+import { Pool } from 'pg';
+import { identifier, migrate } from '../src/index.js';
 import { postgresProxy } from './helpers/proxy.js';
 
-const admin = postgres(testConnection);
-before(() => assertTestDatabase(admin));
-after(() => admin.end());
-
-async function eventually(check: () => boolean | Promise<boolean>) {
-  for (let attempt = 0; attempt < 100; attempt++) {
-    if (await check()) return;
-    await pause(10);
-  }
-  assert.fail('Listener condition did not settle.');
-}
+test(
+  'owned close ends a checked-out native LISTEN client at its deadline',
+  { timeout: 10000 },
+  async (t) => {
+    const db = createTenon({ connection: testConnection });
+    t.after(() => db.close({ timeoutMs: 0 }));
+    const client = await db.native.connect();
+    client.on('error', () => {});
+    await client.query('LISTEN tenon_shutdown');
+    const ended = once(client, 'end');
+    const started = performance.now();
+    await db.close({ timeoutMs: 30 });
+    await ended;
+    assert.ok(performance.now() - started < 2000);
+    await assert.rejects(client.query('SELECT 1'), /closed|not queryable/);
+    client.release();
+    await assert.rejects(db.native.connect(), /after calling end/);
+  },
+);
 
 test(
-  'an owned listener still reconnects and delivers notifications before shutdown',
+  'a lost native listener closes without reconnecting and requires application recovery',
   { timeout: 10000 },
   async (t) => {
     const proxy = await postgresProxy(testConnection);
     const db = createTenon({ connection: proxy.connection });
     t.after(async () => {
-      await db.close();
+      await db.close({ timeoutMs: 0 });
       await proxy.close();
     });
-    const channel = `tenon_reconnect_${randomUUID().replaceAll('-', '')}`;
-    let ready = 0;
-    const payloads: string[] = [];
-    await db.native.listen(
-      channel,
-      (payload) => {
-        payloads.push(payload);
-      },
-      () => {
-        ready++;
-      },
-    );
-    const attempts = proxy.attempts;
+    const client = await db.native.connect();
+    client.on('error', () => {});
+    await client.query('LISTEN tenon_disconnect');
+    const ended = new Promise<void>((resolve) => client.once('end', resolve));
     proxy.setAvailable(false);
-    await eventually(() => proxy.attempts > attempts);
+    await ended;
+    const attempts = proxy.attempts;
     proxy.setAvailable(true);
-    await eventually(() => ready === 2);
-    await admin`SELECT pg_notify(${channel}, 'recovered')`;
-    await eventually(() => payloads.length === 1);
-    assert.deepEqual(payloads, ['recovered']);
-    await db.close();
-    await eventually(() => proxy.sockets === 0);
+    await pause(100);
+    assert.equal(proxy.attempts, attempts);
+    await assert.rejects(client.query('SELECT 1'), /closed|not queryable/);
+    client.release(true);
+    const replacement = await db.native.connect();
+    await replacement.query('LISTEN tenon_disconnect');
+    replacement.release();
   },
 );
 
 test(
-  'owned shutdown preserves a custom socket factory and disposes a late result',
+  'owned close bounds work waiting for initial authentication',
   { timeout: 10000 },
   async (t) => {
-    const db = createTenon({ connection: testConnection });
-    t.after(() => db.native.end({ timeout: 1 }));
-    let finish!: (socket: Duplex) => void;
-    const pending = new Promise<Duplex>((resolve) => {
-      finish = resolve;
+    const sockets = new Set<Socket>();
+    const server = createServer((socket) => {
+      sockets.add(socket);
+      socket.resume();
+      socket.on('close', () => sockets.delete(socket));
     });
-    let called = false;
-    const factory = () => {
-      called = true;
-      return pending;
-    };
-    const options: typeof db.native.options & { socket?: () => Promise<Duplex> } =
-      db.native.options;
-    options.socket = factory;
-    const subscription = db.native
-      .listen('tenon_late_socket', () => {})
-      .catch((error: unknown) => error);
-    await eventually(() => called);
-    assert.equal(options.socket, factory, 'the query pool retains the caller socket factory');
-    await db.close();
-    assert.ok((await subscription) instanceof Error);
-    const socket = new PassThrough();
-    finish(socket);
-    await eventually(() => socket.destroyed);
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    t.after(async () => {
+      for (const socket of sockets) socket.destroy();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    });
+    const address = server.address();
+    assert.ok(address && typeof address === 'object');
+    const db = createTenon({
+      connection: {
+        connectionString: `postgresql://probe@127.0.0.1:${address.port}/probe`,
+        connectionTimeoutMillis: 80,
+      },
+    });
+    t.after(() => db.close({ timeoutMs: 0 }));
+    const query = db.query(sql`SELECT 1`).catch((error: unknown) => error);
+    for (let i = 0; sockets.size === 0; i++) {
+      assert.ok(i < 100);
+      await pause(5);
+    }
+    await db.close({ timeoutMs: 0 });
+    assert.match(String(await query), /shutdown deadline/);
+    for (let i = 0; sockets.size; i++) {
+      assert.ok(i < 100);
+      await pause(5);
+    }
   },
 );
 
-for (const pendingSetup of [false, true]) {
+async function eventually(check: () => boolean, message: string) {
+  for (let attempt = 0; attempt < 200; attempt++) {
+    if (check()) return;
+    await pause(10);
+  }
+  assert.fail(message);
+}
+
+for (const [outcome, first] of [
+  ['stalled', 'query'],
+  ['connected', 'query'],
+  ['connected', 'transaction'],
+  ['disconnected', 'transaction'],
+] as const) {
   test(
-    `owned close prevents LISTEN from reconnecting after shutdown (pending setup=${pendingSetup})`,
+    `owned close with pg defaults rejects ${first} work when authentication is ${outcome}`,
     { timeout: 10000 },
     async (t) => {
-      const proxy = await postgresProxy(testConnection);
-      const name = `tenon_shutdown_${randomUUID().replaceAll('-', '')}`;
-      const url = new URL(proxy.connection);
-      url.searchParams.set('application_name', name);
-      url.searchParams.set('backoff', '0.05');
-      const db = createTenon({ connection: url.toString() });
-      t.after(async () => {
-        await proxy.close();
-        await db.native.end({ timeout: 1 });
-      });
-      let ready = 0,
-        notifications = 0;
-      const subscribe = () =>
-        db.native.listen(
-          name,
-          () => {
-            notifications++;
-          },
-          () => {
-            ready++;
-          },
-        );
-      let subscription: Promise<unknown> | undefined;
-      if (pendingSetup) {
-        proxy.setAvailable(false);
-        subscription = subscribe().catch((error: unknown) => error);
-        await eventually(() => proxy.attempts >= 2);
-      } else {
-        await subscribe();
-        await admin`SELECT pg_notify(${name}, 'before-close')`;
-        await eventually(() => notifications === 1);
-        const attempts = proxy.attempts;
-        proxy.setAvailable(false);
-        await eventually(() => proxy.attempts > attempts);
-      }
-      await Promise.all([db.close({ timeoutMs: 0 }), db.close()]);
-      if (subscription) assert.ok((await subscription) instanceof Error);
-      const attemptsAtClose = proxy.attempts;
-      const readyAtClose = ready;
-      proxy.setAvailable(true);
-      // Ten test backoff windows: a canceled reconnect must not restore an idle backend.
-      await pause(500);
-      assert.equal(
-        (await admin`SELECT pid FROM pg_stat_activity WHERE application_name=${name}`).length,
-        0,
-        'LISTEN must not restore a backend after db.close()',
+      const admin = new Pool({ connectionString: testConnection });
+      t.after(() => admin.end());
+      await assertTestDatabase(admin);
+      await migrationProject(admin)(
+        { '0001_records.up.sql': 'CREATE TABLE records (id integer);' },
+        async (options) => {
+          await migrate(options);
+          const proxy = await postgresProxy(testConnection);
+          proxy.setPaused(true);
+          const db = createTenon({ connection: { connectionString: proxy.connection, max: 1 } });
+          t.after(async () => {
+            await db.close({ timeoutMs: 0 });
+            await proxy.close();
+          });
+          let callbackRan = false;
+          const target = identifier(options.namespace, 'records');
+          const insert = () => db.query(sql`INSERT INTO ${target} VALUES (1)`);
+          const transaction = () =>
+            db.transaction(async (tx) => {
+              callbackRan = true;
+              await tx.query(sql`INSERT INTO ${target} VALUES (2)`);
+            });
+          const operations =
+            first === 'query' ? [insert(), transaction()] : [transaction(), insert()];
+          const results = Promise.allSettled(operations);
+          await eventually(
+            () => proxy.sockets === 2,
+            'The pending connection did not reach the proxy.',
+          );
+          const started = performance.now();
+          const closing = db.close({ timeoutMs: 20 });
+          assert.equal(db.close({ timeoutMs: 0 }), closing);
+          await closing;
+          assert.ok(performance.now() - started < 2000);
+          for (const result of await results) {
+            assert.equal(result.status, 'rejected');
+            if (result.status === 'rejected')
+              assert.match(String(result.reason), /shutdown deadline/);
+          }
+          if (outcome === 'stalled') {
+            await pause(100);
+            assert.equal(
+              proxy.sockets,
+              2,
+              'pg acquisition remains pending without an application timeout.',
+            );
+            assert.equal(callbackRan, false);
+            proxy.setAvailable(false);
+          } else if (outcome === 'connected') {
+            proxy.setPaused(false);
+          } else {
+            proxy.setAvailable(false);
+          }
+          await eventually(() => proxy.sockets === 0, 'The late connection was not closed.');
+          assert.equal(
+            callbackRan,
+            false,
+            'Expired transactions must never invoke application work.',
+          );
+          assert.deepEqual(
+            (await admin.query(`SELECT * FROM "${options.namespace}".records`)).rows,
+            [],
+          );
+          await assert.rejects(db.query(sql`SELECT 1`), /closed/);
+          await assert.rejects(db.native.connect(), /after calling end/);
+        },
       );
-      // A TCP attempt already in flight may reach the proxy after its client was destroyed.
-      assert.ok(proxy.attempts <= attemptsAtClose + 1);
-      assert.equal(proxy.sockets, 0);
-      assert.equal(ready, readyAtClose);
-      await admin`SELECT pg_notify(${name}, 'after-close')`;
-      assert.equal(notifications, pendingSetup ? 0 : 1);
-      const settledAttempts = proxy.attempts;
-      await pause(100);
-      assert.equal(proxy.attempts, settledAttempts, 'shutdown stops reconnect activity');
-      await assert.rejects(subscribe(), { code: 'CONNECTION_ENDED' });
     },
   );
 }

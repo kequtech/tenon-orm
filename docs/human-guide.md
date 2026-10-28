@@ -1,7 +1,7 @@
 # Using Tenon: a human guide
 
 Tenon lets you use PostgreSQL directly from TypeScript. You write SQL; Tenon binds its inputs and
-executes it through Postgres.js. This guide follows a small application from its first table to reusable
+executes it through pg. This guide follows a small application from its first table to reusable
 queries, transactions, and result checking.
 
 Use the [reference](reference.md) for exact contracts and [adoption](adoption-guide.md) when
@@ -29,12 +29,13 @@ if (!connection) throw new Error('DATABASE_URL is required');
 export const db = createTenon({ connection });
 ```
 
-Reuse this instance across the application and call `await db.close()` at shutdown. You can also supply an existing Postgres.js client; your application then owns its shutdown.
+Reuse this instance across the application and call `await db.close()` at shutdown. You can also
+supply an existing `pg.Pool`; your application then owns its shutdown.
 
 ## Create a table
 
-If you already have a schema and migration runner, keep them. For a fresh example database,
-create a migration:
+If you already have a schema and migration runner, keep them. For a fresh example database, create a
+migration:
 
 ```sh
 npx tenon new create_users
@@ -98,8 +99,8 @@ separately from the SQL text, even when the value contains SQL.
 
 The type describes one selected row. `returns: 'oneOrNone'` gives you that row or `undefined`; it
 throws if the query returns more than one row. Use `'one'` when absence should also be an error,
-`'many'` for an array, or omit `returns` for the native result array with `.count` and `.columns`.
-These options do not change your SQL.
+`'many'` for an array, or omit `returns` for the native result object with `.rows`, `.rowCount`, and
+`.fields`. These options do not change your SQL.
 
 Generated table types can help describe projections without repeating every field:
 
@@ -129,16 +130,16 @@ export function userByEmail(client: QueryClient, { email }: { email: string }) {
     returns: 'oneOrNone',
   });
 }
-
-const user = await userByEmail(db, { email: 'reader@example.test' });
 ```
 
-`QueryClient` means the function accepts either your database instance or a transaction client. Keep
-the SQL and execution options together in the function.
+Call `userByEmail(db, { email: 'reader@example.test' })` at the call site, or pass a transaction's
+`tx`. Keep the SQL and execution options together in the function.
 
 ## Change data in a transaction
 
 ```ts
+import { userByEmail } from './queries.js';
+
 await db.transaction(async (tx) => {
   const user = await userByEmail(tx, { email: 'reader@example.test' });
   if (!user) throw new Error('User not found');
@@ -177,20 +178,20 @@ await db.query(sql`UPDATE public.users SET ${sql.assignments(patch, ['active'])}
 ```
 
 Use `Pick` to limit editable fields. Keep expressions, predicates, conflict handling, and
-`RETURNING` in SQL. Selected columns choose fields; they do not validate the complete object.
-See [input types](reference.md#insert-and-update-inputs) for mappings and the
+`RETURNING` in SQL. Selected columns choose fields; they do not validate the complete object. See
+[input types](reference.md#insert-and-update-inputs) for mappings and the
 [mutation cookbook](mutations.md) for defaults, batches, and upserts.
 
 ## Check your SQL and result types
 
 Use `describeQuery({ connection, query })` on completed SQL, or `npx tenon describe query.sql` on a
-file. It reports PostgreSQL metadata and a conservative `rowType` declaration; it does not update
-or verify the application's `sql<Row>` annotation. Inspection uses a separate session, so match
-the runtime role and settings. See [query inspection](query-inspection.md) for a worked test.
+file. It reports PostgreSQL metadata and a conservative `rowType` declaration; it does not update or
+verify the application's `sql<Row>` annotation. Inspection uses a separate session, so match the
+runtime role and settings. See [query inspection](query-inspection.md) for a worked test.
 
 After migrating the development/test database, inspect meaningful query variants, run TypeScript,
-and test actual rows and effects. Keep those checks in CI. Execution assertions cover values,
-nulls, JSON, authorization, and rollback that description alone cannot establish.
+and test actual rows and effects. Keep those checks in CI. Execution assertions cover values, nulls,
+JSON, authorization, and rollback that description alone cannot establish.
 
 ## Reuse or assemble parts of SQL when needed
 
@@ -226,9 +227,9 @@ const query = sql<UserSummary>`SELECT id, email FROM public.users
   WHERE ${sql.join(filters, 'AND')} ORDER BY id`;
 ```
 
-This matches active users whose email contains every term. With no terms, the active condition
-still applies. For an entirely optional set of filters, omit the whole `WHERE` clause when the list
-is empty:
+This matches active users whose email contains every term. With no terms, the active condition still
+applies. For an entirely optional set of filters, omit the whole `WHERE` clause when the list is
+empty:
 
 ```ts
 const optionalFilters = terms.map((term) => sql.fragment`email ILIKE ${'%' + term + '%'}`);

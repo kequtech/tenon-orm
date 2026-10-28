@@ -157,9 +157,9 @@ export function unsafeSql<Row extends object = UnknownRow>(
 ): NoInfer<SqlQuery<Row>> {
   if (typeof text !== 'string' || !text.trim()) throw new Error('SQL must be a nonempty string.');
   if (!Array.isArray(values)) throw new Error('SQL input must be an explicit array.');
-  if (values.length > 65533)
+  if (values.length > 65535)
     throw new Error(
-      `Postgres.js 3.4.9 supports at most 65533 bound parameters; received ${values.length}. Split large batches explicitly.`,
+      `PostgreSQL supports at most 65535 bound parameters; received ${values.length}. Split large batches explicitly.`,
     );
   return Object.freeze({ [queryTag]: true as const, text, values: Object.freeze([...values]) });
 }

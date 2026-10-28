@@ -1,21 +1,23 @@
+import { fixtureTransaction } from './helpers/database.js';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, test } from 'node:test';
-import postgres from 'postgres';
+import { Pool } from 'pg';
 import { adoptBaseline, captureBaseline, migrate } from '../src/index.js';
 import { qualified, quote } from '../src/sql.js';
 import { assertTestDatabase, testConnection } from './helpers/database.js';
 
-const admin = postgres(testConnection, { max: 1 });
+const admin = new Pool({ connectionString: testConnection, max: 1 });
 before(() => assertTestDatabase(admin));
 after(() => admin.end());
 
 async function securityState(namespace: string) {
-  const [state] = await admin.unsafe(
-    `
+  const [state] = (
+    await admin.query(
+      `
     SELECT n.nspowner::regrole::text AS schema_owner, c.relowner::regrole::text AS table_owner,
       p.proowner::regrole::text AS function_owner, p.prosecdef AS definer,
       p.proacl::text AS grants, p.proconfig::text AS settings,
@@ -23,16 +25,17 @@ async function securityState(namespace: string) {
     FROM pg_namespace n JOIN pg_class c ON c.relnamespace = n.oid AND c.relname = 'secret'
       JOIN pg_proc p ON p.pronamespace = n.oid AND p.proname = 'read_secret'
     WHERE n.nspname = $1`,
-    [namespace],
-  );
+      [namespace],
+    )
+  ).rows;
   assert.ok(state);
   return state;
 }
 
 async function asRole(role: string, text: string) {
-  return admin.begin(async (client) => {
-    await client.unsafe(`SET LOCAL ROLE ${quote(role)}`);
-    return client.unsafe(text);
+  return fixtureTransaction(admin, async (client) => {
+    await client.query(`SET LOCAL ROLE ${quote(role)}`);
+    return client.query(text);
   });
 }
 
@@ -52,8 +55,8 @@ test('portable baseline replays without source roles; application SQL and provis
   const query = `SELECT * FROM ${fn}()`;
   try {
     for (const role of [sourceOwner, sourceRuntime])
-      await admin.unsafe(`CREATE ROLE ${quote(role)} NOLOGIN`);
-    await admin.unsafe(`
+      await admin.query(`CREATE ROLE ${quote(role)} NOLOGIN`);
+    await admin.query(`
       CREATE SCHEMA ${quote(namespace)} AUTHORIZATION ${quote(sourceOwner)};
       CREATE TABLE ${table} (value text NOT NULL);
       ALTER TABLE ${table} OWNER TO ${quote(sourceOwner)};
@@ -72,17 +75,17 @@ test('portable baseline replays without source roles; application SQL and provis
     assert.equal(original.function_owner, sourceOwner);
     assert.equal(original.defaults, 1);
     assert.deepEqual(
-      [...(await asRole(sourceRuntime, query))],
+      [...(await asRole(sourceRuntime, query)).rows],
       [{ reader: sourceOwner, value: 'private' }],
     );
     await captureBaseline(options);
     await adoptBaseline(options);
     assert.deepEqual(await securityState(namespace), original);
 
-    await admin.unsafe(`DROP SCHEMA ${quote(namespace)} CASCADE`);
-    for (const role of [sourceRuntime, sourceOwner]) await admin.unsafe(`DROP ROLE ${quote(role)}`);
+    await admin.query(`DROP SCHEMA ${quote(namespace)} CASCADE`);
+    for (const role of [sourceRuntime, sourceOwner]) await admin.query(`DROP ROLE ${quote(role)}`);
     assert.deepEqual(await migrate(options), ['0001']);
-    const [login] = await admin<{ name: string }[]>`SELECT current_user AS name`;
+    const [login] = (await admin.query<{ name: string }>('SELECT current_user AS name')).rows;
     assert.ok(login);
     const migrationRole = login.name;
     const replayed = await securityState(namespace);
@@ -95,15 +98,15 @@ test('portable baseline replays without source roles; application SQL and provis
     assert.equal(replayed.grants, null);
 
     for (const role of [owner, runtime, denied])
-      await admin.unsafe(`CREATE ROLE ${quote(role)} NOLOGIN`);
+      await admin.query(`CREATE ROLE ${quote(role)} NOLOGIN`);
     async function canExecute(role: string) {
       return (
-        await admin.unsafe('SELECT has_function_privilege($1, $2, $3) AS allowed', [
+        await admin.query('SELECT has_function_privilege($1, $2, $3) AS allowed', [
           role,
           `${fn}()`,
           'EXECUTE',
         ])
-      )[0]!.allowed;
+      ).rows[0]!.allowed;
     }
     assert.equal(
       await canExecute(denied),
@@ -121,8 +124,8 @@ test('portable baseline replays without source roles; application SQL and provis
 
     // Deployment provisioning chooses different owners and runtime roles from the source.
     async function provision() {
-      await admin.begin(async (client) => {
-        await client.unsafe(`
+      await fixtureTransaction(admin, async (client) => {
+        await client.query(`
         ALTER SCHEMA ${quote(namespace)} OWNER TO ${quote(owner)};
         ALTER TABLE ${table} OWNER TO ${quote(owner)};
         ALTER FUNCTION ${fn}() OWNER TO ${quote(owner)};
@@ -137,8 +140,11 @@ test('portable baseline replays without source roles; application SQL and provis
     const provisioned = await securityState(namespace);
     await provision();
     assert.deepEqual(await securityState(namespace), provisioned);
-    await admin.unsafe(`INSERT INTO ${table} VALUES ('replayed')`);
-    assert.deepEqual([...(await asRole(runtime, query))], [{ reader: owner, value: 'replayed' }]);
+    await admin.query(`INSERT INTO ${table} VALUES ('replayed')`);
+    assert.deepEqual(
+      [...(await asRole(runtime, query)).rows],
+      [{ reader: owner, value: 'replayed' }],
+    );
     await assert.rejects(asRole(denied, query), { code: '42501' });
     await assert.rejects(asRole(runtime, `SELECT * FROM ${table}`), { code: '42501' });
     const deployed = await securityState(namespace);
@@ -153,14 +159,14 @@ test('portable baseline replays without source roles; application SQL and provis
       `CREATE TABLE ${future} (value text); INSERT INTO ${future} VALUES ('new table')`,
     );
     assert.deepEqual(
-      [...(await asRole(runtime, `SELECT * FROM ${future}`))],
+      [...(await asRole(runtime, `SELECT * FROM ${future}`)).rows],
       [{ value: 'new table' }],
     );
     await assert.rejects(asRole(denied, `SELECT * FROM ${future}`), { code: '42501' });
   } finally {
     try {
-      await admin.unsafe(`DROP SCHEMA IF EXISTS ${quote(namespace)} CASCADE`);
-      for (const role of roles.reverse()) await admin.unsafe(`DROP ROLE IF EXISTS ${quote(role)}`);
+      await admin.query(`DROP SCHEMA IF EXISTS ${quote(namespace)} CASCADE`);
+      for (const role of roles.reverse()) await admin.query(`DROP ROLE IF EXISTS ${quote(role)}`);
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

@@ -23,7 +23,7 @@ export interface InspectionContext {
   readonly timeZone: string;
   readonly statementTimeoutMs: number;
   readonly lockTimeoutMs: number;
-  readonly readMappings: 'postgres';
+  readonly readMappings: 'pg';
 }
 
 export interface DescribeOptions {
@@ -53,7 +53,7 @@ export type DescriptionIssue =
 export interface DescribedType {
   readonly oid: number;
   readonly postgres: string;
-  /** Postgres.js read representation, before considering result nullability. */
+  /** pg read representation, before considering result nullability. */
   readonly readType: string;
 }
 

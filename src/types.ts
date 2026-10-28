@@ -1,4 +1,4 @@
-import type postgres from 'postgres';
+import type { Pool } from 'pg';
 import type { QueryResult } from './connection.js';
 import type { QueryOptions, QueryOutput, QueryReturnMode } from './query-options.js';
 import type { SqlQuery } from './query.js';
@@ -24,7 +24,7 @@ export interface CloseOptions {
 }
 export type Database = Transaction & {
   /** The underlying pool-level driver client; native calls bypass Tenon's query and transaction guards. */
-  readonly native: postgres.Sql;
+  readonly native: Pool;
   /** Await all work inside the callback. Commit on success; rollback on an escaping error. */
   transaction<T>(callback: (tx: Transaction) => Promise<T>): Promise<T>;
   close(options?: CloseOptions): Promise<void>;

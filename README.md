@@ -57,7 +57,6 @@ Existing migration runners can be retained; Tenon's migrations and type generati
 - **[Mutation cookbook](docs/mutations.md)** — defaults, patches, upserts, arrays, and batching.
 - **[Query inspection](docs/query-inspection.md)** — Describe reports and database tests.
 - **[Changelog](CHANGELOG.md)** — versioned changes and upgrade instructions.
-- **[0.3 upgrade guide](docs/upgrading-to-0.3.md)** — migrate from 0.2.x to pg representations.
 
 These documents all ship with the npm package, including the changelog so an agent upgrading a
 project can read the relevant release entries locally. Repository maintenance instructions are in

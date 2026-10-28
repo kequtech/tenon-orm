@@ -103,7 +103,9 @@ Use `JSON.stringify(value)` for JSON write inputs; arrays otherwise bind as Post
 Bigint and numeric scalars read as strings, while numeric arrays read as numbers and can lose
 precision. Temporal reads use `Date | number` for finite dates and infinities. SQL NULL array
 elements remain JavaScript null. Keep domain validation at the persistence boundary. See
-[value mappings](reference.md#generated-types-and-checking).
+[value mappings](reference.md#generated-types-and-checking) and the
+[JSON/finite-date projection](reference.md#persistence-and-domain-values). For authentication policy
+requiring finite expiry, include `isfinite(expires_at)` alongside the SQL expiry comparison.
 
 ## Transactions and native access
 

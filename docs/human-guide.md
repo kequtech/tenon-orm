@@ -114,6 +114,10 @@ needs a type for what that particular query selects. An annotation is a declarat
 the SQL matches. Without one, result fields are `unknown`. Use the inspection and database-test
 workflow below to check the declared contract against the query's behavior.
 
+Keep storage types conservative and validate them when projecting domain values. The
+[persistence-to-domain example](reference.md#persistence-and-domain-values) shows validated JSON
+writes and reads, finite dates, and an SQL predicate that rejects infinite session expiry.
+
 ## Reuse a query with a function
 
 Use an ordinary function when several callers need the same query. An object input makes the

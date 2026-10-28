@@ -25,7 +25,9 @@ and `close`. The required `connection` accepts:
 const db = createTenon({
   connection: {
     connectionString: connection,
-    connectionTimeoutMillis: 5000,
+    max: 10,
+    idleTimeoutMillis: 30_000,
+    connectionTimeoutMillis: 30_000,
     options: '-c search_path=app,public',
   },
 });
@@ -36,6 +38,9 @@ Strings become pg's `connectionString`; configuration objects pass to `new Pool(
 including no acquisition timeout unless `connectionTimeoutMillis` is configured. Pool timeouts use
 milliseconds. pg parses the URI for connection fields; matching URI values override client
 configuration, including an `options` URI parameter overriding the configuration's `options` string.
+The pool sizes and timeouts above are application choices. Configure pool policy in `PoolConfig`;
+old driver-specific URI settings such as `idle_timeout` do not configure pg's idle timeout. Preserve
+existing URI startup options when appending settings such as UTC and `search_path`.
 Preserve deployment credentials and TLS requirements; see
 [pg connection configuration](https://node-postgres.com/features/connecting).
 
@@ -65,9 +70,9 @@ not join a Tenon transaction; callback clients expose only `tx.query`.
 
 Use pg's [native APIs](https://node-postgres.com/apis/pool) and compatible cursor/COPY packages when
 needed. For LISTEN, check out a client with `await db.native.connect()`, attach `notification`,
-`error`, and `end` listeners, and issue `LISTEN` on that client. Keep it checked out while listening; release
-it after `UNLISTEN`. Native queued acquisitions follow pg's shutdown behavior and must be settled by
-their caller before closing. A disconnected client does not reconnect. The application owns
+`error`, and `end` listeners, and issue `LISTEN` on that client. Keep it checked out while listening;
+release it after `UNLISTEN`. Native queued acquisitions follow pg's shutdown behavior and must be
+settled by their caller before closing. A disconnected client does not reconnect. The application owns
 resubscription and catch-up; notifications are not replayed.
 
 Close owned pools through `db.close()` for bounded shutdown, including checked-out native clients.
@@ -77,7 +82,8 @@ Borrowed pools and their listeners remain usable after wrapper close until their
 
 This helper owns a dedicated single-client pool. It returns an intentional-close function only
 after LISTEN is ready. Callbacks are synchronous; notification exceptions are isolated, and an
-unexpected disconnect invalidates this generation once before notifying its consumer.
+unexpected disconnect invalidates this generation once before notifying its consumer. Failed
+connection acquisition or LISTEN setup closes the owned resources and rejects the setup promise.
 
 ```ts
 import { createTenon } from '@kequtech/tenon-orm';
@@ -139,9 +145,14 @@ Both failure and intentional close discard the dedicated checkout with `release(
 closing its pool, so no UNLISTEN is needed and normal shutdown does not wait for Tenon's deadline.
 The active flag suppresses duplicate error/end callbacks and intentional-close notifications.
 Create a new helper instance to recover, and reconcile missed events through persistent data.
-Applications sharing subscriptions must also preserve readiness promises and generation identity
-guards so an old disconnect cannot invalidate a replacement. The fixed channel above is trusted;
-validate and quote application-selected channel names before placing them in native SQL.
+
+This helper's close function is available after readiness. A manager that also supports replacement
+or shutdown while setup is pending must assign a generation token before awaiting setup. Only the
+current generation may change shared readiness/subscription state or notify its consumers. If stale
+setup later succeeds, close that setup's own listener; if it fails or finishes cleanup, leave the
+replacement alone. Invalidate the current token before intentional shutdown. Keep those guards in
+the application's subscription manager. The fixed channel above is trusted; validate and quote
+application-selected channel names before placing them in native SQL.
 
 ## Queries and result modes
 
@@ -173,6 +184,25 @@ alone does not undo an autocommitted write; use `affectedRows` for write bounds 
 
 Functions accepting `QueryClient` can use either `Database` or `Transaction`. Public types also
 include `QueryOptions`, `QueryReturnMode`, and `QueryOutput<Row, Mode>`.
+
+### Adapting transactional results
+
+For a job library or other adapter expecting `{ rows }`, extract the native result's row array:
+
+```ts
+import { unsafeSql, type QueryClient } from '@kequtech/tenon-orm';
+
+async function queryRows(tx: QueryClient, text: string, values: readonly unknown[]) {
+  const result = await tx.query(unsafeSql(text, values));
+  return { rows: result.rows };
+}
+```
+
+Alternatively, request `{ returns: 'many' }` and wrap the returned array in `{ rows }`. Supply the
+callback's `tx` when the adapter's work must commit with application writes. A native pool query
+uses a separate checkout and does not join that transaction. Await adapter calls before returning
+from the callback, retain commit/rollback tests, and make recording helpers return pg-shaped native
+results. The adapter's SQL text must be trusted and values must remain separately bound.
 
 ## SQL parameters and identifiers
 
@@ -320,8 +350,12 @@ changes. It compares the generated representation, not pending migrations or eve
 Output includes relation/constraint/index summaries and referenced domains, not function bodies,
 grants, or a complete schema fingerprint.
 
-Generated text is not stable across driver/generator versions, even for unchanged schemas. Do not
-use it as an unversioned adoption fingerprint; see [legacy baseline guards](upgrading-to-0.3.md#legacy-baseline-guards).
+**Generated declarations are not a version-stable schema fingerprint.** TypeScript mappings can
+change without schema drift. The schema-summary comments describe SQL column types, defaults,
+constraints, indexes, and referenced domains independently of those mappings, but their formatting
+and PostgreSQL's rendering of definitions are not a versioned comparison contract either. Preserve
+reviewed generator-specific references if an existing guard hashes this output; see
+[baseline verification](adoption-guide.md#check-and-adopt-an-existing-database).
 
 Generation covers ordinary tables and partitioned roots. Views, foreign tables, and attached
 partitions need query-specific types. A missing namespace fails; an existing empty schema is valid.
@@ -356,6 +390,74 @@ needed.
 
 Generated types describe storage representations. Text `CHECK` constraints do not become unions, and
 JSON reads remain unknown. Validate values before narrowing to application domain types.
+
+For example, assume this additional table and regenerate `Rows` from the resulting schema:
+
+```sql
+CREATE TABLE public.sessions (
+  id text PRIMARY KEY,
+  data jsonb NOT NULL,
+  expires_at timestamptz NOT NULL
+);
+```
+
+Use the same application validator before encoding a write and when restoring a domain value:
+
+```ts
+import { sql } from '@kequtech/tenon-orm';
+import type { Rows } from './generated-schema.js';
+
+function sessionData(value: unknown): { userId: string } {
+  if (
+    typeof value !== 'object' ||
+    value === null ||
+    Array.isArray(value) ||
+    !('userId' in value) ||
+    typeof value.userId !== 'string' ||
+    value.userId.length === 0
+  ) {
+    throw new Error('Expected session data with a nonempty userId');
+  }
+  return { userId: value.userId };
+}
+
+function finiteDate(value: Date | number): Date {
+  if (!(value instanceof Date) || !Number.isFinite(value.getTime())) {
+    throw new Error('Expected a finite database timestamp');
+  }
+  return value;
+}
+
+const input = {
+  id: 'example-session',
+  data: JSON.stringify(sessionData({ userId: 'user-42' })),
+  expires_at: new Date(Date.now() + 60_000),
+} satisfies Rows.Insert['sessions'];
+await db.query(sql`INSERT INTO public.sessions ${sql.insertValues(input)}`);
+
+const row = await db.query(
+  sql<Rows['sessions']>`SELECT id, data, expires_at FROM public.sessions
+    WHERE id = ${input.id} AND isfinite(expires_at) AND expires_at > now()`,
+  { returns: 'oneOrNone' },
+);
+const session =
+  row === undefined
+    ? undefined
+    : {
+        id: row.id,
+        data: sessionData(row.data),
+        expiresAt: finiteDate(row.expires_at),
+      };
+```
+
+The generated JSON read remains `unknown` and the timestamp remains `Date | number`. The projection
+validates both without assertions or edits to generated types. Preserve null separately for nullable
+columns. For an authentication policy requiring finite expiry, `isfinite(expires_at)` excludes both
+infinities before the expiry comparison; `expires_at > now()` alone would accept positive infinity.
+Include such predicates in expiry-sensitive updates/deletes too, and test infinite and expired
+values. This example illustrates representation validation; applications must also retain their
+token verification, revocation, and authorization checks. See
+[JSON and PostgreSQL arrays](mutations.md#json-and-postgresql-arrays) for array write boundaries.
 
 Bigint and `count(*)` reads are decimal strings. Use SQL or BigInt for exact arithmetic and decimal
 strings at JSON boundaries; convert to number only when bounded or approximate values are intended.

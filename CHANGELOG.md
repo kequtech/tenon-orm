@@ -10,6 +10,10 @@
   `onnotify` callback. Internally created clients remain Tenon-owned.
 - Inspection accepts explicit `undefined` for optional session and timeout settings, including in
   strict TypeScript configurations; unknown keys and invalid defined values still fail.
+- `db.close({ timeoutMs? })` now shares one shutdown outcome across concurrent/later callers and
+  defaults to a 5,000 ms grace period before requesting owned driver termination; `0` skips the wait.
+- Added `CardinalityError` for `one`/`oneOrNone` mismatches, with code
+  `TENON_CARDINALITY_MISMATCH`, expected mode, actual count, and optional label.
 
 ## 0.2.1
 

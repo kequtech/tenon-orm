@@ -18,12 +18,16 @@ export interface QueryClient {
   ): NoInfer<Promise<QueryOutput<Row, QueryReturnMode>>>;
 }
 export type Transaction = QueryClient;
+export interface CloseOptions {
+  /** Grace period before requesting owned driver termination; milliseconds, default 5000. */
+  readonly timeoutMs?: number | undefined;
+}
 export type Database = Transaction & {
   /** The underlying pool-level driver client; native calls bypass Tenon's query and transaction guards. */
   readonly native: postgres.Sql;
   /** Await all work inside the callback. Commit on success; rollback on an escaping error. */
   transaction<T>(callback: (tx: Transaction) => Promise<T>): Promise<T>;
-  close(): Promise<void>;
+  close(options?: CloseOptions): Promise<void>;
 };
 
 /** One completed public query call, including rollback/commit time for guarded calls. */

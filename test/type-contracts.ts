@@ -1,6 +1,7 @@
 import type {
   ConnectionUri,
   ConnectionOptions,
+  CloseOptions,
   Database,
   DescribeOptions,
   QueryDescription,
@@ -10,7 +11,14 @@ import type {
   SqlQuery,
   UnknownRow,
 } from '../src/index.js';
-import { createTenon, describeQuery, identifier, sql, unsafeSql } from '../src/index.js';
+import {
+  CardinalityError,
+  createTenon,
+  describeQuery,
+  identifier,
+  sql,
+  unsafeSql,
+} from '../src/index.js';
 import type { User } from './fixtures/generated-schema.js';
 import { echoValues } from './fixtures/queries.js';
 
@@ -225,4 +233,20 @@ function connectionContracts() {
     timeouts: undefined,
   };
   void [db, options, connection, invalid, inspection, omitted];
+}
+
+async function shutdownContracts(db: Database) {
+  const options: CloseOptions = { timeoutMs: 5000 };
+  const closed: Promise<void> = db.close(options);
+  await db.close({ timeoutMs: undefined });
+  // @ts-expect-error close uses milliseconds as a number
+  await db.close({ timeoutMs: '5s' });
+  // @ts-expect-error driver seconds are not a Tenon close option
+  await db.close({ timeout: 5 });
+  const error = new CardinalityError('one', 0, 'required-user');
+  const code: 'TENON_CARDINALITY_MISMATCH' = error.code;
+  const expected: 'one' | 'oneOrNone' = error.expected;
+  const actual: number = error.actual;
+  const label: string | undefined = error.label;
+  void [closed, code, expected, actual, label];
 }

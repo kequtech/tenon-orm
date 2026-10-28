@@ -1,5 +1,21 @@
 import type { AffectedRowsConstraint } from './affected-rows.js';
 
+export class CardinalityError extends Error {
+  override name = 'CardinalityError';
+  readonly code = 'TENON_CARDINALITY_MISMATCH';
+  readonly expected: 'one' | 'oneOrNone';
+  readonly actual: number;
+  readonly label?: string;
+
+  constructor(expected: 'one' | 'oneOrNone', actual: number, label?: string) {
+    const count = expected === 'one' ? 'exactly one row' : 'at most one row';
+    super(`${label ?? 'Query'} expected ${count}, but returned ${actual} rows.`);
+    this.expected = expected;
+    this.actual = actual;
+    if (label !== undefined) this.label = label;
+  }
+}
+
 export class AffectedRowsError extends Error {
   override name = 'AffectedRowsError';
   readonly code: 'TENON_AFFECTED_ROWS_MISMATCH' | 'TENON_AFFECTED_ROWS_UNSUPPORTED';

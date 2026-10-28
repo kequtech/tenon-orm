@@ -312,7 +312,7 @@ ${result.stderr ?? ''}`);
         `
       import assert from 'node:assert/strict';
       import postgres from 'postgres';
-      const { createTenon, describeQuery, sql } = await import('@kequtech/tenon-orm');
+      const { CardinalityError, createTenon, describeQuery, sql } = await import('@kequtech/tenon-orm');
       const second = await import('./second-tenon/index.js');
       const composed = sql\`SELECT \${second.sql.fragment\`\${7}::int\`} AS id\`;
       assert.equal(composed.text, 'SELECT $1::int AS id');
@@ -321,7 +321,16 @@ ${result.stderr ?? ''}`);
       await db.close();
       const owned = createTenon({ connection: { url: process.env.TENON_TEST_DATABASE_URL, options: { max: 1 } } });
       assert.equal((await owned.native.unsafe('SELECT 42 AS value'))[0].value, 42);
-      await owned.close();
+      await assert.rejects(owned.query(sql\`SELECT 1 WHERE false\`, { returns: 'one' }), error => {
+        assert.ok(error instanceof CardinalityError);
+        assert.equal(error.code, 'TENON_CARDINALITY_MISMATCH');
+        assert.equal(error.expected, 'one');
+        assert.equal(error.actual, 0);
+        return true;
+      });
+      const closing = owned.close({ timeoutMs: 100 });
+      assert.equal(owned.close(), closing);
+      await closing;
       await assert.rejects(owned.native.unsafe('SELECT 1'), {code: 'CONNECTION_ENDED'});
       const pool = postgres(process.env.TENON_TEST_DATABASE_URL);
       const shared = createTenon({ connection: pool });

@@ -134,8 +134,16 @@ connection timeouts, payloads, and reconnect scheduling. TCP host rotation and T
 are preserved. The socket factory is also absent from published types; its local type extension
 is confined to this guard.
 
-The guard applies through `db.close()` to Tenon-owned clients. Direct native `end()` and borrowed
-client shutdown remain caller-owned. Before removing it, pass
+The guard applies through `db.close()` to Tenon-owned clients. Close caches one shutdown promise
+and forwards its validated `timeoutMs` as seconds to native `end({ timeout })` (default 5 seconds),
+so the driver rejects pending client queries at the deadline. In 3.4.9, native connection
+termination sends Terminate and ends the socket's writable side. A backend running a statement
+can remain until that statement finishes and the server processes shutdown; native `end` is not
+a CancelRequest, and transport teardown can outlast the returned shutdown promise. Keep the
+active-query deadline test in [test/native.test.ts](test/native.test.ts). It cancels its own sleeper
+through an independent test connection for cleanup, not through Tenon's runtime. The listener
+guard runs before native shutdown; no additional transport workaround is introduced.
+Direct native `end()` and borrowed client shutdown remain caller-owned. Before removing it, pass
 [listener shutdown tests](test/listener-shutdown.test.ts) without it: interrupted reconnect, pending
 setup, ordinary delivery/reconnect, and late custom socket creation. Also verify TLS and multi-host
 behavior for the candidate; the normal CI matrix does not establish those configurations.

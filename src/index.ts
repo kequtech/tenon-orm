@@ -3,11 +3,11 @@ export type { Connection, ConnectionOptions, ConnectionUri, QueryResult } from '
 export type { AffectedRowsConstraint } from './affected-rows.js';
 export { createTenon } from './database.js';
 export type { TenonOptions } from './database.js';
-export { AffectedRowsError } from './errors.js';
+export { AffectedRowsError, CardinalityError } from './errors.js';
 export type { QueryOptions, QueryOutput, QueryReturnMode } from './query-options.js';
 export { identifier, sql, unsafeSql } from './query.js';
 export type { SqlFragment, SqlQuery, UnknownRow } from './query.js';
-export type { Database, QueryClient, QueryEvent, Transaction } from './types.js';
+export type { CloseOptions, Database, QueryClient, QueryEvent, Transaction } from './types.js';
 
 export { describeQuery } from './describe.js';
 export type {

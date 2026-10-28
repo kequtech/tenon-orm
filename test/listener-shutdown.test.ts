@@ -126,8 +126,7 @@ for (const pendingSetup of [false, true]) {
         proxy.setAvailable(false);
         await eventually(() => proxy.attempts > attempts);
       }
-      await db.close();
-      await db.close();
+      await Promise.all([db.close({ timeoutMs: 0 }), db.close()]);
       if (subscription) assert.ok((await subscription) instanceof Error);
       const attemptsAtClose = proxy.attempts;
       const readyAtClose = ready;

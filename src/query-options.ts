@@ -3,6 +3,7 @@ import type { AffectedRowsConstraint } from './affected-rows.js';
 import { validateAffectedRows } from './affected-rows.js';
 import type { UnknownRow } from './query.js';
 import { plainObject } from './validation.js';
+import { CardinalityError } from './errors.js';
 
 export type QueryReturnMode = 'native' | 'many' | 'oneOrNone' | 'one';
 export interface QueryOptions {
@@ -52,10 +53,11 @@ export function queryOutput(
 ): object | undefined {
   if (options.returns === 'native') return result;
   if (options.returns === 'many') return [...result];
-  const expected = options.returns === 'oneOrNone' ? 'at most one row' : 'exactly one row';
   if (result.length > 1 || (options.returns === 'one' && result.length === 0)) {
-    throw new Error(
-      `${options.label ?? 'Query'} expected ${expected}, but returned ${result.length} rows.`,
+    throw new CardinalityError(
+      options.returns === 'oneOrNone' ? 'oneOrNone' : 'one',
+      result.length,
+      options.label,
     );
   }
   return result[0];

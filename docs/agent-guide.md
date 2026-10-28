@@ -32,7 +32,9 @@ export const db = createTenon({ connection });
 
 `connection` accepts a URI string, `{ url, options? }`, Postgres.js options, or an existing driver
 client. Reuse an instance for each database configuration. `db.close()` ends internally created
-pools; supplied clients remain application-owned. Finish outstanding work before closing. Tenon
+pools with a default 5,000 ms grace period; supplied clients remain application-owned. Configure
+shutdown with `db.close({ timeoutMs })`; concurrent callers share its outcome. Finish outstanding
+work before closing. Tenon
 loads no environment files. Qualify table names or set runtime `search_path`; CLI `--namespace`
 selects tooling scope, not runtime query names. See [connection options](reference.md#installation-and-connection).
 
@@ -64,7 +66,8 @@ aggregates need types for their actual output.
 | `one`              | `Row`                                              | Exactly one            |
 
 Options are `{ returns?, affectedRows?, label? }`; unknown keys fail. Modes do not add SQL limits
-or `RETURNING`. A returned-row mismatch alone does not undo an autocommitted write.
+or `RETURNING`. A returned-row mismatch throws `CardinalityError` with code `TENON_CARDINALITY_MISMATCH`;
+it alone does not undo an autocommitted write.
 
 ## Parameters and composition
 

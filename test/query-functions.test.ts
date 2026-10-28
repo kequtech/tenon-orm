@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { after, before, beforeEach, test } from 'node:test';
 import postgres from 'postgres';
 import type { QueryResult, Transaction } from '../src/index.js';
-import { createTenon, identifier, migrate, sql } from '../src/index.js';
+import { CardinalityError, createTenon, identifier, migrate, sql } from '../src/index.js';
 import { qualified, quote } from '../src/sql.js';
 import type { Post, Tag, User } from './fixtures/generated-schema.js';
 import { echoValues } from './fixtures/queries.js';
@@ -251,13 +251,13 @@ test('transaction clients retain single-row behavior and roll back writes when a
       await queries.create_required_user(tx, { email: 'rollback' });
       await queries.required_user_by_email(tx, { email: 'missing' });
     }),
-    /returned 0 rows/,
+    CardinalityError,
   );
   assert.equal(await queries.user_by_email(db, { email: 'rollback' }), undefined);
 
   await assert.rejects(
     db.transaction((tx) => queries.create_two(tx)),
-    /returned 2 rows/,
+    CardinalityError,
   );
   assert.equal(await queries.user_by_email(db, { email: 'first' }), undefined);
   assert.equal(await queries.user_by_email(db, { email: 'second' }), undefined);

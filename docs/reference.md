@@ -38,9 +38,18 @@ deployment's credentials and TLS requirements. `ConnectionUri` and `ConnectionOp
 exported. The latter includes `onnotify(channel, payload)` for native notification handling;
 configure callbacks at construction.
 
-Reuse an instance for each database configuration and await outstanding work before closing.
-`db.close()` closes internally created clients. For a borrowed client it closes only the Tenon
-wrapper; the caller still owns the driver pool. Tenon does not load environment files.
+Reuse an instance for each database configuration. `db.close({ timeoutMs? })` rejects new Tenon
+work immediately and gives owned connections a 5,000 ms grace period by default before requesting
+driver termination. Use `0` for immediate termination. The timeout must be an integer from 0 to
+2,147,483,647 milliseconds; `CloseOptions` is exported. Finish outstanding work before closing
+when possible. The timeout bounds the shutdown wait and rejects pending client queries; it is not
+a PostgreSQL cancellation request. Server work can complete afterward, including an autocommitted
+write, and JavaScript inside a transaction callback is not canceled.
+
+The first valid close call chooses the timeout. Concurrent and later calls return the same promise,
+including the same shutdown failure; later options do not change it. Invalid initial options reject
+without closing the instance. For a borrowed client, close only disables the Tenon wrapper and
+leaves the driver pool and its work to the caller. Tenon does not load environment files.
 
 Qualify SQL names or configure runtime `search_path`. CLI `--namespace` selects tooling scope;
 it does not configure application queries. Baseline capture and Describe accept connection
@@ -215,8 +224,10 @@ Set isolation before data queries with `SET TRANSACTION ISOLATION LEVEL SERIALIZ
 `SET LOCAL statement_timeout = '5s'` to bound statements in that transaction. Manual savepoints are supported;
 reserve names beginning with `tenon_affected_rows_` for Tenon.
 
-SQL errors retain native driver details. Invalid inputs and cardinality mismatches throw ordinary
-`Error` objects. `AffectedRowsError` carries `expected`, `actual`, `command`, and code
+SQL errors retain native driver details. Invalid inputs throw ordinary `Error` objects.
+`CardinalityError` has code `TENON_CARDINALITY_MISMATCH`, `expected` (`one` or `oneOrNone`),
+`actual` (returned row count), and optional `label`. It does not change transaction or autocommit
+behavior. `AffectedRowsError` carries `expected`, `actual`, `command`, and code
 `TENON_AFFECTED_ROWS_MISMATCH` or `TENON_AFFECTED_ROWS_UNSUPPORTED`. Work/cleanup failures can
 produce `AggregateError`.
 

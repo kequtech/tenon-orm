@@ -4,7 +4,14 @@ import { randomUUID } from 'node:crypto';
 import { after, before, beforeEach, test } from 'node:test';
 import postgres from 'postgres';
 import type { Transaction, SqlQuery, QueryReturnMode } from '../src/index.js';
-import { createTenon, identifier, migrate, sql, unsafeSql } from '../src/index.js';
+import {
+  CardinalityError,
+  createTenon,
+  identifier,
+  migrate,
+  sql,
+  unsafeSql,
+} from '../src/index.js';
 import { qualified, quote } from '../src/sql.js';
 import type { User } from './fixtures/generated-schema.js';
 
@@ -593,4 +600,60 @@ test('close respects pool ownership and rejects subsequent SQL and transactions'
   );
   await owned.close();
   await assert.rejects(owned.query(sql`SELECT 1`, { returns: 'many' }), /closed/);
+});
+
+test('CardinalityError exposes the return contract and observed count without changing query behavior', async () => {
+  const events: import('../src/index.js').QueryEvent[] = [];
+  const observed = createTenon({
+    connection: pool,
+    onQuery: (event) => {
+      events.push(event);
+    },
+  });
+  try {
+    for (const [returns, count] of [
+      ['one', 0],
+      ['one', 2],
+      ['oneOrNone', 2],
+    ] as const) {
+      await assert.rejects(
+        observed.query(sql`SELECT id FROM generate_series(1, ${count}) AS id`, {
+          returns,
+          label: 'cardinality-probe',
+        }),
+        (error: unknown) => {
+          assert.ok(error instanceof CardinalityError);
+          assert.equal(error.name, 'CardinalityError');
+          assert.equal(error.code, 'TENON_CARDINALITY_MISMATCH');
+          assert.equal(error.expected, returns);
+          assert.equal(error.actual, count);
+          assert.equal(error.label, 'cardinality-probe');
+          return true;
+        },
+      );
+    }
+    assert.ok(
+      events.every(
+        (event) => event.outcome === 'error' && event.errorCode === 'TENON_CARDINALITY_MISMATCH',
+      ),
+    );
+    await assert.rejects(
+      observed.query(sql`SELECT 1 WHERE false`, { returns: 'one' }),
+      (error: unknown) => {
+        assert.ok(error instanceof CardinalityError);
+        assert.equal(error.label, undefined);
+        return true;
+      },
+    );
+    assert.equal(
+      await observed.query(sql`SELECT 1 WHERE false`, { returns: 'oneOrNone' }),
+      undefined,
+    );
+    assert.deepEqual(await observed.query(sql`SELECT 1 AS value`, { returns: 'one' }), {
+      value: 1,
+    });
+    await assert.rejects(observed.query(sql`SELECT missing_column`), { code: '42703' });
+  } finally {
+    await observed.close();
+  }
 });

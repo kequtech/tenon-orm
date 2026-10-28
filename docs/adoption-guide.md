@@ -2,7 +2,7 @@
 
 Replace application queries independently of migration ownership. Tenon can query an existing schema
 and generate types while the current migration runner stays in place. For a Tenon version upgrade,
-read the [Changelog](../CHANGELOG.md).
+read the [Changelog](../CHANGELOG.md) and [0.2.x-to-0.3.0 guide](upgrading-to-0.3.md).
 
 ## Preserve connections and behavior
 
@@ -102,6 +102,11 @@ Verify the final legacy checkpoint before adoption. If using schema comparisons,
 reference definitions rather than comparing against types regenerated after later migrations.
 `generateDefinitions` covers relation metadata, not functions or privileges; include reviewed
 catalog checks for other objects the application needs. Tenon does not perform these comparisons.
+
+Generated declaration text is not a version-stable schema fingerprint: driver mappings and generator
+changes can alter it without schema drift. If an existing adoption guard hashes this text, retain
+reviewed references for each supported generator version, derived from disposable replays of the
+immutable checkpoint. See [legacy baseline guards](upgrading-to-0.3.md#legacy-baseline-guards).
 
 ```sh
 npx tenon baseline adopt --directory migrations --namespace app

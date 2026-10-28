@@ -2,6 +2,8 @@
 
 ## 0.3.0
 
+See the [0.2.x upgrade guide](docs/upgrading-to-0.3.md) for a migration table and application checks.
+
 - **Breaking:** `pg@8.23.1` replaces Postgres.js. Use pg `PoolConfig` (`connectionString` for a URI)
   or `pg.Pool`; removed `{ url, options }` and `ConnectionUri`. `db.native` is the actual pool;
   results use `rows`, `rowCount`, and `fields`, and error fields use pg names (`table`,

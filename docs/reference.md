@@ -64,14 +64,84 @@ modes, affected-row guards, SQL checks, and `onQuery`. They follow pg's query co
 not join a Tenon transaction; callback clients expose only `tx.query`.
 
 Use pg's [native APIs](https://node-postgres.com/apis/pool) and compatible cursor/COPY packages when
-needed. For LISTEN, check out a client with `await db.native.connect()`, attach `notification` and
-`error` listeners, and issue `LISTEN` on that client. Keep it checked out while listening; release
+needed. For LISTEN, check out a client with `await db.native.connect()`, attach `notification`,
+`error`, and `end` listeners, and issue `LISTEN` on that client. Keep it checked out while listening; release
 it after `UNLISTEN`. Native queued acquisitions follow pg's shutdown behavior and must be settled by
 their caller before closing. A disconnected client does not reconnect. The application owns
 resubscription and catch-up; notifications are not replayed.
 
 Close owned pools through `db.close()` for bounded shutdown, including checked-out native clients.
 Borrowed pools and their listeners remain usable after wrapper close until their owner ends them.
+
+### LISTEN lifecycle example
+
+This helper owns a dedicated single-client pool. It returns an intentional-close function only
+after LISTEN is ready. Callbacks are synchronous; notification exceptions are isolated, and an
+unexpected disconnect invalidates this generation once before notifying its consumer.
+
+```ts
+import { createTenon } from '@kequtech/tenon-orm';
+
+async function listenForChanges(
+  connectionString: string,
+  onChange: (payload: string | undefined) => void,
+  onDisconnect: (error: Error) => void,
+) {
+  const db = createTenon({
+    connection: { connectionString, max: 1, idleTimeoutMillis: 0, connectionTimeoutMillis: 30_000 },
+  });
+  const client = await db.native.connect().catch(async (error: unknown) => {
+    await db.close();
+    throw error;
+  });
+  let active = true;
+  let closing: Promise<void> | undefined;
+
+  function stop(error?: Error): Promise<void> {
+    if (closing) return closing;
+    active = false;
+    closing = Promise.resolve().then(async () => {
+      try {
+        if (error) onDisconnect(error);
+      } finally {
+        client.release(true);
+        await db.close();
+      }
+    });
+    return closing;
+  }
+
+  const failed = (error: Error) => {
+    if (active) void stop(error).catch(console.error);
+  };
+  client.on('error', failed);
+  client.on('end', () => failed(new Error('The notification connection ended.')));
+  client.on('notification', (event) => {
+    if (!active || event.channel !== 'app_changes') return;
+    try {
+      onChange(event.payload);
+    } catch (error) {
+      console.error(error);
+    }
+  });
+  try {
+    await client.query('LISTEN "app_changes"');
+    if (!active) throw new Error('The notification connection closed during setup.');
+  } catch (error) {
+    await stop();
+    throw error;
+  }
+  return () => stop();
+}
+```
+
+Both failure and intentional close discard the dedicated checkout with `release(true)` before
+closing its pool, so no UNLISTEN is needed and normal shutdown does not wait for Tenon's deadline.
+The active flag suppresses duplicate error/end callbacks and intentional-close notifications.
+Create a new helper instance to recover, and reconcile missed events through persistent data.
+Applications sharing subscriptions must also preserve readiness promises and generation identity
+guards so an old disconnect cannot invalidate a replacement. The fixed channel above is trusted;
+validate and quote application-selected channel names before placing them in native SQL.
 
 ## Queries and result modes
 
@@ -249,6 +319,9 @@ npx tenon generate --out src/generated-schema.d.ts --check
 changes. It compares the generated representation, not pending migrations or every database object.
 Output includes relation/constraint/index summaries and referenced domains, not function bodies,
 grants, or a complete schema fingerprint.
+
+Generated text is not stable across driver/generator versions, even for unchanged schemas. Do not
+use it as an unversioned adoption fingerprint; see [legacy baseline guards](upgrading-to-0.3.md#legacy-baseline-guards).
 
 Generation covers ordinary tables and partitioned roots. Views, foreign tables, and attached
 partitions need query-specific types. A missing namespace fails; an existing empty schema is valid.

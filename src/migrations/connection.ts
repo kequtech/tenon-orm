@@ -1,4 +1,4 @@
-import type { Lease, Session } from '@kequtech/pgclear';
+import { defaultCodecs, type Lease, type Session } from '@kequtech/pgclear';
 import type { Connection } from '../connection.js';
 import { createConnection } from '../connection.js';
 
@@ -28,9 +28,11 @@ export async function withMigrationLock<T>(
   try {
     lease = await pool.acquire();
     const client = lease;
-    await client.queryClassic(`SELECT pg_advisory_lock${suffix}(hashtextextended($1, 0))`, [
-      lockKey,
-    ]);
+    await client.queryClassic(
+      `SELECT pg_advisory_lock${suffix}(hashtextextended($1, 0))`,
+      [lockKey],
+      { codecs: defaultCodecs },
+    );
     locked = true;
     result = await work(client, namespace);
   } catch (error) {
@@ -41,9 +43,11 @@ export async function withMigrationLock<T>(
       try {
         if (lease.transactionStatus !== 'idle') await client.queryClassic('ROLLBACK', []);
         if (locked) {
-          await client.queryClassic(`SELECT pg_advisory_unlock${suffix}(hashtextextended($1, 0))`, [
-            lockKey,
-          ]);
+          await client.queryClassic(
+            `SELECT pg_advisory_unlock${suffix}(hashtextextended($1, 0))`,
+            [lockKey],
+            { codecs: defaultCodecs },
+          );
         }
       } catch (error) {
         errors.push(error);

@@ -291,23 +291,23 @@ import type { PgArray } from '@kequtech/pgclear';
         type New = Schema['Values']['insert'];
         type BigRead = Assert<Equal<Schema['Values']['row']['big'], string>>;
         type TimeRead = Assert<Equal<Schema['Values']['row']['time'], string>>;
-        type BigWrite = Assert<Equal<New['big'], string | import('@kequtech/pgclear').Parameter>>;
-        type DecimalWrite = Assert<Equal<New['decimal'], string | import('@kequtech/pgclear').Parameter>>;
-        type TimeWrite = Assert<Equal<New['time'], string | import('@kequtech/pgclear').Parameter>>;
+        type BigWrite = Assert<Equal<New['big'], string | bigint | import('@kequtech/pgclear').Parameter>>;
+        type DecimalWrite = Assert<Equal<New['decimal'], string | bigint | import('@kequtech/pgclear').Parameter>>;
+        type TimeWrite = Assert<Equal<New['time'], string | globalThis.Date | import('@kequtech/pgclear').TemporalInput | import('@kequtech/pgclear').Parameter>>;
         type JsonWrite = Assert<Equal<New['payload'], string | import('@kequtech/pgclear').Parameter>>;
         type BigArray = Assert<Equal<New['bigs'], string | import('@kequtech/pgclear').Parameter>>;
         type DecimalArray = Assert<Equal<New['decimals'], string | import('@kequtech/pgclear').Parameter>>;
         type TimeArray = Assert<Equal<New['times'], string | import('@kequtech/pgclear').Parameter>>;
         type JsonArray = Assert<Equal<New['payloads'], string | import('@kequtech/pgclear').Parameter>>;
         const value: New = {
-          big: '9007199254740993', decimal: '12345678901234567890.125', time: '2026-01-01T00:00:00Z',
+          big: 9007199254740993n, decimal: '12345678901234567890.125', time: new Date('2026-01-01T00:00:00Z'),
           payload: JSON.stringify(['one', null]), document: JSON.stringify('null'), bytes: new Uint8Array([0,255]), kind: 'reader',
           bigs: param(['9007199254740993','2',null],builtin.int8Array), decimals: param(['1.25','2.5',null],builtin.numericArray),
           times: '{2026-01-01T00:00:00Z,2026-01-02T00:00:00Z,NULL}',
           payloads: '{'+[JSON.stringify(JSON.stringify({nested:true})),JSON.stringify(JSON.stringify('null')),'NULL'].join(',')+'}',
         };
         const target = identifier(${JSON.stringify(options.namespace)}, 'Values');
-        const patch: Schema['Values']['update'] = { big: '2', decimal: '1.5', time: '2026-01-01T00:00:00Z',
+        const patch: Schema['Values']['update'] = { big: 2n, decimal: '1.5', time: new Date('2026-01-01T00:00:00Z'),
           payload: JSON.stringify('null'), document: null };
         export const queries = {
           insert: sql\`INSERT INTO \${target} \${sql.insertValues(value)} RETURNING *\`,
@@ -316,8 +316,6 @@ import type { PgArray } from '@kequtech/pgclear';
         function rejected() {
           // @ts-expect-error arbitrary numbers are not canonical bigint inputs
           const big: New['big'] = 9007199254740993;
-          // @ts-expect-error plain bigint inputs require text or an explicit encoder
-          const nativeBig: New['big'] = 9007199254740993n;
           // @ts-expect-error numeric temporal read values are not timestamp inputs
           const time: New['time'] = Infinity;
           // @ts-expect-error bigint is not a native JSON value

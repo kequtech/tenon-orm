@@ -7,13 +7,18 @@ table from the human guide and an existing `db` instance, unless stated otherwis
 ## Installation and connection
 
 Requires Node.js 24+, PostgreSQL 16+, and ESM. TypeScript consumers need TypeScript 6+ and Node
-development typings. Install the required pgclear peer alongside Tenon. The peer range permits
-updates from pgclear 0.2.0 within 0.x independently of Tenon; review pgclear release notes and run
-application checks when updating it. A usual Node TypeScript setup uses `module: "NodeNext"`.
+development typings. Tenon includes pgclear 0.3.x as a runtime dependency. A usual Node TypeScript
+setup uses `module: "NodeNext"`.
 
 ```sh
-npm install @kequtech/tenon-orm @kequtech/pgclear
+npm install @kequtech/tenon-orm
 ```
+
+Use `sql` from `@kequtech/tenon-orm` for `db.query`. Tenon also re-exports Pgclear's `json`,
+`param`, `builtin`, `defaultCodecs`, and `createTemporalCodecs`, plus the `Codec`, `CodecRegistry`,
+`Parameter`, `PgArray`, `TemporalConstructors`, and `TemporalInput` types. These are the driver's
+original helpers and types; Pgclear continues to own conversion. Generated schema declarations
+import their helper types from Tenon.
 
 `createTenon({ connection, onQuery? })` returns a `Database` with `query`, `transaction`, `native`,
 and `close`. The required `connection` accepts a PostgreSQL URI, pgclear `PoolOptions`, or an existing
@@ -51,6 +56,20 @@ Tenon wrapper while the application retains pool ownership and outstanding work.
 Qualify SQL names or configure runtime `search_path`. CLI `--namespace` selects tooling scope;
 it does not configure application queries. Baseline capture and Describe accept connection strings
 rather than the runtime connection union.
+
+### Driver updates
+
+Tenon declares `@kequtech/pgclear: ^0.3.0`, allowing compatible 0.3.x patch updates without a new
+Tenon release. With npm, run `npm update @kequtech/pgclear`, review the lockfile and run
+`npm ls @kequtech/pgclear`, and commit the resolved dependency change after application checks.
+An existing lockfile keeps its selected version until updated. A future Pgclear 0.4 release is outside this
+range and needs an explicit Tenon compatibility update; it is not an automatic upgrade.
+
+Install Pgclear directly only when the application imports its native APIs, such as `listen` or
+`createPool`. Keep that version compatible with Tenon's declared range to allow a shared copy. If
+both SQL tags are needed, alias the native one as `pgSql`: Tenon's tag belongs in `db.query`, while
+Pgclear's tag belongs in native `query`. Native `queryClassic(text, values)` avoids a second tag.
+TypeScript and runtime validation reject sending one package's query to the other package's API.
 
 ## Native driver access
 
@@ -135,14 +154,21 @@ results. The adapter's SQL text must be trusted and values must remain separatel
 ## SQL parameters and identifiers
 
 Ordinary `sql` interpolations bind values. Do not quote them or write manual `$n` placeholders
-inside templates. Plain parameters accept null, string, finite number, boolean, and Uint8Array.
-Bigint, undefined, objects, arrays, Date, nonfinite numbers, and unsafe integer numbers reject.
+inside templates. Plain parameters accept null, string, finite number, bigint, boolean, Date,
+supported native/polyfilled Temporal values, and Uint8Array. Undefined, plain objects, arrays,
+invalid Date values, nonfinite numbers, and unsafe integer numbers reject.
 Use pgclear `json(value)` for JSON and `param(value, codec)` for arrays or custom encodings.
 Encoded strings also work where PostgreSQL accepts text. Cast standalone parameters when SQL must
-establish their type. For int8, use exact strings or `param(text, builtin.int8)`.
+establish their type. For int8, use exact strings, bigint, or `param(text, builtin.int8)`.
+
+Date values encode in UTC. Date, bigint, and supported Temporal inputs encode as text with OID 0,
+using server inference; they do not select an output decoder. Temporal calendar dates, wall times,
+instants, and durations have different PostgreSQL targets. Use the intended value and SQL cast,
+rather than treating every temporal value as an interchangeable timestamp. Pgclear does not install
+Temporal or a polyfill automatically.
 
 ```ts
-import { builtin, param } from '@kequtech/pgclear';
+import { builtin, param } from '@kequtech/tenon-orm';
 
 const ids = param([1, 2, 3], builtin.int4Array);
 const query = sql<{ id: number }>`SELECT id FROM public.users
@@ -267,10 +293,11 @@ query outcome. Query success inside a callback does not establish outer commit.
 
 ## Generated types and checking
 
-`generateDefinitions({ connection, namespace?, onWarning? })` delegates schema introspection and
-TypeScript rendering to pgclear. Tenon coordinates with its migration advisory lock and excludes its
-history table. It needs no migration files/history. The CLI owns atomic output and freshness checks;
-Tenon has no separate database type generator or decoder mapping table.
+`generateDefinitions({ connection, namespace?, onWarning? })` reads schema catalogs and renders
+TypeScript declarations in Tenon. It interprets defaults, domains, identities, writable columns, and
+schema summaries, coordinates with the migration advisory lock, and excludes its history table.
+It needs no migration files/history. The CLI owns atomic output and freshness checks. Decoder
+representations come from pgclear's selected registry rather than a second conversion registry.
 
 ```sh
 npx tenon generate --out src/generated-schema.d.ts
@@ -291,10 +318,12 @@ projections; joins and expressions need their actual selected shape.
 | PostgreSQL type                                | Default read                    | Generated write input                 |
 | ---------------------------------------------- | ------------------------------- | ------------------------------------- |
 | smallint, integer, oid, real, double precision | `number`                        | `number`                              |
-| bigint                                         | `string`                        | `string`                              |
-| numeric                                        | `string`                        | `string`                              |
+| bigint                                         | `string`                        | `string \| bigint`                    |
+| numeric                                        | `string`                        | `string \| bigint`                    |
 | boolean                                        | `boolean`                       | `boolean`                             |
-| text, UUID, temporal values, interval          | `string`                        | `string`                              |
+| text, UUID, timetz                             | `string`                        | `string`                              |
+| date, timestamp, timestamptz                   | `string`                        | `string \| Date \| TemporalInput`     |
+| time, interval                                 | `string`                        | `string \| TemporalInput`             |
 | enum                                           | String literal union            | Same union                            |
 | json/jsonb                                     | `unknown`                       | Encoded string or pgclear `Parameter` |
 | bytea                                          | `Uint8Array`                    | `Uint8Array`                          |
@@ -303,13 +332,49 @@ projections; joins and expressions need their actual selected shape.
 Every writable generated field also accepts a pgclear `Parameter`; the scalar entries above show
 plain inputs. SQL NULL is separate; nullable fields add null. Numeric and bigint arrays preserve
 exact strings, and temporal strings retain precision and infinity spellings. Dynamic enum/domain/extension
-arrays remain wire text unless a decoder changes them. Generation follows the selected registry;
-unrecognized custom decoder representations warn and become unknown. JSON member shapes remain
-unknown. Database constraints and textual formats still require application validation.
+arrays remain wire text unless a decoder changes them. Generation follows the selected registry.
+Custom text codecs can declare `text.typescript`, and those expressions are preserved in generated
+row types. A custom decoder without a known representation warns and becomes unknown. JSON member
+shapes remain unknown under default decoding. Database constraints and textual formats still
+require application validation. A scalar codec declaration describes every use of that codec's OID;
+it does not establish different application meanings for individual columns.
+
+Default-registry enum rows use catalog label unions. With a custom registry, a declared string
+representation stays string because that decoder may transform the labels; an explicit codec
+representation can declare a narrower output type. Enum write inputs retain the database choices.
 
 Programmatic generation uses the registry configured on its connection or supplied pool. The CLI
 uses default codecs. Regenerate committed definitions after a driver mapping change before running
 `generate --check`; custom decoder types that remain unknown need application-owned contracts.
+Catalog queries use default result decoders on the same borrowed session and snapshot, while
+application row types follow that session's configured registry. Custom application codecs therefore
+do not change the generator's own metadata-reading types.
+
+Codec type expressions must resolve where they are compiled. Relative import expressions in saved
+declarations resolve from the generated file; the checker's in-memory module resolves from the
+tsconfig directory. Prefer a package or configured type alias that resolves in both places when one
+registry is shared across generation and checking. Tenon does not execute the referenced modules.
+
+Output conversions are explicit: for example, `defaultCodecs.with(builtin.int8BigInt)` makes int8
+reads bigint, and `defaultCodecs.with(builtin.timestamptzDate)` makes timestamptz reads Date.
+Pgclear also supplies codecs for caller-provided Temporal implementations. Use the same registry for
+execution, programmatic generation, Describe, and query checking. Defaults stay strings regardless
+of which temporal features the runtime provides.
+
+### Application aliases
+
+For shorter names, export aliases from a handwritten application module such as `src/schema-types.ts`:
+
+```ts
+import type { Database } from './generated-schema.js';
+
+export type UserRow = Database['users']['row'];
+export type UserInsert = Database['users']['insert'];
+export type UserUpdate = Database['users']['update'];
+```
+
+These aliases reference the generated definitions directly and follow changes when the schema is
+regenerated. Keep them in the application module so regeneration preserves your chosen names.
 
 ### Persistence and domain values
 
@@ -461,16 +526,16 @@ Use error codes and structured fields rather than matching message wording. Driv
 `PGCLEAR_*` codes; PostgreSQL errors use SQLSTATE. Checker diagnostics have their own `kind` and
 `code`. Retain unexpected errors instead of treating every failure as an empty query result.
 
-| Symptom                                           | Likely cause and response                                                                                                                                                                                                                                                                                                                 |
-| ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `PGCLEAR_ENCODE`                                  | A bind is unsupported or an encoder failed. Use `json(value)` for JSON, `param(values, builtin.int4Array)` for integer arrays, an encoded temporal string such as `date.toISOString()`, and exact strings or `param(text, builtin.int8)` for int8. Direct undefined rejects; omit it through a mutation helper when omission is intended. |
-| `CardinalityError` / `TENON_CARDINALITY_MISMATCH` | `one` received zero/multiple rows, or `oneOrNone` received multiple rows. Review the predicate and intended mode. Use deterministic `ORDER BY` plus `LIMIT 1` only when selecting one of several matches is intended. Result modes do not add limits.                                                                                     |
-| `TENON_AFFECTED_ROWS_MISMATCH`                    | A write exceeded `max` or differed from `exact`. The guarded operation has rolled back. Inspect the predicate and `actual` count; retain the intended write bound.                                                                                                                                                                        |
-| `TENON_AFFECTED_ROWS_UNSUPPORTED`                 | The final command lacks a supported INSERT/UPDATE/DELETE/MERGE count. Apply the guard to a supported write; use result modes for returned-row requirements.                                                                                                                                                                               |
-| Empty assignments                                 | Every selected patch field was missing/undefined. Skip the update or branch to an expression-only statement when that is intended. Null remains a bound value.                                                                                                                                                                            |
-| SQLSTATE `42P18` / `42P08` during inspection      | PostgreSQL cannot establish an unambiguous parameter type. Add the intended SQL cast, or pass `parameterTypes` OID hints to `describeQuery`. Inspection does not bind query values.                                                                                                                                                       |
-| Query checker reports `unchecked`                 | SQL structure or an expansion shape could not be recovered, a limit was exceeded, or inspection failed. Follow the diagnostic; optional generated patch fields and dynamic fragment lists can be valid at runtime but remain unchecked. See [responding to findings](query-checking.md#responding-to-findings).                           |
-| Missing/stale generated definitions               | Check the namespace, schema, driver version, and output path. Regenerate with the same options without `--check`, review the diff, and commit intended output. Freshness checks never rewrite the file.                                                                                                                                   |
+| Symptom                                           | Likely cause and response                                                                                                                                                                                                                                                                                                                                                                                            |
+| ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PGCLEAR_ENCODE`                                  | A bind is unsupported, a Date is invalid, or an encoder failed. Use `json(value)` for JSON and `param(values, builtin.int4Array)` for integer arrays. Plain bigint, valid Date, and supported Temporal inputs are accepted; plain objects/arrays and direct undefined still reject. Omit undefined through a mutation helper when omission is intended. JSON encoding still rejects bigint, including nested values. |
+| `CardinalityError` / `TENON_CARDINALITY_MISMATCH` | `one` received zero/multiple rows, or `oneOrNone` received multiple rows. Review the predicate and intended mode. Use deterministic `ORDER BY` plus `LIMIT 1` only when selecting one of several matches is intended. Result modes do not add limits.                                                                                                                                                                |
+| `TENON_AFFECTED_ROWS_MISMATCH`                    | A write exceeded `max` or differed from `exact`. The guarded operation has rolled back. Inspect the predicate and `actual` count; retain the intended write bound.                                                                                                                                                                                                                                                   |
+| `TENON_AFFECTED_ROWS_UNSUPPORTED`                 | The final command lacks a supported INSERT/UPDATE/DELETE/MERGE count. Apply the guard to a supported write; use result modes for returned-row requirements.                                                                                                                                                                                                                                                          |
+| Empty assignments                                 | Every selected patch field was missing/undefined. Skip the update or branch to an expression-only statement when that is intended. Null remains a bound value.                                                                                                                                                                                                                                                       |
+| SQLSTATE `42P18` / `42P08` during inspection      | PostgreSQL cannot establish an unambiguous parameter type. Add the intended SQL cast, or pass `parameterTypes` OID hints to `describeQuery`. Inspection does not bind query values.                                                                                                                                                                                                                                  |
+| Query checker reports `unchecked`                 | SQL structure or an expansion shape could not be recovered, a limit was exceeded, or inspection failed. Follow the diagnostic; optional generated patch fields and dynamic fragment lists can be valid at runtime but remain unchecked. See [responding to findings](query-checking.md#responding-to-findings).                                                                                                      |
+| Missing/stale generated definitions               | Check the namespace, schema, driver version, and output path. Regenerate with the same options without `--check`, review the diff, and commit intended output. Freshness checks never rewrite the file.                                                                                                                                                                                                              |
 
 Inside a transaction, catch a guarded query failure only after its promise rejects; savepoint
 cleanup completes before rejection. An unguarded server SQL error normally leaves the transaction

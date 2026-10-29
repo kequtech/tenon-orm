@@ -1,8 +1,19 @@
+import { sql as pgSql } from '@kequtech/pgclear';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { mockDriver, result } from './helpers/driver.js';
 import type { QueryEvent } from '../src/index.js';
 import { AffectedRowsError, createTenon, identifier, sql, unsafeSql } from '../src/index.js';
+
+test('Tenon rejects the driver SQL tag with an import-specific error', async () => {
+  const db = createTenon({ connection: 'postgresql://unused' });
+  try {
+    // @ts-expect-error Pgclear queries cannot execute through Tenon
+    await assert.rejects(db.query(pgSql`SELECT 1`), /from @kequtech\/tenon-orm/);
+  } finally {
+    await db.close();
+  }
+});
 
 test('templates bind values, preserve order and quote identifiers explicitly', () => {
   const malicious = "x'); DELETE FROM users; --";

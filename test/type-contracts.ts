@@ -1,3 +1,4 @@
+import { sql as pgSql } from '@kequtech/pgclear';
 import type {
   ConnectionOptions,
   CloseOptions,
@@ -18,6 +19,18 @@ import {
   sql,
   unsafeSql,
 } from '../src/index.js';
+import {
+  builtin,
+  defaultCodecs,
+  json,
+  param,
+  type Codec,
+  type CodecRegistry,
+  type Parameter,
+  type PgArray,
+  type TemporalInput,
+} from '../src/index.js';
+
 import type { User } from './fixtures/models.js';
 import { echoValues } from './fixtures/queries.js';
 import { checkQueries, type CheckReport } from '../src/check.js';
@@ -37,6 +50,16 @@ async function checkingContracts(connection: string) {
   return ok;
 }
 void checkingContracts;
+
+function conversionContracts() {
+  const codec: Codec<number> = builtin.int4;
+  const registry: CodecRegistry = defaultCodecs.with(codec);
+  const array: PgArray<number> = [1, null, [2]];
+  const encoded: Parameter = param(array, builtin.int4Array);
+  const temporal: TemporalInput | undefined = undefined;
+  return { registry, temporal, query: sql`SELECT ${encoded}::int[], ${json({ ok: true })}::jsonb` };
+}
+void conversionContracts;
 
 type Equal<A, B> =
   (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
@@ -86,6 +109,10 @@ async function contracts(db: Database, options?: QueryOptions) {
   sql<number>`SELECT 1`;
   // @ts-expect-error row absence is determined by the mode
   sql<Summary | undefined>`SELECT 1`;
+  // @ts-expect-error Pgclear's tag belongs to the native driver API
+  await db.query(pgSql`SELECT 1`);
+  // @ts-expect-error Tenon's tag belongs to db.query
+  await db.native.query(sql`SELECT 1`);
   // @ts-expect-error plain strings cannot execute accidentally
   await db.query('SELECT 1');
   // @ts-expect-error unknown options are rejected

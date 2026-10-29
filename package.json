@@ -58,22 +58,20 @@
     "benchmark": "npm run build && node scripts/benchmark.mjs"
   },
   "devDependencies": {
+    "@js-temporal/polyfill": "^0.5.1",
     "@types/node": "^24.19.2",
     "prettier": "^3.9.10",
-    "typescript-next": "npm:typescript@^7.0.2",
-    "@kequtech/pgclear": "^0.2.0"
+    "typescript-next": "npm:typescript@^7.0.2"
   },
   "bin": {
-    "tenon": "./dist/cli.js"
+    "tenon": "dist/cli.js"
   },
   "prettier": {
     "singleQuote": true,
     "printWidth": 100
   },
-  "peerDependencies": {
-    "@kequtech/pgclear": ">=0.2.0 <1"
-  },
   "dependencies": {
+    "@kequtech/pgclear": "^0.3.0",
     "typescript": "~6.0.2"
   }
 }

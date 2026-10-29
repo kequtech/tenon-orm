@@ -80,7 +80,12 @@ export class SourceAnalysis {
       if (target && target === this.libraries.get(`@kequtech/tenon-orm:${name}`)) return name;
     }
     for (const name of ['param', 'json', 'builtin']) {
-      if (target && target === this.libraries.get(`@kequtech/pgclear:${name}`))
+      if (
+        target &&
+        ['@kequtech/tenon-orm', '@kequtech/pgclear'].some(
+          (module) => target === this.libraries.get(`${module}:${name}`),
+        )
+      )
         return `pgclear.${name}`;
     }
     if (ts.isPropertyAccessExpression(node) && this.role(node.expression, depth + 1) === 'sql')
@@ -658,7 +663,13 @@ export class SourceAnalysis {
       if (
         type.flags & ts.TypeFlags.Null ||
         checker.isTypeAssignableTo(type, this.project.types.get('string')!) ||
-        checker.isTypeAssignableTo(type, this.project.types.get('number')!)
+        checker.isTypeAssignableTo(type, this.project.types.get('number')!) ||
+        checker.isTypeAssignableTo(type, this.project.types.get('bigint')!) ||
+        checker.isTypeAssignableTo(type, this.project.types.get('globalThis.Date')!) ||
+        checker.isTypeAssignableTo(
+          type,
+          this.project.types.get('import("@kequtech/tenon-orm").TemporalInput')!,
+        )
       ) {
         hints.add(0);
         return;
@@ -708,7 +719,7 @@ export class SourceAnalysis {
         kind: 'mismatch',
         code: 'parameter-type-mismatch',
         parameter,
-        message: `Input ${binding.field ?? 'parameter'} of type ${checker.typeToString(type)} is not a plain pgclear bind. Use null, a scalar, Uint8Array or an explicit encoder.`,
+        message: `Input ${binding.field ?? 'parameter'} of type ${checker.typeToString(type)} is not a plain pgclear bind. Use null, a scalar, Date, Temporal, Uint8Array or an explicit encoder.`,
         expected: 'pgclear InputValue',
         observed: checker.typeToString(type),
       });

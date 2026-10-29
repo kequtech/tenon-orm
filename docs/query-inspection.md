@@ -81,16 +81,19 @@ Pass the runtime registry explicitly. Inspection decodes only its own catalog/co
 default codecs; the selected registry determines the reported application read representations.
 
 ```ts
-import { builtin, defaultCodecs } from '@kequtech/pgclear';
+import { builtin, defaultCodecs } from '@kequtech/tenon-orm';
 
 const codecs = defaultCodecs.with(builtin.jsonbText);
 const description = await describeQuery({ connection, query, codecs });
 ```
 
 A raw JSON decoder reports string instead of unknown. Scalar overrides affect derived built-in
-arrays; explicit array overrides win. An unfamiliar custom decoder reports `unknown` with an
-`unmapped-type` issue, even when its catalog type is a known scalar, enum, or domain. Supply an
-application representation when comparing such results with authored types. Catalog base types do
+arrays; explicit array overrides win. A custom decoder can declare `text.typescript` to expose its
+actual output expression, including an application type import. Describe includes that expression
+in its conservative row declaration; generation and source checking consume the same metadata.
+Without a known representation, an unfamiliar decoder reports `unknown` with an `unmapped-type`
+issue, even when its catalog type is a known scalar, enum, or domain. Supply an application
+representation when comparing such results with authored types. Catalog base types do
 not replace the wire OID's selected decoder contract. Parameter read representations are not input
 compatibility rules: text can be a valid int8 input while int8 results decode as exact strings.
 

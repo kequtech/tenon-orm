@@ -106,7 +106,7 @@ For a table with `payload jsonb` and `tags text[]`, encode JSON separately from 
 array:
 
 ```ts
-import { builtin, json, param } from '@kequtech/pgclear';
+import { builtin, json, param } from '@kequtech/tenon-orm';
 
 const tags = ['ada', 'lin'];
 await db.query(
@@ -116,13 +116,18 @@ await db.query(
 
 Generated JSON writes accept pgclear parameters or encoded strings. `json(value)` encodes objects,
 arrays, strings, and JSON null; plain `null` means SQL NULL. Arrays need `param(value, codec)` or
-encoded PostgreSQL text. Plain arrays, objects, Date, and undefined reject as bound values. Tenon
-passes explicit parameters unchanged to pgclear.
+encoded PostgreSQL text. Plain arrays, objects, and undefined reject as bound values. Tenon passes
+explicit parameters unchanged to pgclear. `json()` still rejects bigint values, including bigint
+nested inside objects; bigint support for ordinary SQL parameters does not change JSON encoding.
 
-For bigint/bigserial fields, generated writes accept exact strings or explicit parameters, and reads
-return strings. Use `param('9007199254740993', builtin.int8)` for an explicit int8 parameter and
-`param(['9007199254740993', null], builtin.int8Array)` for an int8 array. Plain JavaScript bigint
-values reject, including inside mutation helpers.
+For bigint/bigserial fields, generated writes accept exact strings, bigint, or explicit parameters;
+reads remain strings by default. Use `param('9007199254740993', builtin.int8)` for an explicit int8
+parameter and `param(['9007199254740993', null], builtin.int8Array)` for an int8 array. The bigint
+output codec and matching array encoder are separate opt-in choices.
+
+Date and supported Temporal values can be ordinary scalar inputs, including mutation fields. Date
+encodes in UTC; Temporal calendar dates, wall times, and instants retain their distinct meanings.
+Choose the value appropriate to the PostgreSQL column and retain application validation.
 
 ## Batches in one transaction
 

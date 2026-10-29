@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { dirname, resolve } from 'node:path';
 import ts from 'typescript';
+import { defaultCodecs } from '@kequtech/pgclear';
 import type { CheckOptions, CheckDiagnostic, SourceLocation } from './types.js';
 
 export function location(node: ts.Node): SourceLocation {
@@ -21,6 +22,44 @@ export function symbol(checker: ts.TypeChecker, node: ts.Node): ts.Symbol | unde
   return found && found.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(found) : found;
 }
 
+/** Validate modules supplying representation types without selecting unrelated project files. */
+function representationSources(checker: ts.TypeChecker, root: ts.SourceFile): ts.SourceFile[] {
+  const sources = new Set<ts.SourceFile>();
+  const pending = [root];
+  while (pending.length) {
+    const source = pending.pop()!;
+    if (sources.has(source)) continue;
+    sources.add(source);
+    const visit = (node: ts.Node): void => {
+      let reference: ts.Expression | undefined;
+      if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
+        reference = node.moduleSpecifier;
+      } else if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument)) {
+        reference = node.argument.literal;
+      } else if (
+        ts.isImportEqualsDeclaration(node) &&
+        ts.isExternalModuleReference(node.moduleReference)
+      ) {
+        reference = node.moduleReference.expression;
+      } else if (
+        ts.isCallExpression(node) &&
+        node.expression.kind === ts.SyntaxKind.ImportKeyword
+      ) {
+        reference = node.arguments[0];
+      }
+      if (reference && ts.isStringLiteralLike(reference)) {
+        const module = checker.getSymbolAtLocation(reference);
+        for (const declaration of module?.declarations ?? []) {
+          pending.push(declaration.getSourceFile());
+        }
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(source);
+  }
+  return [...sources];
+}
+
 const representations = [
   'unknown',
   'string',
@@ -28,6 +67,8 @@ const representations = [
   'bigint',
   'boolean',
   'globalThis.Uint8Array',
+  'globalThis.Date',
+  'import("@kequtech/tenon-orm").TemporalInput',
   ...['unknown', 'string', 'number', 'bigint', 'boolean', 'globalThis.Uint8Array'].map(
     (type) => `PgArray<${type}>`,
   ),
@@ -82,12 +123,18 @@ export function loadProject(options: CheckOptions) {
       );
     }
   }
-  const expressions = [...new Set([...representations, ...custom.map(([, type]) => type)])];
+  const expressions = [
+    ...new Set([
+      ...representations,
+      ...(options.codecs ?? defaultCodecs).typescriptTypes(),
+      ...custom.map(([, type]) => type),
+    ]),
+  ];
   const virtualPath = resolve(dirname(configPath), `.tenon-check-${randomUUID()}.ts`);
   const virtualSource = [
     'type PgArray<T> = readonly (T | null | PgArray<T>)[];',
     ...expressions.map((type, index) => `export type Read${index} = ${type};`),
-    'export type Parameter = import("@kequtech/pgclear").Parameter;',
+    'export type Parameter = import("@kequtech/tenon-orm").Parameter;',
   ].join('\n');
   // Emission layout must not constrain the in-memory representation module.
   const compilerOptions = { ...parsed.options, noEmit: true };
@@ -118,10 +165,10 @@ export function loadProject(options: CheckOptions) {
     (node) => ts.isTypeAliasDeclaration(node) && node.name.text === 'Parameter',
   ) as ts.TypeAliasDeclaration;
   const parameterType = checker.getTypeFromTypeNode(parameterNode.type);
-  const helperErrors = [
-    ...program.getSyntacticDiagnostics(helper),
-    ...program.getSemanticDiagnostics(helper),
-  ];
+  const helperErrors = representationSources(checker, helper).flatMap((source) => [
+    ...program.getSyntacticDiagnostics(source),
+    ...program.getSemanticDiagnostics(source),
+  ]);
   if (helperErrors.length) {
     throw new Error(
       `Cannot resolve checker representation types: ${helperErrors.map((error) => ts.flattenDiagnosticMessageText(error.messageText, '\n')).join('\n')}`,

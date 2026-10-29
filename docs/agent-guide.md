@@ -28,9 +28,10 @@ when mappings change, and run the project's typechecks and relevant database tes
 ## Connect
 
 Requires Node.js 24+, PostgreSQL 16+, ESM, TypeScript 6+, and Node development typings. Install with
-`npm install @kequtech/tenon-orm @kequtech/pgclear`; retain the project's package manager and TypeScript
-configuration. The supported pgclear peer starts at 0.2.0; review its release notes when upgrading
-the driver independently, regenerate changed types, and rerun database checks.
+`npm install @kequtech/tenon-orm`; retain the project's package manager and TypeScript
+configuration. Tenon includes pgclear 0.3.x as a runtime dependency. Import `sql`, `json`, `param`,
+and codec helpers from Tenon. See [driver updates](reference.md#driver-updates) for independent
+compatible updates; regenerate changed types and rerun database checks.
 
 ```ts
 import { createTenon } from '@kequtech/tenon-orm';
@@ -82,7 +83,8 @@ Options are `{ returns?, affectedRows?, label? }`; unknown keys fail. Modes do n
 ## Parameters and composition
 
 - Interpolate values without quotes. Do not author `$n` placeholders inside templates. `null` binds
-  SQL NULL; `undefined`, objects, arrays, and Date require omission or explicit encoding.
+  SQL NULL. Plain bigint, Date, and supported native/polyfilled Temporal values encode as text with
+  server inference; Date uses UTC. Undefined, plain objects, and arrays require omission or explicit encoding.
 - Use pgclear `param(ids, builtin.int4Array)` with `ANY` for a set of IDs. Cast standalone parameters such as
   `SELECT ${value}::integer AS value` when SQL must establish the type for inspection.
 - `identifier(schema, table)` quotes separate approved names. Strings such as `'DESC'` remain bound
@@ -110,9 +112,12 @@ They do not validate constraints or JSON contents. See [mutation examples](mutat
 
 Use pgclear `json(value)` or encoded text for JSON, and `param(value, codec)` for arrays and
 custom encodings. Bigint scalars and SQL `count(*)` read as exact strings; command `rowCount` uses
-numbers. Plain bigint binds reject; use strings or `param(text, builtin.int8)`. Decimals and temporal
-values read as strings. Numeric and bigint arrays preserve exact strings. Bytes use Uint8Array.
-SQL NULL array elements remain null. Keep domain validation at the persistence boundary. See
+numbers. Plain bigint, Date, and supported Temporal inputs do not change those output defaults.
+Choose explicit codecs for bigint, Date, or Temporal outputs. Decimals and temporal values otherwise
+read as strings. Numeric and bigint arrays preserve exact strings. Bytes use Uint8Array.
+SQL NULL array elements remain null. Tenon generates declarations from the schema and selected
+registry; a custom decoder can declare `text.typescript` so generation and checking agree without
+duplicating its type in `readTypes`. Keep domain validation at the persistence boundary. See
 [value mappings](reference.md#generated-types-and-checking) and the
 [JSON/temporal projection](reference.md#persistence-and-domain-values).
 

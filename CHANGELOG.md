@@ -4,9 +4,10 @@
 
 ### Breaking changes
 
-- Replace bundled `pg` and `@types/pg` with the required `@kequtech/pgclear` peer (`>=0.2.0 <1`).
-  Install pgclear alongside Tenon. Connections accept a PostgreSQL URI, pgclear `PoolOptions`, or
-  a pgclear `Pool`; translate former pg configuration and supply deployment settings explicitly.
+- Replace bundled `pg` and `@types/pg` with the `@kequtech/pgclear` runtime dependency (`^0.3.0`).
+  Installing Tenon includes the driver; compatible driver patches can update independently.
+  Connections accept a PostgreSQL URI, pgclear `PoolOptions`, or a pgclear `Pool`; translate former
+  pg configuration and supply deployment settings explicitly.
   PG environment defaults, pgpass/service files, and pg-specific URI options are not read. See
   [upgrading from 0.3.x](docs/adoption-guide.md#upgrade-from-tenon-03x).
 - `db.native` is now a pgclear `Pool`. Use `queryClassic(text, values?)` for finished SQL and
@@ -16,14 +17,19 @@
 - Command counts remain safe integer numbers; int8/bigserial, SQL count(*) and int8 array elements
   use exact strings. Temporal values and exact numeric arrays are strings, bytes are Uint8Array,
   and result arrays are readonly. JSON/array binds need pgclear json/param or encoded strings.
-  Plain bigint, undefined, objects, arrays and Date reject; mutation-helper undefined still omits.
-  Use strings or param(text, builtin.int8) for int8 inputs and explicit text for timestamps.
-- Schema generation delegates to pgclear and exports `Database[table]['row' | 'insert' | 'update']`.
+  Plain bigint, Date, and supported native/polyfilled Temporal inputs use text and server inference;
+  output conversions are opt-in. Undefined, plain objects, and arrays reject; mutation-helper
+  undefined still omits. JSON encoding still rejects bigint values.
+- Tenon owns schema generation and exports `Database[table]['row' | 'insert' | 'update']`.
   Regenerate committed definitions, replace former Rows imports, and review write representations.
+  Catalog queries, schema summaries, defaults/domains/identities, and TypeScript rendering live in
+  Tenon; decoder representations come from pgclear. Import generation from Tenon instead of pgclear.
   Tenon retains migration coordination, atomic file output, and `generate --check` freshness checks.
 
 ### Added and improved
 
+- Re-export Pgclear parameter/codec helpers and their types through Tenon, so application queries
+  and generated declarations use one import path. Use Tenon's `sql` for `db.query`.
 - Add optional `tenon check` for a project, file, or file:line, with readable/JSON diagnostics and a
   programmatic `@kequtech/tenon-orm/check` API. Fixed fragments, joins, explicit object shapes, and
   bounded ternaries are checked through pgclear Describe without importing application code or
@@ -32,11 +38,18 @@
 - Bundle TypeScript 6 for source checking and load it only on the checking path. Ordinary execution
   continues to trust result annotations; database tests remain necessary for rows and write effects.
 - Inspection uses public pgclear Describe with parameter OID hints and a selected codec registry.
-  Unidentified custom decoders remain unresolved. Migrations, generation, and inspection use public
-  pgclear sessions without a private protocol adapter.
+  Custom text codecs can declare `text.typescript`; generation and source checking use that metadata,
+  including derived arrays, without duplicate readTypes declarations. Unidentified custom decoders
+  remain unresolved. Migrations, generation, and inspection use public pgclear sessions without a
+  private protocol adapter. Catalog reads keep default decoding on the application's borrowed session.
 - Clarify the documentation reading path, common failures, optional patch checking, and the roles of
   source checking, SQL inspection, and generated-file freshness. Keep historical driver reviews out
   of the published consumer docs.
+
+## 0.3.1
+
+- Expand documentation for driver configuration, transaction result adapters, value mappings, and
+  validation between persistence representations and application domain values.
 
 ## 0.3.0
 

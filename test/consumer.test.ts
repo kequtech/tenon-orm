@@ -10,6 +10,14 @@ import { createPool } from '@kequtech/pgclear';
 import { assertTestDatabase, migrationProject, testConnection } from './helpers/database.js';
 
 const run = promisify(execFile);
+// Exercise an unpublished driver candidate explicitly without replacing registry dependencies.
+const driverTarball = process.env.TENON_TEST_PGCLEAR_TARBALL;
+const driverDependency = driverTarball
+  ? { '@kequtech/pgclear': `file:${resolve(driverTarball)}` }
+  : {};
+const driverOverrides = driverTarball
+  ? { overrides: { '@kequtech/pgclear': '$@kequtech/pgclear' } }
+  : {};
 
 test('the packed package preserves API contracts and consumes generated .d.ts schemas under TypeScript 6 and 7', async () => {
   const temporary = await mkdtemp(join(tmpdir(), 'tenon-consumer-'));
@@ -75,7 +83,11 @@ test('the packed package preserves API contracts and consumes generated .d.ts sc
         name: 'tenon-consumer-check',
         private: true,
         type: 'module',
-        dependencies: { '@kequtech/tenon-orm': `file:${join(temporary, tarball)}` },
+        ...driverOverrides,
+        dependencies: {
+          '@kequtech/tenon-orm': `file:${join(temporary, tarball)}`,
+          ...driverDependency,
+        },
         devDependencies: {
           typescript: minimum.version,
           '@types/node': nodeTypes.version,
@@ -115,13 +127,14 @@ test('the packed package preserves API contracts and consumes generated .d.ts sc
       license: string;
       dependencies?: Record<string, string>;
       peerDependencies?: Record<string, string>;
-      peerDependenciesMeta?: Record<string, { optional?: boolean }>;
     };
     assert.equal(metadata.name, '@kequtech/tenon-orm');
     assert.equal(metadata.license, 'ISC');
-    assert.deepEqual(metadata.dependencies, { typescript: '~6.0.2' });
-    assert.deepEqual(metadata.peerDependencies, { '@kequtech/pgclear': '>=0.2.0 <1' });
-    assert.notEqual(metadata.peerDependenciesMeta?.['@kequtech/pgclear']?.optional, true);
+    assert.deepEqual(metadata.dependencies, {
+      '@kequtech/pgclear': '^0.3.0',
+      typescript: '~6.0.2',
+    });
+    assert.equal(metadata.peerDependencies, undefined);
     assert.equal(
       await readFile(join(installed, 'LICENSE'), 'utf8'),
       await readFile(resolve('LICENSE'), 'utf8'),
@@ -291,7 +304,11 @@ ${result.stderr ?? ''}`);
         name: 'tenon-production-check',
         private: true,
         type: 'module',
-        dependencies: { '@kequtech/tenon-orm': `file:${join(temporary, tarball)}` },
+        ...driverOverrides,
+        dependencies: {
+          '@kequtech/tenon-orm': `file:${join(temporary, tarball)}`,
+          ...driverDependency,
+        },
       }),
     );
     await run(
@@ -351,7 +368,10 @@ ${result.stderr ?? ''}`);
         `
       import assert from 'node:assert/strict';
       import { createPool } from '@kequtech/pgclear';
-      const { CardinalityError, createTenon, describeQuery, sql } = await import('@kequtech/tenon-orm');
+      const { CardinalityError, builtin, createTemporalCodecs, defaultCodecs, json, param, createTenon, describeQuery, sql } = await import('@kequtech/tenon-orm');
+      const driver = await import('@kequtech/pgclear');
+      for (const [name, value] of Object.entries({builtin, createTemporalCodecs, defaultCodecs, json, param}))
+        assert.equal(value, driver[name]);
       const second = await import('./second-tenon/index.js');
       const composed = sql\`SELECT \${second.sql.fragment\`\${7}::int\`} AS id\`;
       assert.equal(composed.text, 'SELECT $1::int AS id');
@@ -360,6 +380,8 @@ ${result.stderr ?? ''}`);
       await db.close();
       const owned = createTenon({ connection: { connectionString: process.env.TENON_TEST_DATABASE_URL, maxConnections: 1 } });
       assert.equal((await owned.native.queryClassic('SELECT 42 AS value', [])).rows[0].value, 42);
+      const converted = await owned.query(sql\`SELECT \${json({ok: true})}::jsonb AS payload, \${param([1, null, 2], builtin.int4Array)}::int[] AS ids\`, {returns: 'one'});
+      assert.deepEqual(converted, {payload: {ok: true}, ids: [1, null, 2]});
       await assert.rejects(owned.query(sql\`SELECT 1 WHERE false\`, { returns: 'one' }), error => {
         assert.ok(error instanceof CardinalityError);
         assert.equal(error.code, 'TENON_CARDINALITY_MISMATCH');

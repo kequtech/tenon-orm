@@ -39,45 +39,41 @@ test('compiled queries stay unnamed and retain native pgclear metadata', async (
   );
 });
 
-test(
-  'a JSON serialization failure preserves guarded transaction recovery',
-  { timeout: 10000 },
-  async (t) => {
-    const native = createPool({ connectionString: testConnection, maxConnections: 1 });
-    const db = createTenon({ connection: native });
-    t.after(async () => {
-      await db.close();
-      await native.close();
-    });
-    await native.withSession((session) =>
-      session.script(`CREATE TEMP TABLE preparation_json (payload jsonb);
+test('encoding failures preserve guarded transaction recovery', { timeout: 10000 }, async (t) => {
+  const native = createPool({ connectionString: testConnection, maxConnections: 1 });
+  const db = createTenon({ connection: native });
+  t.after(async () => {
+    await db.close();
+    await native.close();
+  });
+  await native.withSession((session) =>
+    session.script(`CREATE TEMP TABLE preparation_json (payload jsonb);
       CREATE TEMP TABLE preparation_audit (value text)`),
-    );
-    const insert = (payload: object) =>
-      sql`INSERT INTO preparation_json VALUES (${json(payload)}::jsonb)`;
-    await db.transaction(async (tx) => {
-      await tx.query(sql`INSERT INTO preparation_audit VALUES (${'kept'})`);
-      await assert.rejects(tx.query(insert({ invalid: 1n }), { affectedRows: { exact: 1 } }), {
-        code: 'PGCLEAR_ENCODE',
-      });
-      await assert.rejects(
-        tx.query(sql`INSERT INTO preparation_audit VALUES (${1n}::text)`, {
-          affectedRows: { exact: 1 },
-        }),
-        { code: 'PGCLEAR_ENCODE' },
-      );
-      await tx.query(insert({ valid: true }), { affectedRows: { exact: 1 } });
+  );
+  const insert = (payload: object) =>
+    sql`INSERT INTO preparation_json VALUES (${json(payload)}::jsonb)`;
+  await db.transaction(async (tx) => {
+    await tx.query(sql`INSERT INTO preparation_audit VALUES (${'kept'})`);
+    await assert.rejects(tx.query(insert({ invalid: 1n }), { affectedRows: { exact: 1 } }), {
+      code: 'PGCLEAR_ENCODE',
     });
-    assert.deepEqual(
-      [...(await native.queryClassic('SELECT * FROM preparation_json', [])).rows],
-      [{ payload: { valid: true } }],
+    await assert.rejects(
+      tx.query(sql`INSERT INTO preparation_audit VALUES (${new Date(NaN)}::text)`, {
+        affectedRows: { exact: 1 },
+      }),
+      { code: 'PGCLEAR_ENCODE' },
     );
-    assert.deepEqual(
-      [...(await native.queryClassic('SELECT * FROM preparation_audit', [])).rows],
-      [{ value: 'kept' }],
-    );
-  },
-);
+    await tx.query(insert({ valid: true }), { affectedRows: { exact: 1 } });
+  });
+  assert.deepEqual(
+    [...(await native.queryClassic('SELECT * FROM preparation_json', [])).rows],
+    [{ payload: { valid: true } }],
+  );
+  assert.deepEqual(
+    [...(await native.queryClassic('SELECT * FROM preparation_audit', [])).rows],
+    [{ value: 'kept' }],
+  );
+});
 
 test(
   'a concurrent serialization failure rejects its own query without shifting other results',

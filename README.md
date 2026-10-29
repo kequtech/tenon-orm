@@ -4,12 +4,13 @@ A PostgreSQL ORM designed for coding agents. Built for Node.js and TypeScript.
 
 Write SQL directly, bind values with a template tag, and reuse queries through ordinary functions.
 Tenon provides transactions, affected-row guards, SQL migrations, generated database types, and
-query inspection and optional source-aware checking. Execution, Describe, codecs, and database type
-generation come from the required
-`@kequtech/pgclear` peer dependency (0.2.0 or later 0.x), which applications can update independently.
+query inspection and optional source-aware checking. Tenon owns database declarations and application
+TypeScript tooling. Execution, Describe, and value conversion come from the
+`@kequtech/pgclear` runtime dependency. Import `sql`, `json`, `param`, and codec helpers from
+Tenon for application queries; no separate driver installation is needed.
 
 ```sh
-npm install @kequtech/tenon-orm @kequtech/pgclear
+npm install @kequtech/tenon-orm
 ```
 
 Requires Node.js 24+, PostgreSQL 16+, and ESM. TypeScript consumers need TypeScript 6+ and Node
@@ -41,8 +42,10 @@ The example assumes `public.users` exists. In a server, reuse the instance and c
 `returns` for the driver's result object and metadata.
 
 Command `rowCount` values are numbers. SQL `count(*)`, bigint/bigserial columns, and bigint array
-elements read as exact strings. Bind int8 inputs as strings or with pgclear `param(text, builtin.int8)`;
-plain JavaScript bigint parameters reject. See the [value mappings](docs/reference.md#generated-types-and-checking).
+elements read as exact strings by default. Plain bigint, Date, and supported native/polyfilled
+Temporal inputs use server type inference; output conversions to bigint, Date, or Temporal are
+explicit codec choices. JSON and PostgreSQL arrays use explicit helpers. See the
+[value mappings](docs/reference.md#generated-types-and-checking).
 
 Joins, relationships, aggregates, and upserts use PostgreSQL SQL. Object-based writes can use
 `sql.insertValues` and `sql.assignments` while keeping the surrounding statement explicit.

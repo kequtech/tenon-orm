@@ -31,12 +31,15 @@ test('execution and inspection share pgclear defaults with SQL NULL array elemen
     assert.deepEqual(row.json, { ok: true });
     assert.equal(row.big, '9007199254740993');
     assert.equal(row.infinite, 'infinity');
+    // @ts-expect-error Tenon's tag cannot be sent to the native tag API
+    await assert.rejects(db.native.query(sql`SELECT 1`), { code: 'PGCLEAR_ENCODE' });
     await assert.rejects(db.query(sql`SELECT ${undefined}::text AS value`), {
       code: 'PGCLEAR_ENCODE',
     });
-    await assert.rejects(db.query(sql`SELECT ${9007199254740993n}::bigint AS value`), {
-      code: 'PGCLEAR_ENCODE',
-    });
+    assert.deepEqual(
+      await db.query(sql`SELECT ${9007199254740993n}::bigint AS value`, { returns: 'one' }),
+      { value: '9007199254740993' },
+    );
     const query = sql`SELECT ${'{t,NULL,f}'}::boolean[] AS flags, ${param(['x', null, 'NULL'], builtin.textArray)}::text[] AS texts,
       ${param(['9007199254740993', null], builtin.int8Array)}::bigint[] AS bigs, ${param(['9007199254740993.25', null], builtin.numericArray)}::numeric[] AS decimals,
       ${JSON.stringify(['one', null])}::jsonb AS json`;

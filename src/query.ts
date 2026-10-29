@@ -176,6 +176,6 @@ export function assertQuery(value: unknown): asserts value is SqlQuery {
     !('values' in value) ||
     !Array.isArray(value.values)
   ) {
-    throw new Error('Expected a query created with sql or unsafeSql.');
+    throw new Error('Expected a query created with sql or unsafeSql from @kequtech/tenon-orm.');
   }
 }

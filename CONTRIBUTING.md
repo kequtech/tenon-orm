@@ -7,8 +7,8 @@ committed lockfile. Public usage starts at the [README](README.md); the complete
 Historical investigations and superseded proposals belong in `notes/`, which is excluded from the
 package. See the [archived Pgclear review](notes/pgclear-author-feedback-2026-10-28.md) for the
 original adoption investigation; current contracts belong in the consumer reference.
-The [codec integration brief](notes/tenon-pgclear-integration-brief.md) defines the next parallel
-Pgclear/Tenon work and its dependency release gate.
+The [codec integration brief](notes/tenon-pgclear-integration-brief.md) records the agreed
+Pgclear/Tenon boundary and dependency release checks.
 
 ```sh
 npm ci
@@ -37,6 +37,19 @@ actual artifact, compile public/generated types with TypeScript 6 and 7, and exe
 CLI without development dependencies. They prefer npm's cache and fetch missing packages/metadata.
 The suite is self-contained and requires no application checkout or third-party ORM installation.
 
+For an unpublished Pgclear candidate, install its fresh tarball without changing the dependency
+lock, then pass that same artifact to packed-consumer tests explicitly:
+
+```sh
+npm install --no-save --package-lock=false --ignore-scripts /absolute/path/pgclear-candidate.tgz
+TENON_TEST_PGCLEAR_TARBALL=/absolute/path/pgclear-candidate.tgz npm run check
+```
+
+Packed-consumer candidate tests explicitly override Tenon's transitive driver dependency as well.
+Ordinary checks resolve the declared registry dependency. Candidate checks do not establish that a
+published dependency is available; finalize the semver dependency and lockfile against the actual
+published release before publishing Tenon. Keep local tarball paths out of release dependencies.
+
 Test observable behavior and compiler contracts. Include focused regressions for bugs; avoid tests
 that depend on prose wording. For documentation examples, verify the assumed schema, imports,
 input/output types, and execution behavior against the implementation. Keep relative consumer links
@@ -59,15 +72,17 @@ not edit an application's applied history.
 Public exports are in `src/index.ts`. `query.ts` compiles detached SQL/fragments; `mutations.ts`
 builds object-write fragments. `client.ts` validates calls and reads results; `transaction.ts` owns
 callback boundaries and guarded-write savepoints. `connection.ts` owns pool lifetime and binds SQL.
-pgclear owns execution, recovery, Describe, codec mapping, and database type generation. Tenon
-uses the public driver API and a required peer dependency; follow
+pgclear owns execution, recovery, Describe, and codec representation metadata. Tenon owns schema
+catalog queries, defaults/domains/identities, schema summaries, declaration rendering, and source
+checking. Use the public driver API and the 0.3.x runtime dependency; follow
 [CONSIDERATIONS.md](CONSIDERATIONS.md) when changing that boundary.
 
 Generation, migrations, and inspection separate catalog/SQL work from file output and CLI handling.
 The CLI dispatches these operations. Source checking lives in src/check/: project context and
 symbol resolution, bounded composition recovery, contract comparison, and structured reports.
-TypeScript is a runtime tooling dependency, loaded only through the check command or check subpath. `dist/` and `.test-dist/` are disposable; build removes both
-before compiling, and `npm run clean` removes them independently.
+TypeScript is a runtime tooling dependency, loaded only through the check command or check subpath.
+`dist/` and `.test-dist/` are disposable; build removes both before compiling, and `npm run clean`
+removes them independently.
 
 ## Release checks
 
@@ -75,6 +90,12 @@ Run the full checks and inspect both PostgreSQL CI results, the source diff, and
 `npm pack --dry-run`. The artifact includes compiled code/declarations, README, license, the
 consumer guides, and changelog. The consumer test checks relative documentation targets in the
 installed package.
+
+From a clean registry installation (`npm ci`), run `npm publish --dry-run` against the dedicated test
+database before publishing. This exercises `prepublishOnly` (the full checks) and `prepack` (the
+clean build), then lists the actual package contents without publishing. The final build removes
+`.test-dist/`; that is expected. Verify the manifest and lockfile agree on the release version and
+that the driver resolves to a published registry release, without a candidate tarball override.
 
 Keep changelog entries concise: describe consumer-visible changes and required upgrade actions. The
 bundled changelog is the version history for agents upgrading projects; driver investigations belong

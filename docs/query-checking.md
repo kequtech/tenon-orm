@@ -59,11 +59,12 @@ narrow declaration is not rejected merely because Describe supplies a broader re
 SQL variant must fit at least one member of a declared result union. Additional selected columns are
 allowed by structural result types; missing required properties fail.
 
-Input and read contracts are separate: int8 accepts exact text or an explicit encoder and decodes
-as exact strings. Boolean, bytes, and recoverable pgclear json/param calls supply the same OID hints
-as execution. Unions with different hints produce variants. String/number types do not prove server
-ranges or textual formats. Plain bigint, objects, arrays, Date, and undefined contradict pgclear's bind API;
-use explicit parameters or encode text. A declared opaque pgclear Parameter is trusted, with its OID
+Input and read contracts are separate: int8 accepts exact text, bigint, or an explicit encoder and decodes
+as exact strings by default. Plain bigint, Date, and supported native/polyfilled Temporal inputs use
+OID 0 and server inference, just as strings and numbers do. Boolean, bytes, and recoverable pgclear
+json/param calls supply the same explicit OID hints as execution. Unions with different hints produce
+variants. Accepted input types do not prove server ranges, valid Date values, or textual formats.
+Plain objects, arrays, and undefined contradict pgclear's bind API; use explicit parameters or omission. A declared opaque pgclear Parameter is trusted, with its OID
 reported as unproven. Describe then uses server inference; dependent result comparisons and inference
 errors are unproven rather than contradictions. This is a stated limitation, not validation of the
 unknown encoder.
@@ -158,32 +159,42 @@ The checking API has its own entry point so ordinary execution does not load Typ
 
 ```ts
 import { checkQueries } from '@kequtech/tenon-orm/check';
-import { defaultCodecs } from '@kequtech/pgclear';
+import { defaultCodecs } from '@kequtech/tenon-orm';
 
 const codecs = defaultCodecs.with({
   oid: 23,
-  text: { encode: String, decode: (raw) => ({ raw }) },
+  text: {
+    encode: (value: { raw: string }) => value.raw,
+    decode: (raw) => ({ raw }),
+    typescript: 'import("./src/types.js").DecodedInteger',
+  },
 });
 const report = await checkQueries({
   connection,
   project: 'tsconfig.json',
   target: 'src/users.ts:23',
   codecs,
-  readTypes: { 23: 'import("./src/types.js").DecodedInteger' },
 });
 if (!report.ok) process.exitCode = 1;
 ```
 
-Pass the same registry used by execution. Known non-NULL read representations come from
-codecs.typescript(oid), following wire OIDs and array overrides. Supply readTypes only for an
-unidentified custom decoder; a mapping cannot replace a known registry representation or claim a
-JSON member shape for default JSON decoding. Type expressions resolve from the tsconfig directory
-and may import application types. Those modules are read by TypeScript and never executed.
+The example assumes `src/types.ts` exports `DecodedInteger = { raw: string }`. Pass the same
+registry used by execution. Its known non-NULL read expressions, including declared custom types and
+derived arrays, come from `codecs.typescript(oid)` and `codecs.typescriptTypes()`. Tenon compiles them
+in the application's TypeScript context without importing or executing application modules.
+
+Supply `readTypes: { 23: 'import("./src/types.js").DecodedInteger' }` only when that decoder has no
+known representation, for example when an existing codec cannot be annotated. A mapping cannot
+replace a known registry representation or claim a JSON member shape for default JSON decoding.
+Type expressions resolve from the tsconfig directory; referenced application types/dependencies must
+be available there. A decoder declaration describes what conversion returns, not a validation pass
+performed by the checker.
 
 The CLI uses default codecs. Custom registry configuration belongs in an application-owned checking
 script calling this API. The application chooses that script's configuration; the checker does not
 import configuration or an application entry point automatically.
 
-pgclear owns execution, Describe, conversion knowledge, and database type generation. Tenon owns
-source discovery, composition recovery, TypeScript comparison, diagnostics, and file output.
+pgclear owns execution, Describe, value conversion, and codec representation metadata. Tenon owns
+schema queries and declaration rendering as well as source discovery, composition recovery,
+TypeScript comparison, diagnostics, and file output.
 `tenon generate --check` remains a separate generated-file freshness check.

@@ -13,12 +13,14 @@ query-function examples belong in their own module.
 In an existing Node.js 24+ TypeScript project using ESM:
 
 ```sh
-npm install @kequtech/tenon-orm @kequtech/pgclear
+npm install @kequtech/tenon-orm
 ```
 
 Use PostgreSQL 16+ and TypeScript 6+. Keep your existing strict TypeScript configuration and Node
-typings, with pgclear 0.2.0 or later 0.x. Supply `DATABASE_URL` through your application's environment setup; Tenon does not load
-`.env` files.
+typings. Tenon includes pgclear 0.3.x. Supply `DATABASE_URL` through your application's
+environment setup; Tenon does not load `.env` files. Import `sql`, `json`, `param`, and codec helpers
+from `@kequtech/tenon-orm` for application queries. See [driver updates](reference.md#driver-updates)
+when updating Pgclear independently.
 
 ```ts
 // src/db.ts
@@ -104,7 +106,9 @@ throws if the query returns more than one row. Use `'one'` when absence should a
 
 `rowCount` is a number or null when the command has no count. SQL `count(*)` and bigint/bigserial
 column values are exact strings, including values beyond JavaScript's safe integer range. Use
-strings or pgclear `param(text, builtin.int8)` for int8 parameters; plain bigint binds reject.
+strings, bigint, or pgclear `param(text, builtin.int8)` for int8 parameters. Plain Date and supported
+Temporal inputs also work; they do not change the default string outputs. Date inputs encode in UTC.
+Opt-in codecs can return Date, bigint, or Temporal values when the application needs them.
 
 Generated table types can help describe projections without repeating every field:
 
@@ -112,6 +116,9 @@ Generated table types can help describe projections without repeating every fiel
 import type { Database } from './generated-schema.js';
 type UserSummary = Pick<Database['users']['row'], 'id' | 'email'>;
 ```
+
+For frequently used types, define [application aliases](reference.md#application-aliases) such as
+`UserRow`, `UserInsert`, and `UserUpdate` in a handwritten module.
 
 You can then write `sql<UserSummary>`. A table type describes the full table; a join or aggregate
 needs a type for what that particular query selects. An annotation is a declaration, not proof that

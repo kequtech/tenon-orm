@@ -1,3 +1,14 @@
+// Reuse Pgclear's value conversion helpers without exposing its separate SQL tag.
+export { builtin, createTemporalCodecs, defaultCodecs, json, param } from '@kequtech/pgclear';
+export type {
+  Codec,
+  CodecRegistry,
+  Parameter,
+  PgArray,
+  TemporalConstructors,
+  TemporalInput,
+} from '@kequtech/pgclear';
+
 export type { Connection, ConnectionOptions, QueryResult } from './connection.js';
 export type { AffectedRowsConstraint } from './affected-rows.js';
 export { createTenon } from './database.js';

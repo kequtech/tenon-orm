@@ -6,11 +6,12 @@ read the [Changelog](../CHANGELOG.md).
 
 ## Upgrade from Tenon 0.3.x
 
-Tenon 0.4 uses pgclear 0.2.0 or later 0.x in place of pg. Keep the existing database, credentials,
-migration history, and application query functions. With npm, update both packages together:
+Tenon 0.4 uses pgclear 0.3.x in place of pg. Keep the existing database, credentials,
+migration history, and application query functions. Pgclear is included as a runtime dependency.
+With npm, update Tenon:
 
 ```sh
-npm install @kequtech/tenon-orm@^0.4.0 @kequtech/pgclear@^0.2.0
+npm install @kequtech/tenon-orm@^0.4.0
 ```
 
 Use the project's existing package manager and then review these boundaries:
@@ -20,15 +21,21 @@ Use the project's existing package manager and then review these boundaries:
    not read PG environment variables, pgpass, service files, or pg-specific URI options.
 2. Keep Tenon `sql`, `QueryClient`, result modes, and callback transactions. Update native calls to
    pgclear APIs: use `queryClassic(text, values?)` for finished SQL, release acquired sessions, and
-   close dedicated listeners separately. Tenon's sql tag is distinct from pgclear's native tag.
+   close dedicated listeners separately. Import `sql`, `json`, `param`, and codec helpers from
+   `@kequtech/tenon-orm`. If native driver code also uses Pgclear's tag, alias it as `pgSql`; its query
+   objects belong in native `query`, while Tenon's query objects belong in `db.query`.
 3. Review temporal strings, readonly result arrays, Uint8Array bytes, exact string integer/numeric
-   arrays, and JSON/array inputs. Use `json(value)`, `param(value, codec)`, or encoded text; replace
-   Date binds with an intended temporal string and plain bigint binds with exact strings. Command
-   rowCount remains a number or null. See [value mappings](reference.md#generated-types-and-checking).
+   arrays, and JSON/array inputs. Use `json(value)`, `param(value, codec)`, or encoded text for JSON
+   and arrays. Plain Date, bigint, and supported Temporal inputs are accepted with server inference;
+   Date encodes in UTC. They do not change output types. Command rowCount remains a number or null.
+   See [value mappings](reference.md#generated-types-and-checking).
 4. Regenerate database declarations against the intended development/test schema. Replace former
    `Rows['users']`, `Rows.Insert['users']`, and `Rows.Update['users']` accesses with
    `Database['users']['row']`, `Database['users']['insert']`, and `Database['users']['update']`.
-   Review the generated diff and exclude exact generator output from formatting.
+   Tenon owns generation and uses the configured driver's codec representations. If code imports
+   `generateDefinitions` from pgclear, import it from Tenon and use Tenon's options instead. Review
+   the generated diff and exclude exact generator output from formatting. Generated helper types
+   now import from Tenon; applications do not need a separate Pgclear dependency for them.
 5. Run the project's typecheck and database tests for queries, transactions, JSON/arrays, and native
    integrations. Add optional source checking where composition is recoverable; optional patches
    and runtime-dependent SQL may remain unchecked. See [validation tools](reference.md#choosing-a-validation-tool).
@@ -75,8 +82,8 @@ application code or SQL where required.
 2. Replace queries with parameterized SQL in ordinary functions accepting `QueryClient` where
    callers may supply `db` or `tx`. Retain projections, ordering, null handling, and authorization.
 3. Review value conversions against [Tenon's mappings](reference.md#generated-types-and-checking).
-   Pgclear 0.2.0 reads int8/bigserial and SQL count(*) as exact strings; command rowCount is a
-   number. Replace plain bigint binds with strings or param(text, builtin.int8). Numeric values,
+   Pgclear defaults read int8/bigserial and SQL count(*) as exact strings; command rowCount is a
+   number. Bigint, Date, and supported Temporal inputs use server inference. Numeric values,
    dates, arrays, and JSON serialization may also differ from the previous driver. Regenerate
    declarations when mappings change; they do not replace domain validation.
 4. Run the optional [source-aware checker](query-checking.md) for recoverable queries, inspect

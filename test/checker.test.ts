@@ -64,6 +64,115 @@ function errors(report: CheckReport) {
   return report.diagnostics.filter(({ kind }) => kind !== 'unproven');
 }
 
+test('codec metadata resolves imported scalar types, derived arrays and explicit array overrides', async () => {
+  await sourceProject(
+    {
+      'model.ts': [
+        'export interface Value { raw: string }',
+        'export interface ArrayValue { rawArray: string }',
+        'throw new Error("Application type modules must never execute");',
+      ].join('\n'),
+      'queries.ts': [
+        tag,
+        "import type {Value} from './model.js';",
+        "import type {PgArray} from '@kequtech/pgclear';",
+        'export const output = sql<{id: Value; ids: PgArray<Value>}>`SELECT 42::integer AS id, ARRAY[1,NULL,2]::integer[] AS ids`;',
+      ].join('\n'),
+      'array.ts': [
+        tag,
+        "import type {ArrayValue} from './model.js';",
+        'export const output = sql<{ids: ArrayValue}>`SELECT ARRAY[1,NULL,2]::integer[] AS ids`;',
+      ].join('\n'),
+    },
+    async (options, directory) => {
+      const codecs = defaultCodecs.with({
+        oid: 23,
+        text: {
+          encode: String,
+          decode: (raw) => ({ raw }),
+          typescript: 'import("./model.js").Value',
+        },
+      });
+      const target = join(directory, 'queries.ts');
+      const derived = await checkQueries({ ...options, target, codecs });
+      assert.equal(derived.ok, true, JSON.stringify(derived.diagnostics));
+      assert.ok(!derived.diagnostics.some(({ code }) => code === 'result-representation-unproven'));
+      const overridden = await checkQueries({
+        ...options,
+        target: join(directory, 'array.ts'),
+        codecs: codecs.with({
+          oid: 1007,
+          text: {
+            encode: String,
+            decode: (rawArray) => ({ rawArray }),
+            typescript: 'import("./model.js").ArrayValue',
+          },
+        }),
+      });
+      assert.equal(overridden.ok, true, JSON.stringify(overridden.diagnostics));
+      assert.ok(
+        !overridden.diagnostics.some(({ code }) => code === 'result-representation-unproven'),
+      );
+      await assert.rejects(
+        checkQueries({ ...options, target, codecs, readTypes: { 23: 'string' } }),
+        /already has a known representation/,
+      );
+    },
+  );
+});
+
+test('declared codec representations must compile in the selected project', async () => {
+  await sourceProject(
+    { 'queries.ts': `${tag}\nexport const output = sql<{id: unknown}>\`SELECT 42 AS id\`;` },
+    async (options) => {
+      for (const typescript of ['MissingApplicationType', '() =>']) {
+        await assert.rejects(
+          checkQueries({
+            ...options,
+            codecs: defaultCodecs.with({
+              oid: 23,
+              text: { encode: String, decode: (value) => value, typescript },
+            }),
+          }),
+          /Cannot resolve checker representation types/,
+        );
+      }
+    },
+  );
+});
+
+test('representation imports validate transitive type dependencies without selecting unrelated files', async () => {
+  await sourceProject(
+    {
+      'queries.ts': `${tag}\nexport const output = sql<{id: unknown}>\`SELECT 42 AS id\`;`,
+      'model.ts': 'export type {Value} from "./broken.js";',
+      'broken.ts': 'export type Value = MissingApplicationType;',
+      'unrelated.ts': 'export const invalid: number = "unrelated error";',
+    },
+    async (options, directory) => {
+      const target = join(directory, 'queries.ts');
+      const codecs = defaultCodecs.with({
+        oid: 23,
+        text: {
+          encode: String,
+          decode: (raw) => ({ raw }),
+          typescript: 'import("./model.js").Value',
+        },
+      });
+      await assert.rejects(
+        checkQueries({ ...options, target, codecs }),
+        /Cannot resolve checker representation types:.*MissingApplicationType/,
+      );
+      await writeFile(join(directory, 'broken.ts'), 'export interface Value { raw: string }');
+      const report = await checkQueries({ ...options, target, codecs });
+      assert.equal(report.ok, true, JSON.stringify(report.diagnostics));
+      assert.ok(!report.diagnostics.some(({ code }) => code === 'result-representation-unproven'));
+      const ordinary = await checkQueries({ ...options, target });
+      assert.equal(ordinary.ok, true, JSON.stringify(ordinary.diagnostics));
+    },
+  );
+});
+
 test('the checker resolves imported aliases, indexed types, Pick, unions and barrel exports without evaluating code', async () => {
   await sourceProject(
     {
@@ -384,20 +493,20 @@ test('untyped, optional, open and dynamic object expansions never become guessed
   );
 });
 
-test('parameter encoders, nullable hints and rejected bigint inputs follow pgclear', async () => {
+test('parameter encoders, nullable hints, Date and bigint inputs follow pgclear', async () => {
   await sourceProject(
     {
       'queries.ts': [
         tag,
-        "import {param, json, builtin} from '@kequtech/pgclear';",
+        "import {param, json, builtin} from '@kequtech/tenon-orm';",
         'declare const flag: boolean | null;',
         'export const nullable = sql<{value: boolean | null}>`SELECT ${flag} AS value`;',
         'export const encoded = sql<{items: unknown; payload: unknown; big: string}>`SELECT ${param([1, 2], builtin.int4Array)} AS items, ${json({x: 1})} AS payload, ${param("9007199254740993", builtin.int8)} AS big`;',
         'export const integerText = unsafeSql<{id: string}>("SELECT $1::bigint AS id", ["42"]);',
-        'export const invalid = sql`SELECT ${new Date()}::text AS value`;',
+        'export const date = sql<{value: string}>`SELECT ${new Date()}::text AS value`;',
         'declare const big: bigint | null;',
-        'export const invalidBig = sql`SELECT ${big}::bigint AS value`;',
-        'export const invalidLiteral = sql`SELECT ${9007199254740993n}::bigint AS value`;',
+        'export const bigInput = sql<{value: string | null}>`SELECT ${big}::bigint AS value`;',
+        'export const bigLiteral = sql<{value: string}>`SELECT ${9007199254740993n}::bigint AS value`;',
       ].join('\n'),
     },
     async (options) => {
@@ -407,14 +516,42 @@ test('parameter encoders, nullable hints and rejected bigint inputs follow pgcle
       // A bare NULL parameter defaults to text; declaring boolean cannot cover that variant.
       assert.ok(report.queries[0]!.diagnostics.some(({ code }) => code === 'result-type-mismatch'));
       assert.ok(!report.queries[1]!.diagnostics.some(({ kind }) => kind === 'mismatch'));
+      assert.ok(
+        !report.queries[1]!.diagnostics.some(({ code }) => code === 'encoder-oid-unproven'),
+      );
       assert.ok(!report.queries[2]!.diagnostics.some(({ kind }) => kind === 'mismatch'));
+      for (const query of report.queries.slice(3)) {
+        assert.equal(query.status, 'analysed');
+        assert.ok(!query.diagnostics.some(({ kind }) => kind === 'mismatch'));
+      }
+    },
+  );
+});
+
+test('Date, bigint and supported Temporal inputs use server inference rather than fixed OIDs', async () => {
+  await sourceProject(
+    {
+      'queries.ts': [
+        tag,
+        "import type {TemporalInput} from '@kequtech/pgclear';",
+        'declare const instant: TemporalInput;',
+        'declare const unsupported: {readonly [Symbol.toStringTag]: "Temporal.PlainYearMonth"; toString(): string};',
+        'export const date = sql<{size: number}>`SELECT length(${new Date()}) AS size`;',
+        'export const bigint = sql<{size: number}>`SELECT length(${9007199254740993n}) AS size`;',
+        'export const temporal = sql<{size: number}>`SELECT length(${instant}) AS size`;',
+        'export const rejected = sql`SELECT ${unsupported}::text AS value`;',
+      ].join('\n'),
+    },
+    async (options) => {
+      const report = await checkQueries(options);
+      assert.equal(report.queries.length, 4);
+      for (const query of report.queries.slice(0, 3)) {
+        assert.equal(query.variants, 1);
+        assert.ok(!query.diagnostics.some(({ kind }) => kind === 'mismatch'));
+      }
       assert.ok(
         report.queries[3]!.diagnostics.some(({ code }) => code === 'parameter-type-mismatch'),
       );
-      for (const query of report.queries.slice(4)) {
-        assert.equal(query.status, 'analysed');
-        assert.ok(query.diagnostics.some(({ code }) => code === 'parameter-type-mismatch'));
-      }
     },
   );
 });

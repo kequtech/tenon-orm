@@ -6,23 +6,29 @@ contract. Each agent edits its own repository and preserves existing work in the
 
 ## Responsibilities
 
-| Responsibility                                                                                                                  | Owner       |
-| ------------------------------------------------------------------------------------------------------------------------------- | ----------- |
-| Wire protocol, bind encoding, result decoding, sessions, recovery, and shutdown                                                 | Pgclear     |
-| Effective decoder representations, including scalar overrides and derived arrays                                                | Pgclear     |
-| SQL composition, source discovery, TypeScript compilation/comparison, and diagnostics                                           | Tenon       |
-| Application-facing schema/query declarations, generated-file policy, migration coordination, and column-specific mapping policy | Tenon       |
-| Domain meaning, JSON validation, authorization, and application invariants                                                      | Application |
+| Responsibility                                                                                                     | Owner       |
+| ------------------------------------------------------------------------------------------------------------------ | ----------- |
+| Wire protocol, bind encoding, result decoding, sessions, recovery, and shutdown                                    | Pgclear     |
+| Effective decoder representations, including scalar overrides and derived arrays                                   | Pgclear     |
+| SQL composition, source discovery, TypeScript compilation/comparison, and diagnostics                              | Tenon       |
+| Schema catalog queries, defaults/domains/identities, schema summaries, and row/insert/update rendering             | Tenon       |
+| Application-facing declarations, generated-file policy, migration coordination, and column-specific mapping policy | Tenon       |
+| Domain meaning, JSON validation, authorization, and application invariants                                         | Application |
 
 A codec that returns Date, bigint, or a validated object changes actual runtime values. Its declared
 representation belongs with that codec. Calling an ordinary JSON value `UserPreferences`, or a text
 column `EmailAddress`, is an application contract; it is not established by a PostgreSQL OID.
 Codec metadata is a trusted decoder declaration, not an additional runtime validator.
 
-Tenon currently delegates schema rendering to Pgclear `generateDefinitions`. Keep that implementation
-for this integration: it avoids duplicate conversion tables. Pgclear's helper remains reusable
-storage tooling; application mappings and TypeScript project configuration must not grow into it.
-Moving the renderer into Tenon is a separate change if application generation needs demonstrate it.
+Move the existing generator implementation and relevant regressions from Pgclear into Tenon. Preserve
+the useful `Database[table]['row' | 'insert' | 'update']` contract and schema summaries; do not build
+a second conversion registry. Pgclear supplies conversion facts and codec representations, while
+Tenon chooses conservative per-column write types and renders the declarations.
+
+This replaces the earlier instruction to retain delegation. Pgclear's next breaking minor release
+removes its published `generateDefinitions`/`GenerateOptions` exports and documents migration to
+Tenon. Published Pgclear 0.2.0 remains unchanged. There is no circular compatibility wrapper or
+new schema-model package.
 
 ## Shared contract
 
@@ -43,24 +49,36 @@ Moving the renderer into Tenon is a separate change if application generation ne
   runtime dependency or global polyfill is installed automatically.
 - JSON and PostgreSQL arrays retain their explicit helpers. Input acceptance does not determine
   output types, and Describe does not validate input formats, ranges, nullability, or cardinality.
+- Pgclear exposes the immutable selected registry as readonly `executor.codecs`. Object- and
+  array-row query options accept `codecs`, for example
+  `queryClassic(text, values, { codecs: defaultCodecs })`. These confirmed public conversion APIs
+  select result decoding without mutating executor defaults or explicit parameter encoders.
+- Tenon reads catalogs on its borrowed session and repeatable-read snapshot using default codecs,
+  while rendering application columns against the session's selected registry. Preserve role,
+  temporary objects, session state, migration locks, and cleanup; do not open a second connection
+  merely to avoid codec overrides. Tenon imports no private driver modules.
 
 ## Work in parallel
 
 The Pgclear agent works in `/home/kequc/projects/kequtech/pgclear`:
 
-1. Finalize the contract above, declarations, codec/generation behavior, documentation, and tests.
-   Preserve the agreed string defaults and explicit JSON/array rules.
+1. Finalize the contract above, runtime declarations, documentation, and tests. Preserve the agreed
+   string defaults and explicit JSON/array rules.
 2. Verify arbitrary scalar expressions and derived arrays, including function types and references
    to application types. Keep representation discovery public so Tenon needs no driver internals.
 3. Prepare a fresh packed build and provide its absolute path, package version, integrity, source
    revision, and validation results. Identify any uncommitted source included in the build.
-4. Select a distinct next release version. Published 0.2.0 lacks the new APIs and must not be
-   replaced. Do not edit Tenon files or apply the trial patch to its checkout.
+4. Expose selected-registry access and per-operation result-codec selection through public APIs.
+   Test borrowed sessions, transactions, lifecycle guards, and concurrent operations; query codec
+   selection must not mutate connection defaults or parameter encoders.
+5. Remove the schema generator and its exports in Pgclear 0.3.0 with explicit migration notes. Tenon
+   has snapshotted the existing generator for the move. Do not duplicate it or edit Tenon files.
+   Transfer any remaining generation-specific edge cases as evidence for Tenon's tests.
 
 The Tenon agent works in `/home/kequc/projects/kequtech/tenon-orm`:
 
-1. Commit the current 0.4.0 preparation as a reproducible checkpoint using published Pgclear 0.2.0.
-   It does not yet include the unpublished codec/input changes. Keep this brief outside npm output.
+1. Preserve checkpoint `aa2e127` (0.4.0 preparation using published Pgclear 0.2.0). Implement the
+   boundary change after it and keep this brief outside npm output.
 2. Review `.trial-dist/tenon-codec-support.patch` in the Pgclear checkout as a reference. Load all
    expressions from the selected registry, including the default registry, into the checker virtual
    module. Resolve types without executing application modules.
@@ -71,7 +89,11 @@ The Tenon agent works in `/home/kequc/projects/kequtech/tenon-orm`:
    prefix-only check misses `{ items: PgArray<string> }`.
 5. Preserve `readTypes` for unidentified codecs and the validation against overriding known registry
    representations. Do not silently turn an unresolvable declared expression into a successful check.
-6. Update runtime, generation, Describe, checker, and packed-consumer tests plus all affected guides
+6. Own generation end to end: catalog queries and summaries, defaults/domain/identity interpretation,
+   conservative input policy, declaration rendering, snapshot/lock coordination, and file output.
+   Use Pgclear's public registry and query capabilities and preserve the current declaration shape.
+   Enum labels must not narrow a custom decoder merely because it declares a string result.
+7. Update runtime, generation, Describe, checker, and packed-consumer tests plus all affected guides
    and generated fixtures. The four-file patch and its 22 checker passes do not cover the full suite.
 
 Each agent may inspect the other repository and consume temporary packages. Keep experimental
@@ -80,16 +102,32 @@ before changing public interfaces; neither agent publishes, pushes, or commits t
 
 ## Dependency and release gate
 
-The current Tenon checkpoint requires published Pgclear 0.2.0. The next integration must require the
-distinct Pgclear release that contains `TemporalInput`, codec metadata, and `typescriptTypes()`.
-Optional chaining on the new method does not make an unconditional reference to a missing exported
-type compatible with 0.2.0.
+Pgclear 0.3.0 is published. Tenon requires it through a direct runtime dependency, `^0.3.0`,
+with a registry-backed lockfile. Independent compatible 0.3.x patch updates remain possible without
+a Tenon release; a future breaking 0.4 requires an explicit compatibility update. No driver peer
+or separate installation is required for ordinary Tenon use.
 
-Use a local packed build for integration tests, then update Tenon's development dependency, minimum
-peer, and lockfile to the real published version. Do not ship a local file dependency, invented
-registry integrity, or a peer range admitting drivers without the required API. The checkpoint's
-0.4.0 tarball is not evidence for the later integration; rebuild and validate its final artifact.
-Publishing either package requires explicit user authorization.
+Tenon re-exports Pgclear's `json`, `param`, `builtin`, `defaultCodecs`, `createTemporalCodecs`, and
+their public value/codec types. These are direct exports, with conversion still owned by Pgclear.
+Application examples and generated helper imports use Tenon's entry point and its SQL tag. Native
+listeners and independently created pools may still use an explicit driver dependency. Direct
+installation does not hide Pgclear's SQL tag from editors; the separate tags remain incompatible
+and callers alias the native one when needed.
+
+Use a local packed build for candidate tests only. Final dependencies must use the published
+version and authentic registry integrity; no local file paths or invented integrity belong in the
+release graph. Pgclear 0.3.0's registry integrity matches the validated final local candidate below.
+Rebuild and validate Tenon's final artifact. Publishing Tenon requires explicit user authorization.
+
+The final local driver candidate is recorded by
+`/home/kequc/projects/kequtech/pgclear/.trial-dist/pgclear-0.3.0-final.path`; its directory contains
+`kequtech-pgclear-0.3.0.tgz` and `integration-manifest.json` with integrity, dirty-source provenance,
+validation, and the preview comparison. The original boundary implementation passed all 215 tests
+on PostgreSQL 16 and 18 against that candidate. After publication and the direct-dependency/import
+changes, Tenon passed all 216 tests on PostgreSQL 16 and 18 against the real registry dependency,
+including TypeScript 6/7 packed consumers. Clean `npm ci`, documentation examples, and regenerated
+schema fixtures were also verified. The dependency-publication gate is resolved; Tenon remains
+unpublished. Revalidate any later driver changes before releasing Tenon.
 
 ## Acceptance
 
@@ -97,6 +135,9 @@ Publishing either package requires explicit user authorization.
   scalar, derived-array, and explicit-array codecs. Custom metadata needs no duplicate `readTypes`.
 - Generated and Describe declarations compile under TypeScript 6 and 7, including nullable function
   expressions, nested `PgArray` references, imported application types, and unidentified codecs.
+- Tenon's owned generator preserves snapshot consistency, borrowed session state, codec-safe catalog
+  reads, schema summaries, defaults/domains/identities, history-table exclusion, and output freshness.
+  Pgclear's artifact contains no schema generator or dependency on Tenon.
 - Date/bigint/Temporal inputs use the same OID hints in checking and execution. Include Date and
   bigint coverage on Node 24, supported polyfill coverage, native Temporal coverage where available,
   invalid-input rejection, and unchanged JSON/array encoding behavior.

@@ -77,9 +77,9 @@ export function queryDescription(
   }
   const members = columns.map(
     (c) =>
-      `  ${JSON.stringify(c.name)}: ${c.readType}${c.readType === 'unknown' ? '' : ' | null'};`,
+      `  ${JSON.stringify(c.name)}: ${c.readType === 'unknown' ? c.readType : `(${c.readType}) | null`};`,
   );
-  const array = columns.some((c) => c.readType.startsWith('PgArray<'))
+  const array = columns.some((c) => /\bPgArray\b/.test(c.readType))
     ? 'type PgArray<T> = readonly (T | null | PgArray<T>)[];\n'
     : '';
   return {

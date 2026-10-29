@@ -7,152 +7,78 @@ table from the human guide and an existing `db` instance, unless stated otherwis
 ## Installation and connection
 
 Requires Node.js 24+, PostgreSQL 16+, and ESM. TypeScript consumers need TypeScript 6+ and Node
-development typings. Tenon includes `pg@8.23.1` and its TypeScript declarations; no driver peer or
-special compiler plugin is required. A usual Node TypeScript setup uses `module: "NodeNext"`.
+development typings. Install the required pgclear peer alongside Tenon. The peer range permits
+updates from pgclear 0.2.0 within 0.x independently of Tenon; review pgclear release notes and run
+application checks when updating it. A usual Node TypeScript setup uses `module: "NodeNext"`.
 
 ```sh
-npm install @kequtech/tenon-orm
+npm install @kequtech/tenon-orm @kequtech/pgclear
 ```
 
 `createTenon({ connection, onQuery? })` returns a `Database` with `query`, `transaction`, `native`,
-and `close`. The required `connection` accepts:
-
-- A PostgreSQL URI string.
-- A pg `PoolConfig` object; an explicit `{}` uses the driver's environment defaults.
-- An existing `pg.Pool`, borrowed by identity.
+and `close`. The required `connection` accepts a PostgreSQL URI, pgclear `PoolOptions`, or an existing
+pgclear `Pool`, borrowed by identity. `ConnectionOptions` aliases pgclear's `PoolOptions`.
 
 ```ts
 const db = createTenon({
   connection: {
     connectionString: connection,
-    max: 10,
-    idleTimeoutMillis: 30_000,
-    connectionTimeoutMillis: 30_000,
-    options: '-c search_path=app,public',
+    maxConnections: 10,
+    idleTimeoutMs: 30_000,
+    connectTimeoutMs: 5000,
+    acquireTimeoutMs: 5000,
+    startupParameters: { search_path: 'app,public' },
   },
 });
 ```
 
-Strings become pg's `connectionString`; configuration objects pass to `new Pool(config)`.
-`ConnectionOptions` is an alias for pg's `PoolConfig`. Driver options and defaults are unchanged,
-including no acquisition timeout unless `connectionTimeoutMillis` is configured. Pool timeouts use
-milliseconds. pg parses the URI for connection fields; matching URI values override client
-configuration, including an `options` URI parameter overriding the configuration's `options` string.
-The pool sizes and timeouts above are application choices. Configure pool policy in `PoolConfig`;
-old driver-specific URI settings such as `idle_timeout` do not configure pg's idle timeout. Preserve
-existing URI startup options when appending settings such as UTC and `search_path`.
-Preserve deployment credentials and TLS requirements; see
-[pg connection configuration](https://node-postgres.com/features/connecting).
+Configuration follows pgclear. Object fields override URI settings. Environment variables, pgpass,
+service files, and `.env` files are not loaded by the driver; pass credentials and deployment
+configuration explicitly. An explicit `{}` uses pgclear's localhost/current-user defaults. Use
+`startupParameters` for session settings and `tls` for verified TLS. Unknown options reject.
+See the installed pgclear public API documentation for driver configuration.
 
 Reuse an instance for each database configuration. `db.close({ timeoutMs? })` immediately rejects
-new Tenon work. For owned pools, accepted Tenon operations can drain for up to 5,000 ms by default;
-at the deadline, remaining operations reject and Tenon requests driver termination. `0` skips the
-grace period. The timeout must be an integer from 0 to 2,147,483,647 milliseconds; `CloseOptions` is
-exported. This bounds Tenon's wait, not every native transport's teardown or server execution. It
-sends no PostgreSQL cancellation request and does not cancel JavaScript callbacks. An unbounded
-authentication attempt can keep a connection open after close resolves. Configure pg's
-`connectionTimeoutMillis` when connection establishment also needs a deadline.
+new Tenon calls and delegates owned resource shutdown to pgclear. The default grace period is
+5,000 ms; `0` requests immediate shutdown. Remaining work and checkouts expire at the deadline.
+Timeout must be an integer from 0 to 2,147,483,647 milliseconds. Shutdown waits for owned driver
+resources, not arbitrary JavaScript callbacks or proof of remote rollback.
 
-The first valid close call chooses the timeout. Concurrent and later calls share the same promise
-and outcome. Invalid initial options reject without closing the instance. For borrowed pools, close
-only disables the Tenon wrapper; the application retains the pool and outstanding work. Tenon does
-not load environment files.
+The first valid close call fixes its timeout; concurrent and later calls share its promise and
+outcome. Invalid initial options reject without closing. For borrowed pools, close disables the
+Tenon wrapper while the application retains pool ownership and outstanding work.
 
-Qualify SQL names or configure runtime `search_path`. CLI `--namespace` selects tooling scope; it
-does not configure application queries. Baseline capture and Describe accept connection strings
+Qualify SQL names or configure runtime `search_path`. CLI `--namespace` selects tooling scope;
+it does not configure application queries. Baseline capture and Describe accept connection strings
 rather than the runtime connection union.
 
 ## Native driver access
 
-`db.native` is the actual `pg.Pool`, readonly in TypeScript. Native calls bypass Tenon's result
-modes, affected-row guards, SQL checks, and `onQuery`. They follow pg's query configuration and do
-not join a Tenon transaction; callback clients expose only `tx.query`.
+`db.native` is the actual pgclear `Pool`, readonly in TypeScript. Native calls bypass Tenon's result
+modes, affected-row guards, SQL checks, and `onQuery`. They do not join a Tenon callback transaction;
+callback clients expose only `tx.query`.
 
-Use pg's [native APIs](https://node-postgres.com/apis/pool) and compatible cursor/COPY packages when
-needed. For LISTEN, check out a client with `await db.native.connect()`, attach `notification`,
-`error`, and `end` listeners, and issue `LISTEN` on that client. Keep it checked out while listening;
-release it after `UNLISTEN`. Native queued acquisitions follow pg's shutdown behavior and must be
-settled by their caller before closing. A disconnected client does not reconnect. The application owns
-resubscription and catch-up; notifications are not replayed.
+Use `queryClassic(text, values?)`, `acquire`/`withSession`, `prepare`, streams, and COPY through pgclear's
+public APIs. Held sessions must be released. Use pgclear `listen` for a dedicated notification
+connection with explicit reconnect and lifecycle policy. Notifications have no replay.
 
-Close owned pools through `db.close()` for bounded shutdown, including checked-out native clients.
-Borrowed pools and their listeners remain usable after wrapper close until their owner ends them.
-
-### LISTEN lifecycle example
-
-This helper owns a dedicated single-client pool. It returns an intentional-close function only
-after LISTEN is ready. Callbacks are synchronous; notification exceptions are isolated, and an
-unexpected disconnect invalidates this generation once before notifying its consumer. Failed
-connection acquisition or LISTEN setup closes the owned resources and rejects the setup promise.
+Pgclear's native `query` accepts only its own `sql` tag results. Tenon's `sql` and `unsafeSql` results
+belong in `db.query`; use `queryClassic` for finished SQL text at the native boundary.
 
 ```ts
-import { createTenon } from '@kequtech/tenon-orm';
+import { listen } from '@kequtech/pgclear';
 
-async function listenForChanges(
-  connectionString: string,
-  onChange: (payload: string | undefined) => void,
-  onDisconnect: (error: Error) => void,
-) {
-  const db = createTenon({
-    connection: { connectionString, max: 1, idleTimeoutMillis: 0, connectionTimeoutMillis: 30_000 },
-  });
-  const client = await db.native.connect().catch(async (error: unknown) => {
-    await db.close();
-    throw error;
-  });
-  let active = true;
-  let closing: Promise<void> | undefined;
-
-  function stop(error?: Error): Promise<void> {
-    if (closing) return closing;
-    active = false;
-    closing = Promise.resolve().then(async () => {
-      try {
-        if (error) onDisconnect(error);
-      } finally {
-        client.release(true);
-        await db.close();
-      }
-    });
-    return closing;
-  }
-
-  const failed = (error: Error) => {
-    if (active) void stop(error).catch(console.error);
-  };
-  client.on('error', failed);
-  client.on('end', () => failed(new Error('The notification connection ended.')));
-  client.on('notification', (event) => {
-    if (!active || event.channel !== 'app_changes') return;
-    try {
-      onChange(event.payload);
-    } catch (error) {
-      console.error(error);
-    }
-  });
-  try {
-    await client.query('LISTEN "app_changes"');
-    if (!active) throw new Error('The notification connection closed during setup.');
-  } catch (error) {
-    await stop();
-    throw error;
-  }
-  return () => stop();
-}
+const listener = await listen(connection, {
+  channels: ['users_changed'],
+  onNotification: ({ payload }) => console.log(payload),
+  reconnect: true,
+});
+// At application shutdown:
+await listener.close();
 ```
 
-Both failure and intentional close discard the dedicated checkout with `release(true)` before
-closing its pool, so no UNLISTEN is needed and normal shutdown does not wait for Tenon's deadline.
-The active flag suppresses duplicate error/end callbacks and intentional-close notifications.
-Create a new helper instance to recover, and reconcile missed events through persistent data.
-
-This helper's close function is available after readiness. A manager that also supports replacement
-or shutdown while setup is pending must assign a generation token before awaiting setup. Only the
-current generation may change shared readiness/subscription state or notify its consumers. If stale
-setup later succeeds, close that setup's own listener; if it fails or finishes cleanup, leave the
-replacement alone. Invalidate the current token before intentional shutdown. Keep those guards in
-the application's subscription manager. The fixed channel above is trusted; validate and quote
-application-selected channel names before placing them in native SQL.
+Close owned pools through `db.close()`. A separate listener has its own lifetime; close it explicitly.
+Borrowed pools remain usable until their owner calls `pool.close()`.
 
 ## Queries and result modes
 
@@ -173,11 +99,13 @@ must be a nonempty string.
 | `returns`          | Output                           | Allowed returned rows |
 | ------------------ | -------------------------------- | --------------------- |
 | `native` (default) | `QueryResult<Row>` driver object | Any                   |
-| `many`             | Plain `Row[]`                    | Any                   |
+| `many`             | `readonly Row[]`                 | Any                   |
 | `oneOrNone`        | `Row \| undefined`               | Zero or one           |
 | `one`              | `Row`                            | Exactly one           |
 
-Native results expose `rows`, `rowCount`, `command`, and `fields`, following pg's `QueryResult`.
+Native results expose `rows`, `rowCount`, `command`, `commandTag`, and `fields`, following pgclear's
+`QueryResult`. Counts are `number | null`; row arrays are readonly. Counts outside JavaScript's safe
+integer range reject instead of rounding. SQL `count(*)` is an int8 column value and reads as a string.
 `rowCount` is the command's affected-row count, independent of `RETURNING`; it can be null for
 commands without a count. Result modes never add `LIMIT` or `RETURNING`. A returned-row mismatch
 alone does not undo an autocommitted write; use `affectedRows` for write bounds that roll back.
@@ -201,19 +129,22 @@ async function queryRows(tx: QueryClient, text: string, values: readonly unknown
 Alternatively, request `{ returns: 'many' }` and wrap the returned array in `{ rows }`. Supply the
 callback's `tx` when the adapter's work must commit with application writes. A native pool query
 uses a separate checkout and does not join that transaction. Await adapter calls before returning
-from the callback, retain commit/rollback tests, and make recording helpers return pg-shaped native
+from the callback, retain commit/rollback tests, and make recording helpers return pgclear native
 results. The adapter's SQL text must be trusted and values must remain separately bound.
 
 ## SQL parameters and identifiers
 
 Ordinary `sql` interpolations bind values. Do not quote them or write manual `$n` placeholders
-inside templates. Values follow pg serialization: `null` and `undefined` bind as SQL null, arrays
-bind as PostgreSQL arrays, and objects use pg's JSON serialization. For JSON input, use
-`JSON.stringify(value)`, including for JSON arrays, strings, and JSON null. Generated JSON write
-types accept encoded strings. Cast standalone parameters when SQL must establish their type.
+inside templates. Plain parameters accept null, string, finite number, boolean, and Uint8Array.
+Bigint, undefined, objects, arrays, Date, nonfinite numbers, and unsafe integer numbers reject.
+Use pgclear `json(value)` for JSON and `param(value, codec)` for arrays or custom encodings.
+Encoded strings also work where PostgreSQL accepts text. Cast standalone parameters when SQL must
+establish their type. For int8, use exact strings or `param(text, builtin.int8)`.
 
 ```ts
-const ids = [1, 2, 3];
+import { builtin, param } from '@kequtech/pgclear';
+
+const ids = param([1, 2, 3], builtin.int4Array);
 const query = sql<{ id: number }>`SELECT id FROM public.users
   WHERE id = ANY(${ids}::integer[])`;
 ```
@@ -265,7 +196,7 @@ await db.query(sql`UPDATE public.users SET ${sql.assignments({ active: false })}
 
 Both accept plain objects, including null-prototype objects. Columns are quoted as individual
 identifiers. Only own data properties are read; accessors are rejected. Fields are captured at
-fragment construction; nested objects retain ordinary driver serialization behavior.
+fragment construction; bound values retain pgclear encoding rules and must remain unchanged until settlement.
 
 | Input                                        | Insert                 | Assignment      |
 | -------------------------------------------- | ---------------------- | --------------- |
@@ -304,8 +235,8 @@ await db.transaction(async (tx) => {
 
 Use `tx` for every operation that must commit together and await the work. The callback commits on
 success, rolls back on an escaping error, and expires before cleanup. Transactions belong to one
-database instance. Nested callbacks and automatic retries are not provided. Tenon owns direct
-BEGIN/COMMIT/ROLLBACK boundaries.
+database instance. Nested callbacks and automatic retries are not provided. pgclear owns
+BEGIN/COMMIT/ROLLBACK and recovery.
 
 `affectedRows: { exact: n }` or `{ max: n }` accepts a nonnegative safe integer. It checks the final
 INSERT/UPDATE/DELETE/MERGE count independently of `RETURNING`. A guarded root call uses a
@@ -319,79 +250,73 @@ the outcome unknown; applications own retry and idempotency policy.
 
 Set isolation before data queries with `SET TRANSACTION ISOLATION LEVEL SERIALIZABLE`, and use
 `SET LOCAL statement_timeout = '5s'` to bound statements in that transaction. Manual savepoints are
-supported; reserve names beginning with `tenon_affected_rows_` for Tenon.
+supported on the owned callback session; pgclear chooses guarded-operation savepoints.
 
-SQL errors retain native driver details. Invalid inputs throw ordinary `Error` objects.
+SQL errors retain native driver details. Tenon's option/composition validation throws ordinary
+`Error` objects; driver encoding failures retain `PGCLEAR_*` codes.
 `CardinalityError` has code `TENON_CARDINALITY_MISMATCH`, `expected` (`one` or `oneOrNone`),
 `actual` (returned row count), and optional `label`. It does not change transaction or autocommit
 behavior. `AffectedRowsError` carries `expected`, `actual`, `command`, and code
-`TENON_AFFECTED_ROWS_MISMATCH` or `TENON_AFFECTED_ROWS_UNSUPPORTED`. Work/cleanup failures can
-produce `AggregateError`.
+`TENON_AFFECTED_ROWS_MISMATCH` or `TENON_AFFECTED_ROWS_UNSUPPORTED`; its `actual` is `number | null`.
+Work/cleanup failures can produce `AggregateError`.
 
 Optional `onQuery` observes completed calls with `label`, `durationMs`, `outcome`, and available
-`command`, `rowCount`, and `errorCode`. It receives no SQL or values. Validation failures before
-execution are not observed. Observers are not awaited; failures emit warnings without changing the
+`command`, `rowCount` (`number | null`), and `errorCode`. It receives no SQL or values. Validation
+failures before execution are not observed. Observers are not awaited; failures emit warnings without changing the
 query outcome. Query success inside a callback does not establish outer commit.
 
 ## Generated types and checking
 
-`generateDefinitions({ connection, namespace?, onWarning? })` returns TypeScript declarations from a
-consistent read-only snapshot; it does not need migration files or history. The CLI writes them
-atomically. Default namespace is `public`; default output is `src/generated-schema.ts`. Both `.ts`
-and `.d.ts` outputs are supported. Commit exact output and exclude it from formatting.
+`generateDefinitions({ connection, namespace?, onWarning? })` delegates schema introspection and
+TypeScript rendering to pgclear. Tenon coordinates with its migration advisory lock and excludes its
+history table. It needs no migration files/history. The CLI owns atomic output and freshness checks;
+Tenon has no separate database type generator or decoder mapping table.
 
 ```sh
 npx tenon generate --out src/generated-schema.d.ts
 npx tenon generate --out src/generated-schema.d.ts --check
 ```
 
-`--check` never rewrites the file. Missing/stale output fails with a diagnostic and a short diff for
-changes. It compares the generated representation, not pending migrations or every database object.
-Output includes relation/constraint/index summaries and referenced domains, not function bodies,
-grants, or a complete schema fingerprint.
+The default namespace is `public`; default output is `src/generated-schema.ts`. Commit exact output
+and exclude it from formatting. `--check` never rewrites: missing/stale output fails with a bounded
+diff. This checks file freshness, not query annotations, pending migrations, or every database object.
+Upgrading pgclear can change output without schema drift. Preserve reviewed generator-specific
+references for existing adoption guards; see [baseline verification](adoption-guide.md#check-and-adopt-an-existing-database).
 
-**Generated declarations are not a version-stable schema fingerprint.** TypeScript mappings can
-change without schema drift. The schema-summary comments describe SQL column types, defaults,
-constraints, indexes, and referenced domains independently of those mappings, but their formatting
-and PostgreSQL's rendering of definitions are not a versioned comparison contract either. Preserve
-reviewed generator-specific references if an existing guard hashes this output; see
-[baseline verification](adoption-guide.md#check-and-adopt-an-existing-database).
+The generated module exports `Database[table]['row' | 'insert' | 'update']`. Ordinary tables and
+partitioned roots are included. Views, foreign tables, and attached partitions need authored types.
+Relationships, indexes, constraints, and referenced domains appear in comments. Use `Pick` for
+projections; joins and expressions need their actual selected shape.
 
-Generation covers ordinary tables and partitioned roots. Views, foreign tables, and attached
-partitions need query-specific types. A missing namespace fails; an existing empty schema is valid.
-Exact table names are available through `Rows['users']`; valid nonreserved identifiers also receive
-named aliases. Use `Pick` for projections; a join or aggregate needs its actual selected shape.
+| PostgreSQL type                                | Default read                    | Generated write input                 |
+| ---------------------------------------------- | ------------------------------- | ------------------------------------- |
+| smallint, integer, oid, real, double precision | `number`                        | `number`                              |
+| bigint                                         | `string`                        | `string`                              |
+| numeric                                        | `string`                        | `string`                              |
+| boolean                                        | `boolean`                       | `boolean`                             |
+| text, UUID, temporal values, interval          | `string`                        | `string`                              |
+| enum                                           | String literal union            | Same union                            |
+| json/jsonb                                     | `unknown`                       | Encoded string or pgclear `Parameter` |
+| bytea                                          | `Uint8Array`                    | `Uint8Array`                          |
+| Supported built-in arrays                      | Recursive readonly `PgArray<T>` | Encoded string or pgclear `Parameter` |
 
-| PostgreSQL type                                | Read representation  | Generated write input                 |
-| ---------------------------------------------- | -------------------- | ------------------------------------- |
-| smallint, integer, oid, real, double precision | `number`             | `number`                              |
-| bigint                                         | `string`             | `string \| bigint`                    |
-| numeric                                        | `string`             | `string \| number`                    |
-| boolean                                        | `boolean`            | `boolean`                             |
-| text, name, varchar, char, uuid, time, timetz  | `string`             | `string`                              |
-| date, timestamp, timestamptz                   | `Date \| number`     | `Date \| string`                      |
-| enum                                           | String literal union | Same union; `never` for an empty enum |
-| json, jsonb                                    | `unknown`            | `string` containing encoded JSON      |
-| bytea                                          | `Buffer`             | `Buffer`                              |
+Every writable generated field also accepts a pgclear `Parameter`; the scalar entries above show
+plain inputs. SQL NULL is separate; nullable fields add null. Numeric and bigint arrays preserve
+exact strings, and temporal strings retain precision and infinity spellings. Dynamic enum/domain/extension
+arrays remain wire text unless a decoder changes them. Generation follows the selected registry;
+unrecognized custom decoder representations warn and become unknown. JSON member shapes remain
+unknown. Database constraints and textual formats still require application validation.
 
-Nullable columns add null; `unknown` already includes it. Domains retain verified base mappings and
-the column's read nullability. Verified arrays use `PgArray<T> = (T | null | PgArray<T>)[]` for null
-elements and multiple dimensions. Numeric arrays contain numbers and can lose precision; select/cast
-them as text when exact values are required. Bigint arrays contain strings; enum arrays and arrays
-of domains are unverified. Unmapped types warn and use `unknown` reads / `never` non-null writes.
-Custom parsers need matching application types.
-
-Date-only values and timestamps without time zone use Node's local timezone. Infinite temporal reads
-are numbers (`Infinity` or `-Infinity`); narrow with `value instanceof Date` before date methods.
-Temporal write inputs accept `Date | string`; use PostgreSQL's text `infinity` or `-infinity` when
-needed.
+Programmatic generation uses the registry configured on its connection or supplied pool. The CLI
+uses default codecs. Regenerate committed definitions after a driver mapping change before running
+`generate --check`; custom decoder types that remain unknown need application-owned contracts.
 
 ### Persistence and domain values
 
 Generated types describe storage representations. Text `CHECK` constraints do not become unions, and
 JSON reads remain unknown. Validate values before narrowing to application domain types.
 
-For example, assume this additional table and regenerate `Rows` from the resulting schema:
+For example, assume this additional table and regenerate `Database` from the resulting schema:
 
 ```sql
 CREATE TABLE public.sessions (
@@ -405,7 +330,7 @@ Use the same application validator before encoding a write and when restoring a 
 
 ```ts
 import { sql } from '@kequtech/tenon-orm';
-import type { Rows } from './generated-schema.js';
+import type { Database } from './generated-schema.js';
 
 function sessionData(value: unknown): { userId: string } {
   if (
@@ -421,22 +346,23 @@ function sessionData(value: unknown): { userId: string } {
   return { userId: value.userId };
 }
 
-function finiteDate(value: Date | number): Date {
-  if (!(value instanceof Date) || !Number.isFinite(value.getTime())) {
+function finiteDate(value: string): Date {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) {
     throw new Error('Expected a finite database timestamp');
   }
-  return value;
+  return date;
 }
 
 const input = {
   id: 'example-session',
   data: JSON.stringify(sessionData({ userId: 'user-42' })),
-  expires_at: new Date(Date.now() + 60_000),
-} satisfies Rows.Insert['sessions'];
+  expires_at: new Date(Date.now() + 60_000).toISOString(),
+} satisfies Database['sessions']['insert'];
 await db.query(sql`INSERT INTO public.sessions ${sql.insertValues(input)}`);
 
 const row = await db.query(
-  sql<Rows['sessions']>`SELECT id, data, expires_at FROM public.sessions
+  sql<Database['sessions']['row']>`SELECT id, data, expires_at FROM public.sessions
     WHERE id = ${input.id} AND isfinite(expires_at) AND expires_at > now()`,
   { returns: 'oneOrNone' },
 );
@@ -450,7 +376,7 @@ const session =
       };
 ```
 
-The generated JSON read remains `unknown` and the timestamp remains `Date | number`. The projection
+The generated JSON read remains `unknown` and the timestamp remains `string`. The projection
 validates both without assertions or edits to generated types. Preserve null separately for nullable
 columns. For an authentication policy requiring finite expiry, `isfinite(expires_at)` excludes both
 infinities before the expiry comparison; `expires_at > now()` alone would accept positive infinity.
@@ -459,16 +385,17 @@ values. This example illustrates representation validation; applications must al
 token verification, revocation, and authorization checks. See
 [JSON and PostgreSQL arrays](mutations.md#json-and-postgresql-arrays) for array write boundaries.
 
-Bigint and `count(*)` reads are decimal strings. Use SQL or BigInt for exact arithmetic and decimal
-strings at JSON boundaries; convert to number only when bounded or approximate values are intended.
+Bigint and `count(*)` reads are exact strings. Use `BigInt(value)` for exact arithmetic; convert
+to number only after checking the safe integer range. Command `rowCount` values are numbers; the
+driver rejects counts outside the safe integer range.
 
 ### Insert and update inputs
 
 ```ts
-import type { Rows } from './generated-schema.js';
+import type { Database } from './generated-schema.js';
 
-const input: Rows.Insert['users'] = { email: 'reader@example.test' };
-const patch: Pick<Rows.Update['users'], 'active'> = { active: false };
+const input: Database['users']['insert'] = { email: 'reader@example.test' };
+const patch: Pick<Database['users']['update'], 'active'> = { active: false };
 sql.insertValues(input);
 sql.assignments(patch);
 ```
@@ -484,27 +411,79 @@ remain writable. Use `Pick`/`Omit` for application restrictions. Apply the gener
 annotations, `satisfies`, or helper generic arguments; they do not validate constraints, JSON
 structure, authorization, or nonempty input.
 
-For unverified write mappings, provide a reviewed application-owned replacement, for example
-`Omit<Rows.Insert['events'], 'delay'> & { delay: string }` for interval text input. Selected columns
+For custom representations, provide reviewed application types and encoders. Selected columns
 can discard required fields; see [the cookbook](mutations.md#input-types-and-runtime-validation).
+
+## Choosing a validation tool
+
+Run these against the intended development/test schema and role. The database tools use the CLI's
+`DATABASE_URL`; TypeScript itself needs no connection.
+
+| Tool                                                     | Question answered                                                                                 | Limits                                                                                                               |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `tsc --noEmit`                                           | Does the application satisfy its TypeScript contracts?                                            | Does not inspect SQL or the live schema.                                                                             |
+| `tenon check [file.ts[:line]]`                           | Does recoverable authored SQL contradict its input/result declarations?                           | Unsupported composition fails as unchecked; inconclusive properties stay unproven. Does not execute application SQL. |
+| `tenon describe query.sql`                               | What parameter/result metadata does PostgreSQL report for this finished SQL?                      | Does not compare source annotations or validate bound values. Does not execute the statement.                        |
+| `tenon generate --out src/generated-schema.d.ts --check` | Does saved generated output match this schema and driver mapping?                                 | Does not check query annotations or replace migration status. Use the project's actual output path.                  |
+| Project database tests                                   | Do representative queries produce the required rows, effects, permissions, and rollback behavior? | Cover exercised inputs and paths; retain cases for runtime-dependent composition and application validation.         |
+
+After a schema or driver mapping change, apply migrations to the test database, regenerate and
+review declarations, then run the project's typecheck, applicable source checks, and database tests.
+In CI, `generate --check` detects stale committed output without replacing it.
+
+## Source-aware checking
+
+Use tenon check [file.ts[:line]] [--project tsconfig.json] [--json] to compare authored SQL with its
+TypeScript input/result contracts and pgclear Describe. A file selects all recognized queries;
+a one-based line selects one complete query. The TypeScript compiler loads on the checking path.
+
+The programmatic API is checkQueries from @kequtech/tenon-orm/check. It accepts connection, target,
+project, session, timeouts, codecs and optional custom readTypes. It returns ok, project, queries,
+diagnostics and available inspection context. Mismatches and unchecked sites fail; unproven types
+are trusted and reported as notes. No query sites fails. See [query checking](query-checking.md) for
+composition, output contracts, explicit expansion shapes and custom decoder representations.
 
 ## Query inspection
 
-`describeQuery({ connection, query, session?, timeouts? })` accepts a PostgreSQL URI and a finished
-SQL string or `{ text }` object. It returns PostgreSQL metadata, conservative read mappings and row
+`describeQuery({ connection, query, session?, timeouts?, codecs? })` accepts a PostgreSQL URI and a finished
+SQL string or `{ text, parameterTypes? }` object. It returns PostgreSQL metadata, conservative read mappings and row
 declaration, session context, and coded findings. It does not bind values, execute the statement, or
 verify `sql<Row>`.
 
-Inspection owns a separate session with bounded timeouts. Match runtime settings; temporary tables,
-and uncommitted changes are not inherited. Reported mappings assume pg's default parsers; parser
-overrides need matching application types. Nullability stays unknown. See
+Inspection owns a separate session with bounded timeouts. Match runtime settings; temporary tables
+and uncommitted changes are not inherited. Read mappings use `codecs.typescript(oid)` from the selected pgclear registry; defaults apply when
+omitted. Custom decoder types may remain unresolved. Nullability stays unknown. See
 [query inspection](query-inspection.md) for settings, result fields, issue codes, and testing.
+
+## Troubleshooting
+
+Use error codes and structured fields rather than matching message wording. Driver errors have
+`PGCLEAR_*` codes; PostgreSQL errors use SQLSTATE. Checker diagnostics have their own `kind` and
+`code`. Retain unexpected errors instead of treating every failure as an empty query result.
+
+| Symptom                                           | Likely cause and response                                                                                                                                                                                                                                                                                                                 |
+| ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PGCLEAR_ENCODE`                                  | A bind is unsupported or an encoder failed. Use `json(value)` for JSON, `param(values, builtin.int4Array)` for integer arrays, an encoded temporal string such as `date.toISOString()`, and exact strings or `param(text, builtin.int8)` for int8. Direct undefined rejects; omit it through a mutation helper when omission is intended. |
+| `CardinalityError` / `TENON_CARDINALITY_MISMATCH` | `one` received zero/multiple rows, or `oneOrNone` received multiple rows. Review the predicate and intended mode. Use deterministic `ORDER BY` plus `LIMIT 1` only when selecting one of several matches is intended. Result modes do not add limits.                                                                                     |
+| `TENON_AFFECTED_ROWS_MISMATCH`                    | A write exceeded `max` or differed from `exact`. The guarded operation has rolled back. Inspect the predicate and `actual` count; retain the intended write bound.                                                                                                                                                                        |
+| `TENON_AFFECTED_ROWS_UNSUPPORTED`                 | The final command lacks a supported INSERT/UPDATE/DELETE/MERGE count. Apply the guard to a supported write; use result modes for returned-row requirements.                                                                                                                                                                               |
+| Empty assignments                                 | Every selected patch field was missing/undefined. Skip the update or branch to an expression-only statement when that is intended. Null remains a bound value.                                                                                                                                                                            |
+| SQLSTATE `42P18` / `42P08` during inspection      | PostgreSQL cannot establish an unambiguous parameter type. Add the intended SQL cast, or pass `parameterTypes` OID hints to `describeQuery`. Inspection does not bind query values.                                                                                                                                                       |
+| Query checker reports `unchecked`                 | SQL structure or an expansion shape could not be recovered, a limit was exceeded, or inspection failed. Follow the diagnostic; optional generated patch fields and dynamic fragment lists can be valid at runtime but remain unchecked. See [responding to findings](query-checking.md#responding-to-findings).                           |
+| Missing/stale generated definitions               | Check the namespace, schema, driver version, and output path. Regenerate with the same options without `--check`, review the diff, and commit intended output. Freshness checks never rewrite the file.                                                                                                                                   |
+
+Inside a transaction, catch a guarded query failure only after its promise rejects; savepoint
+cleanup completes before rejection. An unguarded server SQL error normally leaves the transaction
+failed, so let the outer callback roll it back. Encoding errors happen before dispatch, but their
+inputs still need correction. A timeout or lost commit acknowledgement does not prove rollback;
+see [transactions and errors](#transactions-guarded-writes-and-errors) before adding retries.
 
 ## Command reference
 
 Database commands require `DATABASE_URL`. `new` and `--help` work offline. No environment files are
 loaded. Paths are relative to the working directory. Explicit flags unsupported by a command are
-rejected; `--check` is only a generation check, not a migration dry run.
+rejected. The generate --check flag checks file freshness; the check command checks authored SQL.
+Neither is a migration dry run.
 
 ```text
 tenon new <name> [--directory migrations]
@@ -512,6 +491,9 @@ tenon migrate [--directory migrations] [--namespace public]
 tenon status [--directory migrations] [--namespace public]
 tenon rollback [--directory migrations] [--namespace public] [--steps 1]
 tenon generate [--namespace public] [--out src/generated-schema.ts] [--check]
+tenon check [file.ts[:line]] [--project tsconfig.json] [--json]
+  [--role name] [--search-path value] [--time-zone value]
+  [--connect-timeout-ms 3000] [--statement-timeout-ms 5000] [--lock-timeout-ms 1000]
 tenon describe <query.sql> [--role name] [--search-path value] [--time-zone value]
   [--connect-timeout-ms 3000] [--statement-timeout-ms 5000] [--lock-timeout-ms 1000]
 tenon baseline capture [--directory migrations] [--namespace public] [--schema name ...]

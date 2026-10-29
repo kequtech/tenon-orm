@@ -1,6 +1,5 @@
 import type { TestContext } from 'node:test';
-import { EventEmitter } from 'node:events';
-import { Pool, type PoolClient } from 'pg';
+import { createPool, type Lease, type Transaction } from '@kequtech/pgclear';
 import type { QueryResult } from '../../src/connection.js';
 
 export function result(
@@ -8,27 +7,49 @@ export function result(
   count: number | null = 0,
   rows: Record<string, unknown>[] = [],
 ): QueryResult {
-  return { command, rowCount: count, rows, fields: [], oid: 0 };
+  return {
+    command,
+    commandTag: command,
+    rowCount: count,
+    rows,
+    fields: [],
+  };
 }
 
-/** A controllable pg boundary for transaction and cleanup failures. */
+/** A public driver boundary double for Tenon policy/delegation tests, without transport machinery. */
 export function mockDriver(
   t: TestContext,
   execute: (text: string) => Promise<QueryResult> = async (text) => result(text.split(' ')[0]),
 ) {
-  const release = t.mock.fn();
-  const discard = t.mock.fn();
-  const end = t.mock.fn(async () => {});
-  const query = async (input: string | { text: string }) =>
-    execute(typeof input === 'string' ? input : input.text);
-  const reserved = Object.assign(new EventEmitter(), {
-    query,
-    release: (error?: Error) => (error ? discard(error) : release()),
-  }) as unknown as PoolClient;
+  const release = t.mock.fn(),
+    discard = t.mock.fn(),
+    end = t.mock.fn(async () => {});
+  let status: 'idle' | 'transaction' = 'idle';
+  const query = async (input: string | { text: string }) => {
+    const text = typeof input === 'string' ? input : input.text;
+    const value = await execute(text);
+    if (text === 'BEGIN') status = 'transaction';
+    if (text === 'ROLLBACK' || text === 'COMMIT') status = 'idle';
+    return value;
+  };
+  const reserved = {
+    queryClassic: query,
+    get transactionStatus() {
+      return status;
+    },
+    release: (options?: { discard?: boolean }) => (options?.discard ? discard() : release()),
+  } as unknown as Lease;
+  const transaction = {
+    queryClassic: query,
+    savepoint: async (work: (tx: Transaction) => Promise<unknown>) => work(transaction),
+  } as unknown as Transaction;
   const reserve = t.mock.fn(async () => reserved);
-  const sql = new Pool();
-  t.mock.method(sql, 'connect', reserve);
-  t.mock.method(sql, 'query', query);
-  t.mock.method(sql, 'end', end);
-  return { sql, reserved, release, discard, end, reserve };
+  const sql = createPool({});
+  t.mock.method(sql, 'acquire', reserve);
+  t.mock.method(sql, 'queryClassic', query);
+  t.mock.method(sql, 'transaction', async <T>(work: (tx: Transaction) => Promise<T>) =>
+    work(transaction),
+  );
+  t.mock.method(sql, 'close', end);
+  return { sql, reserved, release, discard, end, reserve, transaction };
 }

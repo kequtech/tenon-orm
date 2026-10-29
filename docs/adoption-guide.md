@@ -4,10 +4,42 @@ Replace application queries independently of migration ownership. Tenon can quer
 and generate types while the current migration runner stays in place. For a Tenon version upgrade,
 read the [Changelog](../CHANGELOG.md).
 
+## Upgrade from Tenon 0.3.x
+
+Tenon 0.4 uses pgclear 0.2.0 or later 0.x in place of pg. Keep the existing database, credentials,
+migration history, and application query functions. With npm, update both packages together:
+
+```sh
+npm install @kequtech/tenon-orm@^0.4.0 @kequtech/pgclear@^0.2.0
+```
+
+Use the project's existing package manager and then review these boundaries:
+
+1. Translate pg `PoolConfig` fields to pgclear `PoolOptions`, or replace a borrowed pg Pool with a
+   pgclear Pool. A URI remains supported. Supply connection credentials explicitly; the driver does
+   not read PG environment variables, pgpass, service files, or pg-specific URI options.
+2. Keep Tenon `sql`, `QueryClient`, result modes, and callback transactions. Update native calls to
+   pgclear APIs: use `queryClassic(text, values?)` for finished SQL, release acquired sessions, and
+   close dedicated listeners separately. Tenon's sql tag is distinct from pgclear's native tag.
+3. Review temporal strings, readonly result arrays, Uint8Array bytes, exact string integer/numeric
+   arrays, and JSON/array inputs. Use `json(value)`, `param(value, codec)`, or encoded text; replace
+   Date binds with an intended temporal string and plain bigint binds with exact strings. Command
+   rowCount remains a number or null. See [value mappings](reference.md#generated-types-and-checking).
+4. Regenerate database declarations against the intended development/test schema. Replace former
+   `Rows['users']`, `Rows.Insert['users']`, and `Rows.Update['users']` accesses with
+   `Database['users']['row']`, `Database['users']['insert']`, and `Database['users']['update']`.
+   Review the generated diff and exclude exact generator output from formatting.
+5. Run the project's typecheck and database tests for queries, transactions, JSON/arrays, and native
+   integrations. Add optional source checking where composition is recoverable; optional patches
+   and runtime-dependent SQL may remain unchecked. See [validation tools](reference.md#choosing-a-validation-tool).
+
+If other code still uses pg directly, retain it until those callers are migrated. Updating Tenon
+does not require transferring migration ownership or adopting a new baseline.
+
 ## Preserve connections and behavior
 
 Keep the existing database URI, credentials, TLS requirements, schema, and data. Tenon can add
-driver settings through pg configuration:
+driver settings through pgclear configuration:
 
 ```ts
 import { createTenon } from '@kequtech/tenon-orm';
@@ -15,15 +47,15 @@ import { createTenon } from '@kequtech/tenon-orm';
 const db = createTenon({
   connection: {
     connectionString: existingUri,
-    connectionTimeoutMillis: 5000,
+    connectTimeoutMs: 5000,
   },
 });
 ```
 
-Translate old driver configuration into pg `PoolConfig` rather than passing it through. Pool
-timeouts use milliseconds. Preserve runtime `search_path` through the pg startup options string, for
-example `options: '-c search_path=app,public'`. URI startup options take precedence when both are
-supplied. CLI `--namespace` does not change runtime queries. See
+Translate old driver configuration into pgclear `PoolOptions`. Pool timeouts use milliseconds.
+Set `startupParameters: { search_path: 'app,public' }` for runtime names. pgclear does not read
+PG environment variables, pgpass, or service files; supply connection settings explicitly. Preserve
+credentials and verified TLS requirements. CLI `--namespace` does not change runtime queries. See
 [connection options](reference.md#installation-and-connection).
 
 Before conversion, identify behavior supplied by the old ORM: IDs/defaults, timestamps, validation,
@@ -42,11 +74,14 @@ application code or SQL where required.
 
 2. Replace queries with parameterized SQL in ordinary functions accepting `QueryClient` where
    callers may supply `db` or `tx`. Retain projections, ordering, null handling, and authorization.
-3. Review value conversions against [Tenon's mappings](reference.md#generated-types-and-checking):
-   numeric values, dates, arrays, and JSON serialization may differ from the previous driver.
-   Generated declarations do not replace domain validation.
-4. Inspect meaningful completed query variants and run database assertions for actual rows,
-   permissions, write effects, and rollback. See [query inspection](query-inspection.md).
+3. Review value conversions against [Tenon's mappings](reference.md#generated-types-and-checking).
+   Pgclear 0.2.0 reads int8/bigserial and SQL count(*) as exact strings; command rowCount is a
+   number. Replace plain bigint binds with strings or param(text, builtin.int8). Numeric values,
+   dates, arrays, and JSON serialization may also differ from the previous driver. Regenerate
+   declarations when mappings change; they do not replace domain validation.
+4. Run the optional [source-aware checker](query-checking.md) for recoverable queries, inspect
+   meaningful completed query variants, and run database assertions for actual rows, permissions,
+   write effects, and rollback. See [query inspection](query-inspection.md).
 5. Remove unused runtime dependencies and generated code after their callers are gone. Dependencies
    retained by other application code or installed transitively may still be needed.
 
@@ -55,7 +90,7 @@ also rejects zero rows. Use deterministic `ORDER BY` plus `LIMIT 1` when choosin
 matches is intended; modes do not add a limit.
 
 Use `sql.insertValues` and `sql.assignments` to replace object-to-SQL utilities, checking omission,
-default, null, and empty-input semantics. Generated `Rows.Insert`/`Rows.Update` types can replace
+default, null, and empty-input semantics. Generated `Database[table]['insert']`/`Database[table]['update']` types can replace
 handwritten persistence inputs. See the [mutation cookbook](mutations.md).
 
 Use `tx.query` for work that must commit together. Native pool calls do not join Tenon transactions.

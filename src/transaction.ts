@@ -1,88 +1,38 @@
-import type { Pool } from 'pg';
-import type { QueryExecutor } from './connection.js';
-import { executeSql, watchClient } from './connection.js';
+import type { Pool, Transaction } from '@kequtech/pgclear';
+import type { QueryExecutor, QueryResult } from './connection.js';
+import { executeSql } from './connection.js';
 
-/** The callback owns one connection and expires before commit or rollback begins. */
-export async function withTransaction<T>(
+/** Serialize whole Tenon policies; pgclear owns transaction, savepoint and transport recovery. */
+export function withTransaction<T>(
   pool: Pool,
   work: (query: QueryExecutor) => Promise<T>,
 ): Promise<T> {
-  const client = await pool.connect();
-  const connection = watchClient(client);
-  let active = true;
-  let began = false;
-  let releaseError: Error | undefined;
-  let savepointId = 0;
-  let pending: Promise<void> = Promise.resolve();
-  let recoveryFailure: AggregateError | undefined;
-
-  const query: QueryExecutor = async (text, input, readResult, guarded) => {
-    if (!active) throw new Error('The transaction has finished.');
-
-    // Queue whole operations, including savepoint cleanup. Otherwise concurrent
-    // calls could place another write inside a savepoint that gets rolled back.
-    const operation = pending.then(async () => {
-      connection.check();
-      if (recoveryFailure) throw recoveryFailure;
-      if (!guarded) return readResult(await executeSql(client, text, input));
-
-      const savepoint = `tenon_affected_rows_${++savepointId}`;
-      await client.query(`SAVEPOINT ${savepoint}`);
-      try {
-        const result = readResult(await executeSql(client, text, input));
-        await client.query(`RELEASE SAVEPOINT ${savepoint}`);
-        return result;
-      } catch (error) {
-        try {
-          await client.query(`ROLLBACK TO SAVEPOINT ${savepoint}`);
-          await client.query(`RELEASE SAVEPOINT ${savepoint}`);
-        } catch (rollbackError) {
-          // Even if application code catches this error, the outer transaction
-          // must not commit when the rejected write could still be present.
-          recoveryFailure = new AggregateError(
-            [error, rollbackError],
-            'Operation and savepoint recovery failed.',
-          );
-          throw recoveryFailure;
-        }
-        throw error;
-      }
-    });
-    pending = operation.then(
-      () => {},
-      () => {},
-    );
-    return operation;
-  };
-
-  try {
-    await client.query('BEGIN');
-    began = true;
-    const result = await work(query);
-    active = false;
-    await pending;
-    connection.check();
-    if (recoveryFailure) throw recoveryFailure;
-    const committed = await client.query('COMMIT');
-    if (committed.command !== 'COMMIT') {
-      throw new Error('PostgreSQL rolled back the aborted transaction.');
-    }
-    return result;
-  } catch (error) {
-    active = false;
-    await pending;
-    if (!began) {
-      releaseError = error instanceof Error ? error : new Error('BEGIN failed.');
-      throw error;
-    }
+  return pool.transaction(async (transaction) => {
+    let active = true;
+    let pending: Promise<void> = Promise.resolve();
+    const query: QueryExecutor = <R>(
+      text: string,
+      input: readonly unknown[],
+      readResult: (result: QueryResult) => R,
+      guarded: boolean,
+    ): Promise<R> => {
+      if (!active) return Promise.reject(new Error('The transaction has finished.'));
+      const operation = pending.then(() => {
+        const execute = async (scope: Transaction) =>
+          readResult(await executeSql(scope, text, input));
+        return guarded ? transaction.savepoint(execute) : execute(transaction);
+      });
+      pending = operation.then(
+        () => {},
+        () => {},
+      );
+      return operation;
+    };
     try {
-      await client.query('ROLLBACK');
-    } catch (rollbackError) {
-      releaseError = rollbackError instanceof Error ? rollbackError : new Error('Rollback failed.');
-      throw new AggregateError([error, rollbackError], 'Transaction and rollback failed.');
+      return await work(query);
+    } finally {
+      active = false;
+      await pending;
     }
-    throw error;
-  } finally {
-    connection.release(releaseError);
-  }
+  });
 }

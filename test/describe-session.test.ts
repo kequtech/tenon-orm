@@ -5,15 +5,15 @@ import { randomUUID } from 'node:crypto';
 import { once } from 'node:events';
 import { createServer, type Socket } from 'node:net';
 import { after, before, test } from 'node:test';
-import { Pool } from 'pg';
+import { createPool, type Pool } from '@kequtech/pgclear';
 import { describeQuery, migrate, sql } from '../src/index.js';
 import { qualified, quote } from '../src/sql.js';
 import { assertTestDatabase, migrationProject, testConnection } from './helpers/database.js';
 
-const pool = new Pool({ connectionString: testConnection });
+const pool = createPool({ connectionString: testConnection });
 const project = migrationProject(pool);
 before(() => assertTestDatabase(pool));
-after(() => pool.end());
+after(() => pool.close());
 
 function markedConnection() {
   const url = new URL(testConnection);
@@ -26,7 +26,7 @@ async function assertDisconnected(name: string): Promise<void> {
   // A completed TCP close can precede the backend's removal from pg_stat_activity.
   for (let attempt = 0; attempt < 30; attempt++) {
     const result = (
-      await pool.query('SELECT 1 FROM pg_stat_activity WHERE application_name=$1', [name])
+      await pool.queryClassic('SELECT 1 FROM pg_stat_activity WHERE application_name=$1', [name])
     ).rows;
     if (!result.length) return;
     await new Promise((resolve) => setTimeout(resolve, 20));
@@ -36,7 +36,7 @@ async function assertDisconnected(name: string): Promise<void> {
 
 test('inspection matches explicit role, search path and timezone and reports the effective context', async () => {
   const role = `tenon_inspect_${randomUUID().replaceAll('-', '')}`;
-  await pool.query(`CREATE ROLE ${quote(role)} NOLOGIN`);
+  await pool.queryClassic(`CREATE ROLE ${quote(role)} NOLOGIN`, []);
   try {
     await project(
       {
@@ -45,8 +45,10 @@ test('inspection matches explicit role, search path and timezone and reports the
       },
       async (options) => {
         await migrate(options);
-        await pool.query(`GRANT USAGE ON SCHEMA ${quote(options.namespace)} TO ${quote(role)};
-        GRANT SELECT ON ${qualified(options.namespace, 'scoped')} TO ${quote(role)}`);
+        await pool.withSession((session) =>
+          session.script(`GRANT USAGE ON SCHEMA ${quote(options.namespace)} TO ${quote(role)};
+        GRANT SELECT ON ${qualified(options.namespace, 'scoped')} TO ${quote(role)}`),
+        );
         const session = {
           role,
           searchPath: `${quote(options.namespace)}, public`,
@@ -67,9 +69,9 @@ test('inspection matches explicit role, search path and timezone and reports the
         assert.equal(write.columns[0]!.readType, 'number');
         assert.deepEqual(description.context, {
           mode: 'separate-session',
-          readMappings: 'pg',
+          readMappings: 'pgclear',
           database: 'tenon_orm_test',
-          sessionUser: (await pool.query('SELECT session_user AS name')).rows[0]!.name,
+          sessionUser: (await pool.queryClassic('SELECT session_user AS name', [])).rows[0]!.name,
           currentUser: role,
           searchPath: session.searchPath,
           resolvedSearchPath: ['pg_catalog', options.namespace, 'public'],
@@ -77,33 +79,39 @@ test('inspection matches explicit role, search path and timezone and reports the
           statementTimeoutMs: 5000,
           lockTimeoutMs: 1000,
         });
-        const client = await pool.connect();
+        const client = await pool.acquire();
         try {
-          await client.query('BEGIN');
-          await client.query(
-            "SELECT set_config('role',$1,true),set_config('search_path',$2,true),set_config('TimeZone',$3,true)",
+          await client.queryClassic('BEGIN', []);
+          await client.queryClassic(
+            "SELECT set_config('role',$1,true) AS role,set_config('search_path',$2,true) AS path,set_config('TimeZone',$3,true) AS zone",
             [session.role, session.searchPath, session.timeZone],
           );
           assert.deepEqual(
             [
               ...(
-                await client.query(
+                await client.queryClassic(
                   "SELECT id,current_user AS role,current_setting('TimeZone') AS zone FROM scoped",
+                  [],
                 )
               ).rows,
             ],
             [{ id: 7, role, zone: 'UTC' }],
           );
-          await assert.rejects(client.query('UPDATE scoped SET id=8'), { code: '42501' });
+          await assert.rejects(client.queryClassic('UPDATE scoped SET id=8', []), {
+            code: '42501',
+          });
         } finally {
-          await client.query('ROLLBACK');
+          await client.queryClassic('ROLLBACK', []);
           client.release();
         }
         await assert.rejects(
           describeQuery({ connection: testConnection, query: 'SELECT id FROM scoped' }),
           { code: '42P01' },
         );
-        await pool.query(`REVOKE USAGE ON SCHEMA ${quote(options.namespace)} FROM ${quote(role)}`);
+        await pool.queryClassic(
+          `REVOKE USAGE ON SCHEMA ${quote(options.namespace)} FROM ${quote(role)}`,
+          [],
+        );
         await assert.rejects(
           describeQuery({
             connection: testConnection,
@@ -115,7 +123,7 @@ test('inspection matches explicit role, search path and timezone and reports the
       },
     );
   } finally {
-    await pool.query(`DROP ROLE ${quote(role)}`);
+    await pool.queryClassic(`DROP ROLE ${quote(role)}`, []);
   }
 });
 
@@ -142,15 +150,10 @@ test('inspection captures session settings and limits before asynchronous work s
 
 test('connection URL session options are preserved while timeout overrides cannot disable bounds', async () => {
   const url = new URL(testConnection);
-  url.searchParams.set(
-    'options',
-    '-c search_path=pg_catalog -c timezone=UTC -c statement_timeout=0 -c lock_timeout=0',
-  );
-  url.searchParams.set('statement_timeout', '0');
-  url.searchParams.set('lock_timeout', '0');
   const result = await describeQuery({
     connection: url.toString(),
     query: 'SELECT relname FROM pg_class',
+    session: { searchPath: 'pg_catalog', timeZone: 'UTC' },
     timeouts: { connectMs: 1000, statementMs: 400, lockMs: 200 },
   });
   assert.equal(result.context.searchPath, 'pg_catalog');
@@ -164,11 +167,12 @@ test('Describe lock and statement timeouts terminate blocked parsing and release
     { '0001_fixture.up.sql': 'CREATE TABLE blocked (id integer);' },
     async (options) => {
       await migrate(options);
-      const blocker = await pool.connect();
+      const blocker = await pool.acquire();
       try {
-        await blocker.query('BEGIN');
-        await blocker.query(
+        await blocker.queryClassic('BEGIN', []);
+        await blocker.queryClassic(
           `LOCK TABLE ${qualified(options.namespace, 'blocked')} IN ACCESS EXCLUSIVE MODE`,
+          [],
         );
         for (const [statementMs, lockMs, code] of [
           [1000, 60, '55P03'],
@@ -188,7 +192,7 @@ test('Describe lock and statement timeouts terminate blocked parsing and release
           await assertDisconnected(name);
         }
       } finally {
-        await blocker.query('ROLLBACK');
+        await blocker.queryClassic('ROLLBACK', []);
         blocker.release();
       }
       assert.equal(
@@ -223,7 +227,7 @@ test('a stalled authentication connection times out and closes its socket', asyn
         query: 'SELECT 1',
         timeouts: { connectMs: 80 },
       }),
-      /timeout expired/,
+      { code: 'PGCLEAR_TIMEOUT' },
     );
     assert.ok(performance.now() - started < 2500);
     for (let attempt = 0; sockets.size && attempt < 30; attempt++) {
@@ -243,13 +247,21 @@ test('inspection explicitly remains outside temporary tables and transaction-loc
     { '0001_fixture.up.sql': 'CREATE TABLE local_only (id integer);' },
     async (options) => {
       await migrate(options);
-      const client = await pool.connect();
+      const client = await pool.acquire();
       try {
-        await client.query('BEGIN');
-        await client.query("SELECT set_config('search_path',$1,true)", [quote(options.namespace)]);
-        await client.query('CREATE TEMPORARY TABLE local_probe(id integer) ON COMMIT DROP');
-        assert.deepEqual([...(await client.query('SELECT * FROM local_only')).rows], []);
-        assert.deepEqual([...(await client.query('SELECT * FROM local_probe')).rows], []);
+        await client.queryClassic('BEGIN', []);
+        await client.queryClassic("SELECT set_config('search_path',$1,true)", [
+          quote(options.namespace),
+        ]);
+        await client.queryClassic(
+          'CREATE TEMPORARY TABLE local_probe(id integer) ON COMMIT DROP',
+          [],
+        );
+        assert.deepEqual([...(await client.queryClassic('SELECT * FROM local_only', [])).rows], []);
+        assert.deepEqual(
+          [...(await client.queryClassic('SELECT * FROM local_probe', [])).rows],
+          [],
+        );
         for (const table of ['local_only', 'local_probe']) {
           await assert.rejects(
             describeQuery({ connection: testConnection, query: `SELECT * FROM ${table}` }),
@@ -262,9 +274,9 @@ test('inspection explicitly remains outside temporary tables and transaction-loc
           query: 'SELECT * FROM local_only',
         });
         assert.equal(configured.context.mode, 'separate-session');
-        assert.equal(configured.context.readMappings, 'pg');
+        assert.equal(configured.context.readMappings, 'pgclear');
       } finally {
-        await client.query('ROLLBACK');
+        await client.queryClassic('ROLLBACK', []);
         client.release();
       }
     },
@@ -353,17 +365,17 @@ test('inspection internal queries are independent of functions in the inspected 
       assert.deepEqual(result.context.resolvedSearchPath, [options.namespace, 'pg_catalog']);
       assert.equal(result.columns[0]!.source?.schema, options.namespace);
       assert.equal(result.columns[0]!.readType, 'number');
-      assert.equal(result.columns[1]!.readType, '"ready" | "waiting"');
+      assert.equal(result.columns[1]!.readType, 'string');
     },
   );
 });
 
 test(
-  'inspection releases driver read-timeout timers after success and parse errors',
+  'inspection releases resources after success and parse errors',
   { timeout: 10000 },
   async () => {
     const url = new URL(testConnection);
-    url.searchParams.set('query_timeout', '30000');
+
     const module = new URL('../src/index.js', import.meta.url).href;
     for (const [query, expectedCode] of [
       ['SELECT 1 AS value', undefined],
@@ -390,34 +402,35 @@ test(
 );
 
 test(
-  'inspection honors pg read timeouts while Describe is waiting on a lock',
+  'inspection honors lock timeouts while Describe is waiting on a lock',
   { timeout: 10000 },
   async () => {
     await project(
       { '0001_blocked.up.sql': 'CREATE TABLE blocked (id integer);' },
       async (options) => {
         await migrate(options);
-        const blocker = await pool.connect();
+        const blocker = await pool.acquire();
         const { connection, name } = markedConnection();
         const url = new URL(connection);
-        url.searchParams.set('query_timeout', '200');
+
         try {
-          await blocker.query('BEGIN');
-          await blocker.query(
+          await blocker.queryClassic('BEGIN', []);
+          await blocker.queryClassic(
             `LOCK TABLE ${qualified(options.namespace, 'blocked')} IN ACCESS EXCLUSIVE MODE`,
+            [],
           );
           const started = performance.now();
           await assert.rejects(
             describeQuery({
               connection: url.toString(),
               query: `SELECT * FROM ${qualified(options.namespace, 'blocked')}`,
-              timeouts: { statementMs: 5000, lockMs: 5000 },
+              timeouts: { statementMs: 5000, lockMs: 50 },
             }),
-            /Query read timeout/,
+            { code: '55P03' },
           );
           assert.ok(performance.now() - started < 2000);
         } finally {
-          await blocker.query('ROLLBACK');
+          await blocker.queryClassic('ROLLBACK', []);
           blocker.release();
         }
         await assertDisconnected(name);

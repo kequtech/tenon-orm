@@ -1,3 +1,4 @@
+import { param, builtin } from '@kequtech/pgclear';
 import { assertInfinity } from './helpers/values.js';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
@@ -6,17 +7,17 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { after, before, test } from 'node:test';
 import { promisify } from 'node:util';
-import { Pool } from 'pg';
+import { createPool, type Pool } from '@kequtech/pgclear';
 import { createTenon, describeQuery, identifier, migrate, sql, unsafeSql } from '../src/index.js';
 import type { SqlQuery, UnknownRow } from '../src/index.js';
 import { qualified, quote } from '../src/sql.js';
 import { assertTestDatabase, migrationProject, testConnection } from './helpers/database.js';
 
-const pool = new Pool({ connectionString: testConnection });
+const pool = createPool({ connectionString: testConnection });
 const project = migrationProject(pool);
 const run = promisify(execFile);
 before(() => assertTestDatabase(pool));
-after(() => pool.end());
+after(() => pool.close());
 
 const schema = `
   CREATE TYPE mood AS ENUM ('ready', 'waiting');
@@ -57,7 +58,7 @@ function describe(query: string | SqlQuery) {
   return describeQuery({ connection: testConnection, query });
 }
 
-async function execute(query: SqlQuery): Promise<UnknownRow[]> {
+async function execute(query: SqlQuery): Promise<readonly UnknownRow[]> {
   const db = createTenon({ connection: pool });
   try {
     return await db.query(query, { returns: 'many' });
@@ -167,7 +168,7 @@ test('COUNT, SUM, COALESCE, CASE and functions have accurate base types but unkn
   await fixture(async (namespace) => {
     const accounts = qualified(namespace, 'accounts');
     const messages = qualified(namespace, 'messages');
-    const cases: { query: SqlQuery; types: string[]; rows: UnknownRow[] }[] = [
+    const cases: { query: SqlQuery; types: string[]; rows: readonly UnknownRow[] }[] = [
       {
         query: raw(`SELECT count(*) AS n, sum(bytes) AS total FROM ${messages}`),
         types: ['string', 'string'],
@@ -278,7 +279,7 @@ test('a composed CTE, lateral join, window and JSON query describes the exact SQ
 
 test('recursive CTEs, UNION, views and grouping sets do not need a client SQL parser', async () => {
   await fixture(async (namespace) => {
-    const cases: { query: SqlQuery; rows: UnknownRow[]; types: string[] }[] = [
+    const cases: { query: SqlQuery; rows: readonly UnknownRow[]; types: string[] }[] = [
       {
         query:
           raw(`WITH RECURSIVE numbers(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM numbers WHERE n<3)
@@ -321,7 +322,7 @@ test('recursive CTEs, UNION, views and grouping sets do not need a client SQL pa
   });
 });
 
-test('described mappings agree with pg for precision, JSON, dates, arrays, enums and domains', async () => {
+test('described mappings agree with pgclear for precision, JSON, dates, arrays, enums and domains', async () => {
   await fixture(async (namespace) => {
     const query = sql`SELECT quota, amount, payload, at, tags, amounts, state, counter
       FROM ${identifier(namespace, 'accounts')} ORDER BY id`;
@@ -332,10 +333,10 @@ test('described mappings agree with pg for precision, JSON, dates, arrays, enums
         'string',
         'string',
         'unknown',
-        'globalThis.Date | number',
+        'string',
         'PgArray<string>',
-        'PgArray<number>',
-        '"ready" | "waiting"',
+        'PgArray<string>',
+        'string',
         'string',
       ],
     );
@@ -344,13 +345,13 @@ test('described mappings agree with pg for precision, JSON, dates, arrays, enums
       quota: '9007199254740993',
       amount: '1.25',
       payload: { name: 'Ada' },
-      at: new Date('2026-01-01T00:00:00Z'),
+      at: '2026-01-01 00:00:00+00',
       tags: ['a', null],
-      amounts: [1.25, null],
+      amounts: ['1.25', null],
       state: 'ready',
       counter: '10',
     });
-    assert.equal(rows[1]!.at, Infinity);
+    assert.equal(rows[1]!.at, 'infinity');
     assert.equal(rows[1]!.payload, null);
     const arrays = sql`SELECT ARRAY[[1,NULL],[2,3]]::integer[] AS matrix,
       ARRAY[9007199254740993,NULL]::bigint[] AS big,
@@ -363,8 +364,8 @@ test('described mappings agree with pg for precision, JSON, dates, arrays, enums
       [
         'PgArray<number>',
         'PgArray<string>',
-        'PgArray<globalThis.Date | number>',
-        'import("node:buffer").Buffer',
+        'PgArray<string>',
+        'globalThis.Uint8Array',
         'PgArray<unknown>',
       ],
     );
@@ -378,8 +379,8 @@ test('described mappings agree with pg for precision, JSON, dates, arrays, enums
           [2, 3],
         ],
         big: ['9007199254740993', null],
-        dates: [new Date('2026-01-01T00:00:00Z'), invalid, null],
-        bytes: Buffer.from([0, 255]),
+        dates: ['2026-01-01 00:00:00+00', invalid, null],
+        bytes: new Uint8Array([0, 255]),
         documents: [{ name: 'Ada' }, null],
       },
     ]);
@@ -392,20 +393,19 @@ test('described mappings agree with pg for precision, JSON, dates, arrays, enums
   });
 });
 
-test('date and timestamp scalars preserve pg finite dates and numeric infinities', async () => {
+test('date and timestamp scalars preserve pgclear temporal strings and infinities', async () => {
   const query = sql`SELECT DATE '2026-01-01' AS day, DATE 'infinity' AS infinite_day,
     TIMESTAMP '2026-01-01 12:30:00' AS local, TIMESTAMP '-infinity' AS infinite_local,
     TIMESTAMPTZ '2026-01-01T00:00:00Z' AS instant`;
   const result = await describe(query);
-  assert.ok(result.columns.every((c) => c.readType === 'globalThis.Date | number'));
+  assert.ok(result.columns.every((c) => c.readType === 'string'));
   const [row] = await execute(query);
   for (const name of ['day', 'local', 'instant']) {
-    assert.ok(row![name] instanceof Date);
-    assert.ok(Number.isFinite(row![name].getTime()));
+    assert.equal(typeof row![name], 'string');
   }
-  assert.equal(row!.infinite_day, Infinity);
-  assert.equal(row!.infinite_local, -Infinity);
-  assert.deepEqual(row!.instant, new Date('2026-01-01T00:00:00Z'));
+  assert.equal(row!.infinite_day, 'infinity');
+  assert.equal(row!.infinite_local, '-infinity');
+  assert.deepEqual(row!.instant, '2026-01-01 00:00:00+00');
 });
 
 test('the conservative declaration compiles under TypeScript 6 and 7 without claiming non-null or JSON structure', async () => {
@@ -419,11 +419,11 @@ test('the conservative declaration compiles under TypeScript 6 and 7 without cla
         `${result.rowType}
         declare const row: DescribedRow;
         const quota: string | null = row.quota;
-        const state: 'ready' | 'waiting' | null = row.state;
+        const state: string | null = row.state;
         const tags: PgArray<string> | null = row.tags;
-        const amounts: PgArray<number> | null = row.amounts;
-        const at: Date | number | null = row.at;
-        const bytes: import('node:buffer').Buffer | null = row.bytes;
+        const amounts: PgArray<string> | null = row.amounts;
+        const at: string | null = row.at;
+        const bytes: Uint8Array | null = row.bytes;
         // @ts-expect-error Describe cannot establish a non-null result
         const assumed: string = row.quota;
         // @ts-expect-error PostgreSQL's JSON type does not verify an object shape
@@ -470,8 +470,12 @@ test('Describe accepts writes whose runtime constraints still fail', async () =>
     }
     assert.deepEqual(
       [
-        ...(await pool.query(`SELECT id FROM ${qualified(namespace, 'accounts')} ORDER BY id`))
-          .rows,
+        ...(
+          await pool.queryClassic(
+            `SELECT id FROM ${qualified(namespace, 'accounts')} ORDER BY id`,
+            [],
+          )
+        ).rows,
       ],
       [{ id: 1 }, { id: 2 }],
     );
@@ -499,8 +503,12 @@ test('Describe does not execute writes, writable CTEs, volatile functions, or ta
     }
     assert.deepEqual(
       [
-        ...(await pool.query(`SELECT id,name FROM ${qualified(namespace, 'accounts')} ORDER BY id`))
-          .rows,
+        ...(
+          await pool.queryClassic(
+            `SELECT id,name FROM ${qualified(namespace, 'accounts')} ORDER BY id`,
+            [],
+          )
+        ).rows,
       ],
       [
         { id: 1, name: 'Ada' },
@@ -508,13 +516,17 @@ test('Describe does not execute writes, writable CTEs, volatile functions, or ta
       ],
     );
     assert.equal(
-      (await pool.query(`SELECT is_called FROM ${qualified(namespace, 'probe_sequence')}`)).rows[0]!
-        .is_called,
+      (
+        await pool.queryClassic(
+          `SELECT is_called FROM ${qualified(namespace, 'probe_sequence')}`,
+          [],
+        )
+      ).rows[0]!.is_called,
       false,
     );
     assert.equal(
       (
-        await pool.query(
+        await pool.queryClassic(
           `SELECT count(*) FROM pg_catalog.pg_locks
       WHERE locktype='advisory' AND objid=($1::bigint & 4294967295)::oid`,
           [key],
@@ -522,14 +534,15 @@ test('Describe does not execute writes, writable CTEs, volatile functions, or ta
       ).rows[0]!.count,
       '0',
     );
-    const client = await pool.connect();
+    const client = await pool.acquire();
     try {
-      await client.query('BEGIN');
-      await client.query(
+      await client.queryClassic('BEGIN', []);
+      await client.queryClassic(
         `LOCK TABLE ${qualified(namespace, 'accounts')} IN ACCESS EXCLUSIVE MODE NOWAIT`,
+        [],
       );
     } finally {
-      await client.query('ROLLBACK');
+      await client.queryClassic('ROLLBACK', []);
       client.release();
     }
   });
@@ -558,12 +571,14 @@ test('duplicates, unmapped types and empty result sets cannot become false verif
   assert.equal(duplicate.rowType, null);
   assert.equal(duplicate.columns.length, 2);
   assert.ok(duplicate.issues.some((issue) => issue.code === 'duplicate-column'));
-  assert.deepEqual(await execute(raw(`SELECT 1 AS id, 'last'::text AS id`)), [{ id: 'last' }]);
+  await assert.rejects(execute(raw(`SELECT 1 AS id, 'last'::text AS id`)), {
+    code: 'PGCLEAR_DECODE',
+  });
   const unknown = await describe(`SELECT interval '1 day' AS period`);
-  assert.equal(unknown.columns[0]!.readType, 'unknown');
-  assert.ok(unknown.issues.some((issue) => issue.code === 'unmapped-type'));
+  assert.equal(unknown.columns[0]!.readType, 'string');
+  assert.ok(!unknown.issues.some((issue) => issue.code === 'unmapped-type'));
   const repeats = await describe(`SELECT interval '1 day' AS period, interval '2 days' AS period`);
-  assert.equal(repeats.issues.filter((issue) => issue.code === 'unmapped-type').length, 1);
+  assert.equal(repeats.issues.filter((issue) => issue.code === 'unmapped-type').length, 0);
   assert.equal(repeats.issues.filter((issue) => issue.code === 'duplicate-column').length, 1);
   const noRows = await describe('SELECT 1 AS id WHERE false');
   assert.equal(noRows.columns[0]!.readType, 'number');
@@ -675,7 +690,8 @@ test('one completed conditional query is described and executed for every meanin
     function accountQuery(name?: string, ids?: number[]) {
       const filters = [sql.fragment`quota > ${0}`];
       if (name !== undefined) filters.push(sql.fragment`name = ${name}`);
-      if (ids !== undefined) filters.push(sql.fragment`id = ANY(${ids}::integer[])`);
+      if (ids !== undefined)
+        filters.push(sql.fragment`id = ANY(${param(ids, builtin.int4Array)}::integer[])`);
       return sql<{ id: number; name: string; quota: string; payload: unknown }>`
         SELECT id, name, quota, payload FROM ${identifier(namespace, 'accounts')}
         WHERE ${sql.join(filters, 'AND')} ORDER BY id`;

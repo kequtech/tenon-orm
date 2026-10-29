@@ -148,7 +148,7 @@ test('diagnostics report metadata without SQL or values and cannot change query 
     assert.equal(warnings.mock.callCount(), 2);
   } finally {
     await db.close();
-    await pool.end();
+    await pool.close();
   }
 });
 

@@ -2,7 +2,7 @@
 
 Use `sql.insertValues` and `sql.assignments` for object fields while keeping SQL structure visible.
 The [reference](reference.md#object-based-mutation-fragments) defines the complete contract.
-Examples assume an existing `db` and this table, with generated `Rows` from the same schema:
+Examples assume an existing `db` and this table, with generated `Database` from the same schema:
 
 ```sql
 CREATE TABLE profiles (
@@ -34,9 +34,9 @@ aligned across heterogeneous rows. Empty batches fail; a single default-only obj
 
 ```ts
 import { sql, type QueryClient } from '@kequtech/tenon-orm';
-import type { Rows } from './generated-schema.js';
+import type { Database } from './generated-schema.js';
 
-type ProfileInput = Pick<Rows.Insert['profiles'], 'name' | 'score'>;
+type ProfileInput = Pick<Database['profiles']['insert'], 'name' | 'score'>;
 
 function createProfile(client: QueryClient, input: ProfileInput) {
   return client.query(
@@ -55,7 +55,7 @@ Selected columns choose and order fields, ignoring unlisted keys. They can disca
 even when the original object is valid:
 
 ```ts
-const input: Rows.Insert['profiles'] = { name: 'Ada' };
+const input: Database['profiles']['insert'] = { name: 'Ada' };
 const query = sql`INSERT INTO profiles ${sql.insertValues(input, ['bio', 'score'])}`;
 // Executing this fails: name was discarded and has no default.
 ```
@@ -63,7 +63,7 @@ const query = sql`INSERT INTO profiles ${sql.insertValues(input, ['bio', 'score'
 ## Patches mixed with expressions
 
 ```ts
-const patch: Pick<Rows.Update['profiles'], 'name' | 'bio'> = { bio: null };
+const patch: Pick<Database['profiles']['update'], 'name' | 'bio'> = { bio: null };
 await db.query(sql`UPDATE profiles SET ${sql.assignments(patch)}, revision = revision + 1
   WHERE id = ${id}`);
 ```
@@ -106,15 +106,23 @@ For a table with `payload jsonb` and `tags text[]`, encode JSON separately from 
 array:
 
 ```ts
+import { builtin, json, param } from '@kequtech/pgclear';
+
 const tags = ['ada', 'lin'];
 await db.query(
-  sql`INSERT INTO deliveries ${sql.insertValues({ payload: JSON.stringify(tags), tags })}`,
+  sql`INSERT INTO deliveries ${sql.insertValues({ payload: json(tags), tags: param(tags, builtin.textArray) })}`,
 );
 ```
 
-Generated JSON writes accept encoded JSON strings. Use `JSON.stringify(value)` for objects, arrays,
-strings, and JSON null; a bound JavaScript null means SQL null. Arrays passed directly are
-PostgreSQL arrays. Tenon leaves serialization to pg.
+Generated JSON writes accept pgclear parameters or encoded strings. `json(value)` encodes objects,
+arrays, strings, and JSON null; plain `null` means SQL NULL. Arrays need `param(value, codec)` or
+encoded PostgreSQL text. Plain arrays, objects, Date, and undefined reject as bound values. Tenon
+passes explicit parameters unchanged to pgclear.
+
+For bigint/bigserial fields, generated writes accept exact strings or explicit parameters, and reads
+return strings. Use `param('9007199254740993', builtin.int8)` for an explicit int8 parameter and
+`param(['9007199254740993', null], builtin.int8Array)` for an int8 array. Plain JavaScript bigint
+values reject, including inside mutation helpers.
 
 ## Batches in one transaction
 

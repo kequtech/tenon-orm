@@ -22,6 +22,9 @@ const description = await describeQuery({ connection, query });
 query to inspection and execution. Strings use PostgreSQL `$1` placeholders; templates use
 `${value}`. Cast standalone parameters so PostgreSQL can infer their types without runtime values.
 Inspection does not read `sql<Row>`, check `query.values`, or compare an annotation with SQL.
+For SQL with ambiguous parameters, pass `{ text, parameterTypes: [oid, ...] }`; these public
+pgclear Describe hints require no values. Describe still performs server parsing/analysis and may
+take locks.
 
 ## Session and timeouts
 
@@ -39,16 +42,15 @@ does not load that role's login defaults. Omitted settings use the inspection co
 Explicit undefined behaves like omission. Unknown keys and invalid settings fail.
 
 `context` reports login/effective roles, configured/resolved search paths, timezone, database, and
-effective statement/lock timeouts. Its mode is `separate-session` and read mapping profile is `pg`;
-reported read types assume pg's default parsers and do not infer application overrides. Temporary
-tables, uncommitted changes, and transaction-local settings are not inherited. pg reads its normal
-connection environment, including `PGOPTIONS` when URI options are absent. Use explicit URI/session
-settings for reproducibility.
+effective statement/lock timeouts. Its mode is `separate-session` and read mapping profile is `pgclear`. Read types use
+`codecs.typescript(oid)` from the registry passed as `codecs`, or `defaultCodecs` when omitted. Temporary
+tables, uncommitted changes, and transaction-local settings are not inherited. pgclear uses explicit connection configuration; it does not read PG environment variables, pgpass,
+or service files. Use explicit URI/session settings for reproducibility.
 
 Defaults are a 3-second connection/authentication timeout, a 5-second limit per server statement,
 and a 1-second lock wait. Overrides are positive integer milliseconds, at most 2,147,483,647. URI
-settings cannot disable the statement/lock bounds. A URI `query_timeout` remains pg's separate
-client read timeout. The owned client closes after inspection. These are operation limits, not a
+settings cannot disable the statement/lock bounds. pg-specific `query_timeout` and `options`
+URI parameters are unsupported; use the documented timeout and session options. The owned client closes after inspection. These are operation limits, not a
 single overall deadline.
 
 ## Result fields
@@ -66,12 +68,31 @@ Known read types in `rowType` include null; unknown types already include it. So
 cannot establish result nullability through joins, expressions, or grouping. JSON structure stays
 unknown. Handle findings by code:
 
-| Code                  | Meaning                                                         |
-| --------------------- | --------------------------------------------------------------- |
-| `nullability-unknown` | Result nullability is unresolved                                |
-| `shape-unknown`       | Listed output columns have unknown shapes/read types            |
-| `unmapped-type`       | A parameter or result type has no verified driver mapping       |
-| `duplicate-column`    | Repeated result names would overwrite earlier object properties |
+| Code                  | Meaning                                                               |
+| --------------------- | --------------------------------------------------------------------- |
+| `nullability-unknown` | Result nullability is unresolved                                      |
+| `shape-unknown`       | Listed output columns have unknown shapes/read types                  |
+| `unmapped-type`       | The selected registry cannot identify a custom decoder representation |
+| `duplicate-column`    | Repeated result names reject during object-row execution              |
+
+## Custom codecs
+
+Pass the runtime registry explicitly. Inspection decodes only its own catalog/context queries with
+default codecs; the selected registry determines the reported application read representations.
+
+```ts
+import { builtin, defaultCodecs } from '@kequtech/pgclear';
+
+const codecs = defaultCodecs.with(builtin.jsonbText);
+const description = await describeQuery({ connection, query, codecs });
+```
+
+A raw JSON decoder reports string instead of unknown. Scalar overrides affect derived built-in
+arrays; explicit array overrides win. An unfamiliar custom decoder reports `unknown` with an
+`unmapped-type` issue, even when its catalog type is a known scalar, enum, or domain. Supply an
+application representation when comparing such results with authored types. Catalog base types do
+not replace the wire OID's selected decoder contract. Parameter read representations are not input
+compatibility rules: text can be a valid int8 input while int8 results decode as exact strings.
 
 ## Test the same statement
 
@@ -134,3 +155,6 @@ The CLI uses `DATABASE_URL` and prints JSON. Session flags are `--role`, `--sear
 
 Exit 0 means description succeeded, including reports with unresolved findings. Exit 1 means input,
 connection, timeout, or PostgreSQL analysis failed. The inspected statement is never executed.
+
+See [source-aware checking](query-checking.md) for the separate TypeScript/SQL contract
+checking command. `tenon generate --check` only checks generated-file freshness.

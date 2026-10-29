@@ -2,7 +2,7 @@ import type { QueryClient } from '../src/index.js';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { after, before, beforeEach, test } from 'node:test';
-import { Pool } from 'pg';
+import { createPool, type Pool } from '@kequtech/pgclear';
 import type { QueryOptions, Transaction } from '../src/index.js';
 import { AffectedRowsError, createTenon, identifier, sql, unsafeSql } from '../src/index.js';
 import { qualified, quote } from '../src/sql.js';
@@ -10,28 +10,29 @@ import { assertTestDatabase, testConnection } from './helpers/database.js';
 
 const namespace = `tenon_test_${randomUUID().replaceAll('-', '')}`;
 const table = qualified(namespace, 'items');
-const pool = new Pool({ connectionString: testConnection });
+const pool = createPool({ connectionString: testConnection });
 const db = createTenon({ connection: pool });
 let ownsNamespace = false;
 
 before(async () => {
   await assertTestDatabase(pool);
-  await pool.query(`CREATE SCHEMA ${quote(namespace)}`);
+  await pool.queryClassic(`CREATE SCHEMA ${quote(namespace)}`, []);
   ownsNamespace = true;
-  await pool.query(
+  await pool.queryClassic(
     `CREATE TABLE ${table} (id integer PRIMARY KEY, value integer NOT NULL DEFAULT 0)`,
+    [],
   );
 });
 beforeEach(async () => {
-  await pool.query(`TRUNCATE ${table}`);
-  await pool.query(`INSERT INTO ${table} (id) VALUES (1), (2)`);
+  await pool.queryClassic(`TRUNCATE ${table}`, []);
+  await pool.queryClassic(`INSERT INTO ${table} (id) VALUES (1), (2)`, []);
 });
 after(async () => {
   try {
-    if (ownsNamespace) await pool.query(`DROP SCHEMA ${quote(namespace)} CASCADE`);
+    if (ownsNamespace) await pool.queryClassic(`DROP SCHEMA ${quote(namespace)} CASCADE`, []);
   } finally {
     await db.close();
-    await pool.end();
+    await pool.close();
   }
 });
 

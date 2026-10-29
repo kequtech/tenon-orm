@@ -6,7 +6,7 @@ import { join, resolve } from 'node:path';
 import { after, before, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { Pool } from 'pg';
+import { createPool, type Pool } from '@kequtech/pgclear';
 import {
   createTenon,
   generateDefinitions,
@@ -24,10 +24,10 @@ import {
   migrationProject,
 } from './helpers/database.js';
 import { checkGeneratedTypes, typeAssertions } from './helpers/generation.js';
-const pool = new Pool({ connectionString: connection });
+const pool = createPool({ connectionString: connection });
 const project = migrationProject(pool);
 before(() => assertTestDatabase(pool));
-after(() => pool.end());
+after(() => pool.close());
 const run = promisify(execFile);
 const cli = fileURLToPath(new URL('../src/cli.js', import.meta.url));
 
@@ -56,12 +56,13 @@ test('ordinary generated row types compose with Pick and indexed access across m
       await checkGeneratedTypes(
         options,
         `
-      import type { Record as DatabaseRecord, Rows } from './definitions.js';
+      import type { Database as Schema } from './definitions.js';
+type DatabaseRecord = Schema['Record']['row'];
       ${typeAssertions}
       type Complete = Assert<Equal<DatabaseRecord, { id: number; name: string; enabled: boolean }>>;
       type Projection = Assert<Equal<Pick<DatabaseRecord, 'id' | 'name'>, { id: number; name: string }>>;
       type Input = Assert<Equal<[name: DatabaseRecord['name']], [name: string]>>;
-      type Mapped = Assert<Equal<Rows['Record'], DatabaseRecord>>;
+      type Mapped = Assert<Equal<Schema['Record']['row'], DatabaseRecord>>;
       // @ts-expect-error defaulted columns are required in full returned rows
       const incomplete: DatabaseRecord = { id: 1, name: 'test' };
       // @ts-expect-error generated column names constrain Pick
@@ -72,7 +73,8 @@ test('ordinary generated row types compose with Pick and indexed access across m
       await checkGeneratedTypes(
         options,
         `
-      import type { Record as DatabaseRecord } from './definitions.js';
+      import type { Database as Schema } from './definitions.js';
+type DatabaseRecord = Schema['Record']['row'];
       ${typeAssertions}
       type Current = Assert<Equal<DatabaseRecord, { id: number; name: string }>>;
       // @ts-expect-error the rolled-back column is absent from this schema checkpoint
@@ -83,7 +85,8 @@ test('ordinary generated row types compose with Pick and indexed access across m
       await checkGeneratedTypes(
         options,
         `
-      import type { Record as DatabaseRecord } from './definitions.js';
+      import type { Database as Schema } from './definitions.js';
+type DatabaseRecord = Schema['Record']['row'];
       ${typeAssertions}
       type Restored = Assert<Equal<DatabaseRecord['enabled'], boolean>>;
     `,
@@ -94,13 +97,16 @@ test('ordinary generated row types compose with Pick and indexed access across m
 
 test('generation reads an existing schema without migration files or history', async () => {
   await project({}, async (options) => {
-    await pool.query(`CREATE SCHEMA ${quote(options.namespace)};
-      CREATE TABLE ${qualified(options.namespace, 'Account')} (id integer PRIMARY KEY);`);
+    await pool.withSession((session) =>
+      session.script(`CREATE SCHEMA ${quote(options.namespace)};
+      CREATE TABLE ${qualified(options.namespace, 'Account')} (id integer PRIMARY KEY);`),
+    );
     const source = await generateDefinitions({ connection: pool, namespace: options.namespace });
     await checkGeneratedTypes(
       options,
       `
-      import type { Account } from './definitions.js';
+      import type { Database as Schema } from './definitions.js';
+type Account = Schema['Account']['row'];
       ${typeAssertions}
       type Row = Assert<Equal<Account, { id: number }>>;
     `,
@@ -108,7 +114,10 @@ test('generation reads an existing schema without migration files or history', a
     // Even an unfinished migration is unrelated to the connected schema.
     await writeFile(join(options.directory, '0001_draft.up.sql'), '');
     assert.equal(await generateDefinitions(options), source);
-    await pool.query(`ALTER TABLE ${qualified(options.namespace, 'Account')} ADD COLUMN name text`);
+    await pool.queryClassic(
+      `ALTER TABLE ${qualified(options.namespace, 'Account')} ADD COLUMN name text`,
+      [],
+    );
     assert.notEqual(await generateDefinitions(options), source);
   });
 });
@@ -124,7 +133,8 @@ test('empty enums generate usable types for nullable and required columns', asyn
       await checkGeneratedTypes(
         options,
         `
-      import type { Empty } from './definitions.js';
+      import type { Database as Schema } from './definitions.js';
+type Empty = Schema['Empty']['row'];
       ${typeAssertions}
       type Optional = Assert<Equal<Empty['optional'], null>>;
       type Required = Assert<Equal<Empty['required'], never>>;
@@ -167,30 +177,34 @@ test('generated types preserve unusual SQL names, module-name collisions and dat
     await checkGeneratedTypes(
       options,
       `
-      import type { Rows, Inserts, Updates, Date as DateRow, 東京 } from './definitions.js';
+      import type { Database as Schema } from './definitions.js';
+type Inserts = Schema['Inserts']['row'];
+type Updates = Schema['Updates']['row'];
+type DateRow = Schema['Date']['row'];
+type 東京 = Schema['東京']['row'];
       ${typeAssertions}
-      type Expected = { id: number; 'created at': globalThis.Date | number; 'nullable-value': string | null; '__proto__': string };
-      type Matches = { [Name in keyof Rows]: Equal<Rows[Name], Expected> };
-      type AllRows = Assert<Equal<Matches[keyof Rows], true>>;
-      type NamedInserts = Assert<Equal<Inserts, Rows['Inserts']>>;
-      type NamedUpdates = Assert<Equal<Updates, Rows['Updates']>>;
-      type ReservedInsert = Assert<Equal<Rows.Insert['Inserts']['id'], number>>;
-      type ReservedUpdate = Assert<Equal<Rows.Update['Updates']['id'], number | undefined>>;
+      type Expected = { id: number; 'created at': string; 'nullable-value': string | null; '__proto__': string };
+      type Matches = { [Name in keyof Schema]: Equal<Schema[Name]['row'], Expected> };
+      type AllRows = Assert<Equal<Matches[keyof Schema], true>>;
+      type NamedInserts = Assert<Equal<Inserts, Schema['Inserts']['row']>>;
+      type NamedUpdates = Assert<Equal<Updates, Schema['Updates']['row']>>;
+      type ReservedInsert = Assert<Equal<Schema['Inserts']['insert']['id'], number | import('@kequtech/pgclear').Parameter>>;
+      type ReservedUpdate = Assert<Equal<Schema['Updates']['update']['id'], number | import('@kequtech/pgclear').Parameter | undefined>>;
       type UnicodeAlias = Assert<Equal<東京, Expected>>;
-      type DateAlias = Assert<Equal<DateRow['created at'], globalThis.Date | number>>;
-      type ExactName = Assert<Equal<Pick<Rows['user-details'], 'nullable-value'>, { 'nullable-value': string | null }>>;
+      type DateAlias = Assert<Equal<DateRow['created at'], string>>;
+      type ExactName = Assert<Equal<Pick<Schema['user-details']['row'], 'nullable-value'>, { 'nullable-value': string | null }>>;
       // @ts-expect-error SQL column names are preserved rather than converted
-      type Renamed = Rows['user-details']['createdAt'];
+      type Renamed = Schema['user-details']['row']['createdAt'];
       // @ts-expect-error SQL table names are preserved rather than converted
-      type RenamedTable = Rows['UserDetails'];
+      type RenamedTable = Schema['UserDetails']['row'];
     `,
     );
     await checkGeneratedTypes(
       options,
       `
-      import type { Rows } from './definitions.js';
+      import type { Database as Schema } from './definitions.js';
       ${typeAssertions}
-      type Names = Assert<Equal<keyof Rows, ${names.map((name) => JSON.stringify(name)).join(' | ')}>>;
+      type Names = Assert<Equal<keyof Schema, ${names.map((name) => JSON.stringify(name)).join(' | ')}>>;
     `,
     );
   });
@@ -212,7 +226,9 @@ test('row generation needs no unique key and accepts indexes and generated expre
       await checkGeneratedTypes(
         options,
         `
-      import type { Record as DatabaseRecord, NoKey } from './definitions.js';
+      import type { Database as Schema } from './definitions.js';
+type DatabaseRecord = Schema['Record']['row'];
+type NoKey = Schema['NoKey']['row'];
       ${typeAssertions}
       type RecordRow = Assert<Equal<DatabaseRecord, { id: number; name: string; upper_name: string | null }>>;
       type KeylessRow = Assert<Equal<NoKey, { value: string | null }>>;
@@ -249,26 +265,32 @@ test('generation includes ordinary tables and partitioned roots while skipping a
       const warnings: string[] = [];
       const source = await generateDefinitions({
         ...options,
-        onWarning: (message) => warnings.push(message),
+        onWarning: (message) => {
+          warnings.push(message);
+        },
       });
-      assert.equal(warnings.length, 1);
-      assert.ok(warnings[0]!.includes('"Events"."lag"'));
+      assert.equal(warnings.length, 0);
       assert.equal(await generateDefinitions({ ...options, onWarning: () => {} }), source);
       await checkGeneratedTypes(
         { ...options, onWarning: () => {} },
         `
-      import type { Rows, Events, EmptyEvents, Standalone, PgArray } from './definitions.js';
+      import type { Database as Schema } from './definitions.js';
+type Events = Schema['Events']['row'];
+type EmptyEvents = Schema['EmptyEvents']['row'];
+type Standalone = Schema['Standalone']['row'];
+import type { PgArray } from '@kequtech/pgclear';
       ${typeAssertions}
       type Expected = { id: number; tenant: number; label: string | null;
-        tags: PgArray<number>; payload: unknown; lag: unknown };
-      type AllNames = Assert<Equal<keyof Rows, 'Events' | 'EmptyEvents' | 'Standalone'>>;
+        tags: PgArray<number>; payload: unknown; lag: string | null };
+      type AllNames = Assert<Equal<keyof Schema, 'Events' | 'EmptyEvents' | 'Standalone'>>;
       type Parent = Assert<Equal<Events, Expected>>;
       type EmptyParent = Assert<Equal<EmptyEvents, { id: number }>>;
       type Ordinary = Assert<Equal<Standalone, { id: number; label: string | null }>>;
       // @ts-expect-error intermediate attached parents are not generated
-      type Intermediate = Rows['EventsRecent'];
+      type Intermediate = Schema['EventsRecent']['row'];
       // @ts-expect-error local leaves do not get separate named exports
-      import type { EventsRecentA } from './definitions.js';
+
+type EventsRecentA = Schema['EventsRecentA']['row'];
       // @ts-expect-error nullable parent fields still require narrowing
       ({} as Events).label.toUpperCase();
       // @ts-expect-error dropped inherited columns are absent
@@ -276,10 +298,13 @@ test('generation includes ordinary tables and partitioned roots while skipping a
     `,
       );
       // Routine partition maintenance changes neither row types nor schema summaries.
-      await pool.query(`CREATE TABLE ${qualified(options.namespace, 'EventsTomorrow')}
-      PARTITION OF ${qualified(options.namespace, 'Events')} FOR VALUES FROM (200) TO (300)`);
+      await pool.queryClassic(
+        `CREATE TABLE ${qualified(options.namespace, 'EventsTomorrow')}
+      PARTITION OF ${qualified(options.namespace, 'Events')} FOR VALUES FROM (200) TO (300)`,
+        [],
+      );
       assert.equal(await generateDefinitions({ ...options, onWarning: () => {} }), source);
-      await pool.query(`DROP TABLE ${qualified(options.namespace, 'EventsTomorrow')}`);
+      await pool.queryClassic(`DROP TABLE ${qualified(options.namespace, 'EventsTomorrow')}`, []);
       assert.equal(await generateDefinitions({ ...options, onWarning: () => {} }), source);
       const db = createTenon({ connection: pool });
       try {
@@ -320,19 +345,26 @@ test('generation includes ordinary tables and partitioned roots while skipping a
           { code: '23502' },
         );
         // Detachment makes the table an independent model with its own constraints.
-        await pool.query(`ALTER TABLE ${qualified(options.namespace, 'EventsRecent')}
-        DETACH PARTITION ${qualified(options.namespace, 'EventsRecentA')}`);
+        await pool.queryClassic(
+          `ALTER TABLE ${qualified(options.namespace, 'EventsRecent')}
+        DETACH PARTITION ${qualified(options.namespace, 'EventsRecentA')}`,
+          [],
+        );
         await checkGeneratedTypes(
           { ...options, onWarning: () => {} },
           `
-        import type { Rows, EventsRecentA } from './definitions.js';
+        import type { Database as Schema } from './definitions.js';
+type EventsRecentA = Schema['EventsRecentA']['row'];
         ${typeAssertions}
-        type Detached = Assert<Equal<keyof Rows, 'Events' | 'EmptyEvents' | 'Standalone' | 'EventsRecentA'>>;
+        type Detached = Assert<Equal<keyof Schema, 'Events' | 'EmptyEvents' | 'Standalone' | 'EventsRecentA'>>;
         type IndependentNullability = Assert<Equal<EventsRecentA['label'], string>>;
       `,
         );
-        await pool.query(`ALTER TABLE ${qualified(options.namespace, 'EventsRecent')}
-        ATTACH PARTITION ${qualified(options.namespace, 'EventsRecentA')} FOR VALUES IN (1)`);
+        await pool.queryClassic(
+          `ALTER TABLE ${qualified(options.namespace, 'EventsRecent')}
+        ATTACH PARTITION ${qualified(options.namespace, 'EventsRecentA')} FOR VALUES IN (1)`,
+          [],
+        );
         assert.equal(await generateDefinitions({ ...options, onWarning: () => {} }), source);
         await writeFile(
           join(options.directory, '0002_column.up.sql'),
@@ -342,11 +374,11 @@ test('generation includes ordinary tables and partitioned roots while skipping a
         await checkGeneratedTypes(
           { ...options, onWarning: () => {} },
           `
-        import type { Rows } from './definitions.js';
+        import type { Database as Schema } from './definitions.js';
         ${typeAssertions}
-        type UpdatedParent = Assert<Equal<Rows['Events']['enabled'], boolean>>;
+        type UpdatedParent = Assert<Equal<Schema['Events']['row']['enabled'], boolean>>;
         // @ts-expect-error unrelated parents do not acquire another hierarchy's column
-        type Unchanged = Rows['EmptyEvents']['enabled'];
+        type Unchanged = Schema['EmptyEvents']['row']['enabled'];
       `,
         );
         const updated = await db.query(
@@ -368,8 +400,14 @@ test('foreign tables use authored types without affecting ordinary table generat
   const server = `tenon_server_${randomUUID().replaceAll('-', '')}`;
   try {
     // Declaration-only wrapper: no extension, handler or external connection.
-    await pool.query(`CREATE FOREIGN DATA WRAPPER ${quote(wrapper)} NO HANDLER NO VALIDATOR`);
-    await pool.query(`CREATE SERVER ${quote(server)} FOREIGN DATA WRAPPER ${quote(wrapper)}`);
+    await pool.queryClassic(
+      `CREATE FOREIGN DATA WRAPPER ${quote(wrapper)} NO HANDLER NO VALIDATOR`,
+      [],
+    );
+    await pool.queryClassic(
+      `CREATE SERVER ${quote(server)} FOREIGN DATA WRAPPER ${quote(wrapper)}`,
+      [],
+    );
     await project(
       {
         '0001_tables.up.sql': `
@@ -383,14 +421,25 @@ test('foreign tables use authored types without affecting ordinary table generat
         const source = await generateDefinitions(options);
         const output = join(options.directory, 'definitions.ts');
         await writeFile(output, source);
-        await pool.query(`CREATE FOREIGN TABLE ${qualified(options.namespace, 'ForeignRecord')}
+        await pool.queryClassic(
+          `CREATE FOREIGN TABLE ${qualified(options.namespace, 'ForeignRecord')}
         (id integer, duration ${qualified(options.namespace, 'ForeignOnly')}, tags integer[])
-        SERVER ${quote(server)}`);
-        await pool.query(`CREATE FOREIGN TABLE ${qualified(options.namespace, 'ForeignDaily')}
-        PARTITION OF ${qualified(options.namespace, 'Root')} DEFAULT SERVER ${quote(server)}`);
+        SERVER ${quote(server)}`,
+          [],
+        );
+        await pool.queryClassic(
+          `CREATE FOREIGN TABLE ${qualified(options.namespace, 'ForeignDaily')}
+        PARTITION OF ${qualified(options.namespace, 'Root')} DEFAULT SERVER ${quote(server)}`,
+          [],
+        );
         const warnings: string[] = [];
         assert.equal(
-          await generateDefinitions({ ...options, onWarning: (message) => warnings.push(message) }),
+          await generateDefinitions({
+            ...options,
+            onWarning: (message) => {
+              warnings.push(message);
+            },
+          }),
           source,
         );
         assert.deepEqual(warnings, []);
@@ -403,38 +452,40 @@ test('foreign tables use authored types without affecting ordinary table generat
         await checkGeneratedTypes(
           options,
           `
-        import type { Rows, Local, Root } from './definitions.js';
+        import type { Database as Schema } from './definitions.js';
+type Local = Schema['Local']['row'];
+type Root = Schema['Root']['row'];
         ${typeAssertions}
-        type Names = Assert<Equal<keyof Rows, 'Local' | 'Root'>>;
+        type Names = Assert<Equal<keyof Schema, 'Local' | 'Root'>>;
         type LocalRow = Assert<Equal<Local, { id: number; name: string | null }>>;
         type RootRow = Assert<Equal<Root, { id: number | null }>>;
         // @ts-expect-error foreign tables have manually authored query contracts
-        type ForeignRow = Rows['ForeignRecord'];
+        type ForeignRow = Schema['ForeignRecord']['row'];
         // @ts-expect-error attached foreign partitions do not have generated aliases
-        import type { ForeignDaily } from './definitions.js';
-        // @ts-expect-error skipped foreign array columns do not introduce helpers
-        import type { PgArray } from './definitions.js';
+
+type ForeignDaily = Schema['ForeignDaily']['row'];
+        import type { PgArray } from '@kequtech/pgclear';
       `,
         );
-        await pool.query(`DROP TABLE ${qualified(options.namespace, 'Local')}`);
-        await pool.query(`DROP TABLE ${qualified(options.namespace, 'Root')}`);
+        await pool.queryClassic(`DROP TABLE ${qualified(options.namespace, 'Local')}`, []);
+        await pool.queryClassic(`DROP TABLE ${qualified(options.namespace, 'Root')}`, []);
         const onlyForeign = await generateDefinitions(options);
         assert.equal(onlyForeign, await generateDefinitions(options));
         await checkGeneratedTypes(
           options,
           `
-        import type { Rows } from './definitions.js';
+        import type { Database as Schema } from './definitions.js';
         ${typeAssertions}
-        type NoGeneratedTables = Assert<Equal<keyof Rows, never>>;
+        type NoGeneratedTables = Assert<Equal<keyof Schema, never>>;
       `,
         );
       },
     );
   } finally {
     try {
-      await pool.query(`DROP SERVER IF EXISTS ${quote(server)} CASCADE`);
+      await pool.queryClassic(`DROP SERVER IF EXISTS ${quote(server)} CASCADE`, []);
     } finally {
-      await pool.query(`DROP FOREIGN DATA WRAPPER IF EXISTS ${quote(wrapper)}`);
+      await pool.queryClassic(`DROP FOREIGN DATA WRAPPER IF EXISTS ${quote(wrapper)}`, []);
     }
   }
 });
@@ -454,15 +505,16 @@ test('views always use authored types and do not block table generation', async 
       await checkGeneratedTypes(
         options,
         `
-      import type { Record as DatabaseRecord, Rows } from './definitions.js';
+      import type { Database as Schema } from './definitions.js';
+type DatabaseRecord = Schema['Record']['row'];
       ${typeAssertions}
-      type TablesOnly = Assert<Equal<keyof Rows, 'Record'>>;
+      type TablesOnly = Assert<Equal<keyof Schema, 'Record'>>;
       type PhysicalRow = Assert<Equal<DatabaseRecord, { id: number; name: string }>>;
       type AuthoredView = Pick<DatabaseRecord, 'id' | 'name'> & { age: string };
       // @ts-expect-error view types are always authored alongside their SQL
-      type View = Rows['RecordView'];
+      type View = Schema['RecordView']['row'];
       // @ts-expect-error materialized views follow the same manual type policy
-      type Snapshot = Rows['RecordSnapshot'];
+      type Snapshot = Schema['RecordSnapshot']['row'];
     `,
       );
       const db = createTenon({ connection: pool });
@@ -471,7 +523,7 @@ test('views always use authored types and do not block table generation', async 
         const view = await db.query(
           sql<AuthoredView>`SELECT id, name, age::text AS age FROM ${identifier(options.namespace, 'RecordView')}`,
         );
-        assert.deepEqual([...view.rows], [{ id: 1, name: 'example', age: '1 day' }]);
+        assert.deepEqual([...view.rows], [{ id: 1, name: 'example', age: 'P1D' }]);
         const snapshot = await db.query(
           sql<{
             id: number;
@@ -499,13 +551,13 @@ test('a schema containing only views generates an empty table type map', async (
       await checkGeneratedTypes(
         options,
         `
-      import type { Rows } from './definitions.js';
+      import type { Database as Schema } from './definitions.js';
       ${typeAssertions}
-      type NoTables = Assert<Equal<keyof Rows, never>>;
-      type NoInserts = Assert<Equal<Rows.Insert[keyof Rows], never>>;
-      type NoUpdates = Assert<Equal<Rows.Update[keyof Rows], never>>;
+      type NoTables = Assert<Equal<keyof Schema, never>>;
+      type NoInserts = Assert<Equal<Schema[keyof Schema]['insert'], never>>;
+      type NoUpdates = Assert<Equal<Schema[keyof Schema]['update'], never>>;
       // @ts-expect-error views do not have generated mutation input types
-      type ViewInput = Rows.Insert['ManualView'];
+      type ViewInput = Schema['ManualView']['insert'];
     `,
       );
       assert.deepEqual(await migrationStatus(options), { applied: ['0001'], pending: [] });

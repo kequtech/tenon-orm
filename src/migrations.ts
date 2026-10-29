@@ -46,24 +46,25 @@ async function execute(
     if (!selected.length) {
       return [];
     }
-    await client.query(`CREATE SCHEMA IF NOT EXISTS ${quote(namespace)}`);
+    await client.queryClassic(`CREATE SCHEMA IF NOT EXISTS ${quote(namespace)}`, []);
     await createHistoryTable(client, namespace);
     const completed: string[] = [];
     for (const file of selected) {
       try {
-        await client.query('BEGIN');
+        await client.queryClassic('BEGIN', []);
         // Match the string-literal rules used by the authored migration scanner.
-        await client.query('SET LOCAL standard_conforming_strings TO on');
-        await client.query(`SET LOCAL search_path TO ${quote(namespace)}, pg_catalog`);
-        await client.query(direction === 'up' ? file.up : file.down!);
+        await client.queryClassic('SET LOCAL standard_conforming_strings TO on', []);
+        await client.queryClassic(`SET LOCAL search_path TO ${quote(namespace)}, pg_catalog`, []);
+        await client.script(direction === 'up' ? file.up : file.down!);
         if (direction === 'up') {
           await recordMigration(client, namespace, file);
         } else {
-          await client.query(`DELETE FROM ${qualified(namespace, migrationTable)} WHERE id = $1`, [
-            file.id,
-          ]);
+          await client.queryClassic(
+            `DELETE FROM ${qualified(namespace, migrationTable)} WHERE id = $1`,
+            [file.id],
+          );
         }
-        const result = await client.query('COMMIT');
+        const result = await client.queryClassic('COMMIT', []);
         if (result.command !== 'COMMIT') {
           throw new Error('The migration transaction was rolled back.');
         }

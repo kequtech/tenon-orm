@@ -1,4 +1,4 @@
-import type { SqlQuery } from '../query.js';
+import type { CodecRegistry, DescribeStatement } from '@kequtech/pgclear';
 
 export interface InspectionSession {
   readonly role?: string | undefined;
@@ -23,14 +23,16 @@ export interface InspectionContext {
   readonly timeZone: string;
   readonly statementTimeoutMs: number;
   readonly lockTimeoutMs: number;
-  readonly readMappings: 'pg';
+  readonly readMappings: 'pgclear';
 }
 
 export interface DescribeOptions {
   /** PostgreSQL connection URI. Inspection owns a separate, short-lived connection. */
   readonly connection: string;
   /** Finished SQL; query values are neither bound nor executed. */
-  readonly query: string | Pick<SqlQuery, 'text'>;
+  readonly query: string | DescribeStatement;
+  /** Use the same registry as execution; custom decoder types can remain unresolved. */
+  readonly codecs?: CodecRegistry | undefined;
   readonly session?: InspectionSession | undefined;
   readonly timeouts?: InspectionTimeouts | undefined;
 }
@@ -53,7 +55,7 @@ export type DescriptionIssue =
 export interface DescribedType {
   readonly oid: number;
   readonly postgres: string;
-  /** pg read representation, before considering result nullability. */
+  /** pgclear read representation, before considering result nullability. */
   readonly readType: string;
 }
 

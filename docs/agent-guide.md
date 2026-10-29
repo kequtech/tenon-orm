@@ -1,15 +1,23 @@
 # Tenon agent guide
 
-Tenon executes explicit PostgreSQL SQL through pg. Use ordinary functions for reusable queries. This
+Tenon executes explicit PostgreSQL SQL through pgclear. Use ordinary functions for reusable queries. This
 guide covers routine implementation; the [reference](reference.md) defines the full API and the
 [human guide](human-guide.md) gives a step-by-step introduction.
 
 ## Start with the existing project
 
+Read this guide after the README; consult the [reference](reference.md) for specific contracts.
+For a first setup, follow the [human guide](human-guide.md). Prefer documentation from the installed
+package when the repository's main branch describes a newer release.
+
 Inspect its connection configuration, migration runner, generated types, query functions, and check
 commands. Preserve those conventions. Tenon queries and type generation do not require Tenon
 migration history. Keep input validation, authorization, domain conversion, and retry policy in the
 application.
+
+Start from the existing database module and a nearby query function. Reuse their connection,
+generated-schema imports, namespace, and `QueryClient` convention. Check both resolved Tenon and
+pgclear versions before changing driver calls or value representations.
 
 For an upgrade, record the previous resolved Tenon version from the lockfile or installed package
 and read the [Changelog](../CHANGELOG.md) entries through the target version before changing code.
@@ -20,8 +28,9 @@ when mappings change, and run the project's typechecks and relevant database tes
 ## Connect
 
 Requires Node.js 24+, PostgreSQL 16+, ESM, TypeScript 6+, and Node development typings. Install with
-`npm install @kequtech/tenon-orm`; retain the project's package manager and TypeScript
-configuration.
+`npm install @kequtech/tenon-orm @kequtech/pgclear`; retain the project's package manager and TypeScript
+configuration. The supported pgclear peer starts at 0.2.0; review its release notes when upgrading
+the driver independently, regenerate changed types, and rerun database checks.
 
 ```ts
 import { createTenon } from '@kequtech/tenon-orm';
@@ -31,8 +40,8 @@ if (!connection) throw new Error('DATABASE_URL is required');
 export const db = createTenon({ connection });
 ```
 
-`connection` accepts a URI string, pg `PoolConfig` (including `connectionString`), or an existing
-`pg.Pool`. Reuse an instance for each database configuration. `db.close()` ends internally created
+`connection` accepts a URI string, pgclear `PoolOptions` (including `connectionString`), or an existing
+pgclear `Pool`. Reuse an instance for each database configuration. `db.close()` ends internally created
 pools with a default 5,000 ms grace period; supplied pools remain application-owned. Configure
 shutdown with `db.close({ timeoutMs })`; concurrent callers share its outcome. Finish outstanding
 work before closing. Tenon loads no environment files. Qualify table names or set runtime
@@ -43,9 +52,9 @@ work before closing. Tenon loads no environment files. Qualify table names or se
 
 ```ts
 import { sql, type QueryClient } from '@kequtech/tenon-orm';
-import type { Rows } from './generated-schema.js';
+import type { Database } from './generated-schema.js';
 
-type Summary = Pick<Rows['users'], 'id' | 'email'>;
+type Summary = Pick<Database['users']['row'], 'id' | 'email'>;
 
 function userById(client: QueryClient, { id }: { id: number }) {
   return client.query(sql<Summary>`SELECT id, email FROM public.users WHERE id = ${id}`, {
@@ -62,7 +71,7 @@ aggregates need types for their actual output.
 | `returns`          | Result                                             | Required returned rows |
 | ------------------ | -------------------------------------------------- | ---------------------- |
 | `native` (default) | Driver object with `.rows`, `.rowCount`, `.fields` | Any                    |
-| `many`             | Plain `Row[]`                                      | Any                    |
+| `many`             | `readonly Row[]`                                   | Any                    |
 | `oneOrNone`        | `Row \| undefined`                                 | Zero or one            |
 | `one`              | `Row`                                              | Exactly one            |
 
@@ -72,9 +81,9 @@ Options are `{ returns?, affectedRows?, label? }`; unknown keys fail. Modes do n
 
 ## Parameters and composition
 
-- Interpolate values without quotes. Do not author `$n` placeholders inside templates. `undefined`
-  and `null` bind as SQL null, following pg.
-- Use `id = ANY(${ids}::integer[])` for a set of IDs. Cast standalone parameters such as
+- Interpolate values without quotes. Do not author `$n` placeholders inside templates. `null` binds
+  SQL NULL; `undefined`, objects, arrays, and Date require omission or explicit encoding.
+- Use pgclear `param(ids, builtin.int4Array)` with `ANY` for a set of IDs. Cast standalone parameters such as
   `SELECT ${value}::integer AS value` when SQL must establish the type for inspection.
 - `identifier(schema, table)` quotes separate approved names. Strings such as `'DESC'` remain bound
   values; choose SQL syntax through fixed query alternatives or fragments.
@@ -95,17 +104,17 @@ Selected columns ignore unlisted fields and can discard required inputs. Put exp
 policy, and `RETURNING` in the surrounding SQL. Batch in the caller below the query-wide
 65,535-parameter limit.
 
-Use generated `Rows.Insert['users']` and `Rows.Update['users']` inputs; narrow editable fields with
+Use generated `Database['users']['insert']` and `Database['users']['update']` inputs; narrow editable fields with
 `Pick`. These types account for defaults, writable columns, domains, and driver representations.
 They do not validate constraints or JSON contents. See [mutation examples](mutations.md).
 
-Use `JSON.stringify(value)` for JSON write inputs; arrays otherwise bind as PostgreSQL arrays.
-Bigint and numeric scalars read as strings, while numeric arrays read as numbers and can lose
-precision. Temporal reads use `Date | number` for finite dates and infinities. SQL NULL array
-elements remain JavaScript null. Keep domain validation at the persistence boundary. See
+Use pgclear `json(value)` or encoded text for JSON, and `param(value, codec)` for arrays and
+custom encodings. Bigint scalars and SQL `count(*)` read as exact strings; command `rowCount` uses
+numbers. Plain bigint binds reject; use strings or `param(text, builtin.int8)`. Decimals and temporal
+values read as strings. Numeric and bigint arrays preserve exact strings. Bytes use Uint8Array.
+SQL NULL array elements remain null. Keep domain validation at the persistence boundary. See
 [value mappings](reference.md#generated-types-and-checking) and the
-[JSON/finite-date projection](reference.md#persistence-and-domain-values). For authentication policy
-requiring finite expiry, include `isfinite(expires_at)` alongside the SQL expiry comparison.
+[JSON/temporal projection](reference.md#persistence-and-domain-values).
 
 ## Transactions and native access
 
@@ -128,7 +137,7 @@ provided. Transactions belong to one database instance.
 Bounds are nonnegative safe integers. A guarded `db.query` uses a transaction; a guarded `tx.query`
 uses a savepoint. Rejection rolls back that operation. A caught guarded failure permits continued
 work; an unguarded SQL error normally aborts the transaction. Counts exclude extra trigger/cascade
-and CTE effects. Reserve `tenon_affected_rows_` savepoint names for Tenon. A lost commit
+and CTE effects. pgclear owns savepoint recovery. A lost commit
 acknowledgment can leave the outcome unknown.
 
 `db.native` exposes the existing pool for driver features. Native calls bypass Tenon's guards and
@@ -139,16 +148,30 @@ not establish that the outer transaction committed.
 
 ## Inspect and validate
 
-Use `describeQuery({ connection, query })` on completed SQL or `tenon describe query.sql` on a file.
-Inspection owns a separate connection. Match the runtime role, search path, and timezone. Temporary
-tables and transaction-local state are not inherited; reported mappings assume pg's default parsers.
-Result nullability is unknown and JSON structure is unchecked. A successful description does not
-verify `sql<Row>`, bound values, execution permission, or effects.
+Choose the tool for the task: `tenon check` compares source contracts, `tenon describe` reports
+finished SQL metadata, and `tenon generate --check` checks generated-file freshness. None replaces
+TypeScript or database tests. See [validation tools](reference.md#choosing-a-validation-tool).
 
-Pair inspection with database assertions for complete relevant rows, meaningful query variants, and
-rollback. A small query-building function can share the same statement with inspection and
-execution; keep simple queries inline when that is sufficient. See
-[query inspection](query-inspection.md).
+Run tenon check on the TypeScript project, a file, or file:line. It recovers authored SQL and types
+without importing application code, then uses pgclear Describe. Mismatches, unchecked queries and
+zero query sites fail; unproven properties do not. Trust declared types when metadata is inconclusive.
+
+For checking, object expansions need an explicit finite shape type and required, defined selected
+properties. Prefer explicit column lists. Fixed fragments, const aliases, fixed joins and finite
+ternaries are supported within 16 variants per query. Dynamic fragments, optional-field SQL
+expansion and unknown batch lengths remain unchecked. See [query checking](query-checking.md).
+
+A generated update type usually has optional properties. Even with an explicit column list, those
+properties can change the SQL by omission, so the checker may report an ordinary patch as unchecked.
+Keep that runtime behavior when intended. If selected fields are always supplied, validate/narrow
+the input into an explicit required shape. Do not use casts just to suppress a finding. See
+[responding to findings](query-checking.md#responding-to-findings) and
+[troubleshooting](reference.md#troubleshooting).
+
+For metadata alone, use describeQuery or tenon describe query.sql. Match role, search path, timezone,
+and custom codecs. Temporary tables and transaction-local state are not inherited. Retain tests for
+complete rows, meaningful query variants, authorization, effects, and rollback. Describe does not
+prove bound values, JSON members, nullability, cardinality or runtime execution permission.
 
 ## Schema changes
 

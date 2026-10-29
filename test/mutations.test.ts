@@ -1,6 +1,7 @@
+import { param, builtin } from '@kequtech/pgclear';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { Pool } from 'pg';
+import { createPool, type Pool } from '@kequtech/pgclear';
 import { createTenon, identifier, migrate, sql, unsafeSql } from '../src/index.js';
 import { assertTestDatabase, migrationProject, testConnection } from './helpers/database.js';
 
@@ -102,7 +103,7 @@ test('query compilation enforces the combined PostgreSQL bind limit without impl
 });
 
 test('mutation fragments execute defaults, upserts, partial updates and generated-column rules', async () => {
-  const pool = new Pool({ connectionString: testConnection });
+  const pool = createPool({ connectionString: testConnection });
   const db = createTenon({ connection: pool });
   try {
     await assertTestDatabase(pool);
@@ -169,7 +170,7 @@ test('mutation fragments execute defaults, upserts, partial updates and generate
           sql<Row>`INSERT INTO ${table} ${sql.insertValues({
             name: 'arrays',
             payload: JSON.stringify(handles),
-            tags: handles,
+            tags: param(handles, builtin.textArray),
           })} RETURNING *`,
           { returns: 'one' },
         );
@@ -186,7 +187,7 @@ test('mutation fragments execute defaults, upserts, partial updates and generate
         );
         const batches = await db.query(
           sql<{ count: string }>`SELECT count(*) AS count FROM ${table}
-          WHERE name = ANY(${['batch-one', 'batch-two']}::text[])`,
+          WHERE name = ANY(${param(['batch-one', 'batch-two'], builtin.textArray)}::text[])`,
           { returns: 'one' },
         );
         assert.equal(batches.count, '0');
@@ -203,6 +204,6 @@ test('mutation fragments execute defaults, upserts, partial updates and generate
     );
   } finally {
     await db.close();
-    await pool.end();
+    await pool.close();
   }
 });

@@ -3,7 +3,7 @@ import { rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { after, before, test } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
-import { Pool } from 'pg';
+import { createPool, type Pool } from '@kequtech/pgclear';
 import {
   createTenon,
   generateDefinitions,
@@ -21,17 +21,17 @@ import {
   testConnection as connection,
   migrationProject,
 } from './helpers/database.js';
-const pool = new Pool({ connectionString: connection });
+const pool = createPool({ connectionString: connection });
 const project = migrationProject(pool);
 before(() => assertTestDatabase(pool));
-after(() => pool.end());
+after(() => pool.close());
 
 async function waitForAdvisoryWaiters(application: string, expected: number): Promise<void> {
   const deadline = Date.now() + 5000;
   let count = 0;
   do {
     const result = (
-      await pool.query<{ count: number }>(
+      await pool.queryClassic<{ count: number }>(
         `
       SELECT count(*)::int AS count FROM pg_catalog.pg_locks l
       JOIN pg_catalog.pg_stat_activity a ON a.pid = l.pid
@@ -50,8 +50,9 @@ async function waitForAdvisoryWaiters(application: string, expected: number): Pr
 test('migration upgrades and rollbacks preserve existing data', async () => {
   await project(recordMigrations, async (options) => {
     await migrate(options);
-    await pool.query(
+    await pool.queryClassic(
       `INSERT INTO ${qualified(options.namespace, 'Record')} (name) VALUES ('existing')`,
+      [],
     );
     await writeFile(
       join(options.directory, '0002_enabled.up.sql'),
@@ -127,7 +128,7 @@ test('migration upgrades and rollbacks preserve existing data', async () => {
     assert.deepEqual(await rollback({ ...options, steps: 2 }), ['0002', '0001']);
     assert.equal(
       (
-        await pool.query('SELECT to_regclass($1)::text AS name', [
+        await pool.queryClassic('SELECT to_regclass($1)::text AS name', [
           qualified(options.namespace, 'Record'),
         ])
       ).rows[0]!.name,
@@ -147,12 +148,16 @@ test('a failed migration rolls back its schema and data changes without recordin
       await assert.rejects(migrate(options), /0002_failure.*failed/);
       assert.deepEqual(await migrationStatus(options), { applied: ['0001'], pending: ['0002'] });
       assert.deepEqual(
-        [...(await pool.query(`SELECT * FROM ${qualified(options.namespace, 'Record')}`)).rows],
+        [
+          ...(
+            await pool.queryClassic(`SELECT * FROM ${qualified(options.namespace, 'Record')}`, [])
+          ).rows,
+        ],
         [],
       );
       assert.equal(
         (
-          await pool.query('SELECT to_regclass($1)::text AS name', [
+          await pool.queryClassic('SELECT to_regclass($1)::text AS name', [
             qualified(options.namespace, 'Temporary'),
           ])
         ).rows[0]!.name,
@@ -178,8 +183,9 @@ test('edited or missing applied files and out-of-order additions stop migration 
     await assert.rejects(migrate(options), /history differs/);
     assert.equal(
       (
-        await pool.query(
+        await pool.queryClassic(
           `SELECT count(*)::int AS count FROM ${qualified(options.namespace, '__tenon_migrations')}`,
+          [],
         )
       ).rows[0]!.count,
       1,
@@ -188,10 +194,10 @@ test('edited or missing applied files and out-of-order additions stop migration 
 });
 
 test('migration parsing stays consistent when the connection uses backslash escapes', async () => {
-  const configured = new Pool({
+  const configured = createPool({
     connectionString: connection.replace(/([?&])options=[^&]*/, '$1'),
-    max: 1,
-    options: '-c standard_conforming_strings=off',
+    maxConnections: 1,
+    startupParameters: { standard_conforming_strings: 'off' },
   });
   try {
     await project(
@@ -205,7 +211,7 @@ test('migration parsing stays consistent when the connection uses backslash esca
         await assert.rejects(migrate(migration));
         assert.equal(
           (
-            await pool.query('SELECT to_regclass($1) AS name', [
+            await pool.queryClassic('SELECT to_regclass($1) AS name', [
               qualified(options.namespace, 'escaped_commit'),
             ])
           ).rows[0]!.name,
@@ -213,7 +219,7 @@ test('migration parsing stays consistent when the connection uses backslash esca
         );
         assert.deepEqual(await migrationStatus(migration), { applied: [], pending: ['0001'] });
         assert.equal(
-          (await configured.query('SHOW standard_conforming_strings')).rows[0]!
+          (await configured.queryClassic('SHOW standard_conforming_strings', [])).rows[0]!
             .standard_conforming_strings,
           'off',
         );
@@ -226,22 +232,23 @@ test('migration parsing stays consistent when the connection uses backslash esca
         assert.deepEqual(
           [
             ...(
-              await pool.query(
+              await pool.queryClassic(
                 `SELECT value FROM ${qualified(options.namespace, 'escaped_commit')}`,
+                [],
               )
             ).rows,
           ],
           [{ value: "a' b" }],
         );
         assert.equal(
-          (await configured.query('SHOW standard_conforming_strings')).rows[0]!
+          (await configured.queryClassic('SHOW standard_conforming_strings', [])).rows[0]!
             .standard_conforming_strings,
           'off',
         );
       },
     );
   } finally {
-    await configured.end();
+    await configured.close();
   }
 });
 
@@ -263,10 +270,10 @@ test('irreversible migrations reject rollback before any selected down operation
 
 test('overlapping migration tools wait for locks and reread history before selecting work', async () => {
   await project(recordMigrations, async (options) => {
-    const contenders = new Pool({
+    const contenders = createPool({
       connectionString: connection,
-      max: 3,
-      application_name: options.namespace,
+      maxConnections: 3,
+      applicationName: options.namespace,
     });
     const queued = { ...options, connection: contenders };
     const pending: Promise<unknown>[] = [];
@@ -315,14 +322,18 @@ test('overlapping migration tools wait for locks and reread history before selec
       );
     } finally {
       await Promise.allSettled(pending);
-      await contenders.end();
+      await contenders.close();
     }
   });
 });
 
 test('tool lock waits honor the connection lock_timeout and leave connections reusable', async () => {
   await project(recordMigrations, async (options) => {
-    const limited = new Pool({ connectionString: connection, max: 1, lock_timeout: 100 });
+    const limited = createPool({
+      connectionString: connection,
+      maxConnections: 1,
+      startupParameters: { lock_timeout: '100ms' },
+    });
     const timed = { ...options, connection: limited };
     try {
       await withMigrationLock(options, 'exclusive', async () => {
@@ -330,11 +341,14 @@ test('tool lock waits honor the connection lock_timeout and leave connections re
         await assert.rejects(generateDefinitions(timed), { code: '55P03' });
         await assert.rejects(migrationStatus(timed), { code: '55P03' });
         assert.equal(
-          (await pool.query('SELECT to_regnamespace($1) AS name', [options.namespace])).rows[0]!
-            .name,
+          (await pool.queryClassic('SELECT to_regnamespace($1) AS name', [options.namespace]))
+            .rows[0]!.name,
           null,
         );
-        assert.equal((await limited.query('SHOW lock_timeout')).rows[0]!.lock_timeout, '100ms');
+        assert.equal(
+          (await limited.queryClassic('SHOW lock_timeout', [])).rows[0]!.lock_timeout,
+          '100ms',
+        );
       });
       assert.deepEqual(await migrate(timed), ['0001']);
       await withMigrationLock(options, 'shared', async () => {
@@ -343,7 +357,7 @@ test('tool lock waits honor the connection lock_timeout and leave connections re
       });
       assert.deepEqual(await rollback(timed), ['0001']);
     } finally {
-      await limited.end();
+      await limited.close();
     }
   });
 });

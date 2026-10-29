@@ -11,14 +11,10 @@ export const describeFlags = {
 } as const;
 
 /** Translate CLI flags; validation and defaults belong to the public API. */
-export async function runDescribe(
-  filename: string,
-  connection: string,
+export function inspectionSettings(
   values: Partial<Record<keyof typeof describeFlags, string | undefined>>,
-): Promise<void> {
-  const result = await describeQuery({
-    connection,
-    query: await readFile(filename, 'utf8'),
+) {
+  return {
     session: {
       role: values.role,
       searchPath: values['search-path'],
@@ -35,6 +31,18 @@ export async function runDescribe(
         ? { lockMs: Number(values['lock-timeout-ms']) }
         : {}),
     },
+  };
+}
+
+export async function runDescribe(
+  filename: string,
+  connection: string,
+  values: Partial<Record<keyof typeof describeFlags, string | undefined>>,
+): Promise<void> {
+  const result = await describeQuery({
+    connection,
+    query: await readFile(filename, 'utf8'),
+    ...inspectionSettings(values),
   });
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 }

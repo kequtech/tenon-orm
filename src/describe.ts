@@ -1,3 +1,4 @@
+import { defaultCodecs, type DescribeStatement } from '@kequtech/pgclear';
 import { readStatementMetadata } from './inspection/catalog.js';
 import { withInspectionConnection } from './inspection/connection.js';
 import { queryDescription } from './inspection/result.js';
@@ -8,7 +9,7 @@ import { plainObject } from './validation.js';
 export async function describeQuery(options: DescribeOptions): Promise<QueryDescription> {
   const input = plainObject(options, 'Describe options');
   for (const key of Object.keys(input)) {
-    if (!['connection', 'query', 'session', 'timeouts'].includes(key)) {
+    if (!['connection', 'query', 'session', 'timeouts', 'codecs'].includes(key)) {
       throw new Error(`Unknown Describe option: ${key}`);
     }
   }
@@ -17,8 +18,14 @@ export async function describeQuery(options: DescribeOptions): Promise<QueryDesc
   if (typeof text !== 'string' || !text.trim()) {
     throw new Error('Describe query requires nonempty SQL text or a query object with text.');
   }
-  const query = text;
+  const query: DescribeStatement = {
+    text,
+    ...(typeof options.query === 'object' && options.query.parameterTypes !== undefined
+      ? { parameterTypes: [...options.query.parameterTypes] }
+      : {}),
+  };
+  const codecs = options.codecs ?? defaultCodecs;
   return withInspectionConnection(options, async (client, context) =>
-    queryDescription(await readStatementMetadata(client, query), context),
+    queryDescription(await readStatementMetadata(client, query), context, codecs),
   );
 }

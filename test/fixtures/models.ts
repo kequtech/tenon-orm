@@ -1,0 +1,10 @@
+import type { Database } from './generated-schema.js';
+export type Category = Database['Category']['row'];
+export type Entry = Database['Entry']['row'];
+export type Post = Database['Post']['row'];
+export type PostTag = Database['PostTag']['row'];
+export type Profile = Database['Profile']['row'];
+export type Space = Database['Space']['row'];
+export type SpaceCategory = Database['SpaceCategory']['row'];
+export type Tag = Database['Tag']['row'];
+export type User = Database['User']['row'];

@@ -1,7 +1,7 @@
 # Using Tenon: a human guide
 
 Tenon lets you use PostgreSQL directly from TypeScript. You write SQL; Tenon binds its inputs and
-executes it through pg. This guide follows a small application from its first table to reusable
+executes it through pgclear. This guide follows a small application from its first table to reusable
 queries, transactions, and result checking.
 
 Use the [reference](reference.md) for exact contracts and [adoption](adoption-guide.md) when
@@ -13,11 +13,11 @@ query-function examples belong in their own module.
 In an existing Node.js 24+ TypeScript project using ESM:
 
 ```sh
-npm install @kequtech/tenon-orm
+npm install @kequtech/tenon-orm @kequtech/pgclear
 ```
 
 Use PostgreSQL 16+ and TypeScript 6+. Keep your existing strict TypeScript configuration and Node
-typings. Supply `DATABASE_URL` through your application's environment setup; Tenon does not load
+typings, with pgclear 0.2.0 or later 0.x. Supply `DATABASE_URL` through your application's environment setup; Tenon does not load
 `.env` files.
 
 ```ts
@@ -30,7 +30,7 @@ export const db = createTenon({ connection });
 ```
 
 Reuse this instance across the application and call `await db.close()` at shutdown. You can also
-supply an existing `pg.Pool`; your application then owns its shutdown.
+supply an existing pgclear `Pool`; your application then owns its shutdown.
 
 ## Create a table
 
@@ -102,11 +102,15 @@ throws if the query returns more than one row. Use `'one'` when absence should a
 `'many'` for an array, or omit `returns` for the native result object with `.rows`, `.rowCount`, and
 `.fields`. These options do not change your SQL.
 
+`rowCount` is a number or null when the command has no count. SQL `count(*)` and bigint/bigserial
+column values are exact strings, including values beyond JavaScript's safe integer range. Use
+strings or pgclear `param(text, builtin.int8)` for int8 parameters; plain bigint binds reject.
+
 Generated table types can help describe projections without repeating every field:
 
 ```ts
-import type { Rows } from './generated-schema.js';
-type UserSummary = Pick<Rows['users'], 'id' | 'email'>;
+import type { Database } from './generated-schema.js';
+type UserSummary = Pick<Database['users']['row'], 'id' | 'email'>;
 ```
 
 You can then write `sql<UserSummary>`. A table type describes the full table; a join or aggregate
@@ -116,7 +120,7 @@ workflow below to check the declared contract against the query's behavior.
 
 Keep storage types conservative and validate them when projecting domain values. The
 [persistence-to-domain example](reference.md#persistence-and-domain-values) shows validated JSON
-writes and reads, finite dates, and an SQL predicate that rejects infinite session expiry.
+writes and reads, temporal strings, and an SQL predicate that rejects infinite session expiry.
 
 ## Reuse a query with a function
 
@@ -125,9 +129,9 @@ supplied values easy to read:
 
 ```ts
 import { sql, type QueryClient } from '@kequtech/tenon-orm';
-import type { Rows } from './generated-schema.js';
+import type { Database } from './generated-schema.js';
 
-type UserSummary = Pick<Rows['users'], 'id' | 'email'>;
+type UserSummary = Pick<Database['users']['row'], 'id' | 'email'>;
 
 export function userByEmail(client: QueryClient, { email }: { email: string }) {
   return client.query(sql<UserSummary>`SELECT id, email FROM public.users WHERE email = ${email}`, {
@@ -171,12 +175,12 @@ Explicit `null` stays null. Empty batches and updates throw. Heterogeneous inser
 aligned, with `DEFAULT` for missing cells.
 
 ```ts
-import type { Rows } from './generated-schema.js';
+import type { Database } from './generated-schema.js';
 
-const input: Rows.Insert['users'] = { email: 'another@example.test' };
+const input: Database['users']['insert'] = { email: 'another@example.test' };
 await db.query(sql`INSERT INTO public.users ${sql.insertValues(input, ['email'])}`);
 
-const patch: Pick<Rows.Update['users'], 'active'> = { active: false };
+const patch: Pick<Database['users']['update'], 'active'> = { active: false };
 await db.query(sql`UPDATE public.users SET ${sql.assignments(patch, ['active'])}
   WHERE email = ${input.email}`);
 ```
@@ -188,14 +192,31 @@ Use `Pick` to limit editable fields. Keep expressions, predicates, conflict hand
 
 ## Check your SQL and result types
 
-Use `describeQuery({ connection, query })` on completed SQL, or `npx tenon describe query.sql` on a
-file. It reports PostgreSQL metadata and a conservative `rowType` declaration; it does not update or
-verify the application's `sql<Row>` annotation. Inspection uses a separate session, so match the
-runtime role and settings. See [query inspection](query-inspection.md) for a worked test.
+The three database tools answer different questions: `tenon check` compares authored queries with
+their TypeScript contracts, `tenon describe` reports metadata for finished SQL, and
+`tenon generate --check` checks whether saved database declarations are current. See
+[validation tools](reference.md#choosing-a-validation-tool) for their limits.
 
-After migrating the development/test database, inspect meaningful query variants, run TypeScript,
-and test actual rows and effects. Keep those checks in CI. Execution assertions cover values, nulls,
-JSON, authorization, and rollback that description alone cannot establish.
+After migrating a development/test database, run the optional source-aware checker:
+
+```sh
+npx tenon check src/queries.ts
+npx tenon check src/queries.ts:23
+```
+
+A line selects one complete query. Omit the file to check the TypeScript project. The checker reads
+source and types without importing the application or executing SQL. It reports definite
+contradictions and unsupported composition; nullability, JSON members, and other inconclusive
+contracts receive the benefit of the declared type and remain unproven. See
+[query checking](query-checking.md) for supported fragments and explicit object expansion shapes.
+
+Use describeQuery on finished SQL, or tenon describe query.sql, when you only need metadata and a
+conservative row declaration. Match runtime role/session settings. Retain TypeScript and database
+tests for actual rows, effects, permissions, and rollback. The checker does not replace those tests.
+Generated patch types contain optional fields and can therefore be unchecked even when execution is
+valid. Keep optional patches when needed; see [responding to findings](query-checking.md#responding-to-findings).
+For rejected values, result-count errors, and other common failures, see
+[troubleshooting](reference.md#troubleshooting).
 
 ## Reuse or assemble parts of SQL when needed
 
@@ -215,6 +236,7 @@ const count = sql<{ count: string }>`SELECT count(*) AS count FROM public.users
 
 Execute each query with `db.query`. Validate application-supplied patterns and page sizes before
 building queries. The complete query supplies the result type.
+The SQL aggregate's `count` is a string; the native result's `rowCount` counts returned rows.
 
 Use `sql.join` when the number of fragments varies, such as one search condition per word or a set
 of optional filters. It combines fragments with `'AND'`, `'OR'`, or `','` and preserves their bound
@@ -248,3 +270,5 @@ when mixing `AND` and `OR`. See the [composition reference](reference.md#sql-fra
 
 Use fixed SQL when composition is unnecessary. See the [reference](reference.md) for arrays,
 identifiers, value mappings, CLI options, and error behavior.
+Runtime loops and dynamic fragment lists work during execution but remain unchecked by `tenon check`;
+use database tests for those queries.

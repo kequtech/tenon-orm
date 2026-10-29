@@ -1,4 +1,4 @@
-import type { Pool } from 'pg';
+import type { Pool } from '@kequtech/pgclear';
 import type { QueryResult } from './connection.js';
 import type { QueryOptions, QueryOutput, QueryReturnMode } from './query-options.js';
 import type { SqlQuery } from './query.js';

@@ -5,18 +5,18 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, test } from 'node:test';
-import { Pool } from 'pg';
+import { createPool, type Pool } from '@kequtech/pgclear';
 import { adoptBaseline, captureBaseline, migrate } from '../src/index.js';
 import { qualified, quote } from '../src/sql.js';
 import { assertTestDatabase, testConnection } from './helpers/database.js';
 
-const admin = new Pool({ connectionString: testConnection, max: 1 });
+const admin = createPool({ connectionString: testConnection, maxConnections: 1 });
 before(() => assertTestDatabase(admin));
-after(() => admin.end());
+after(() => admin.close());
 
 async function securityState(namespace: string) {
   const [state] = (
-    await admin.query(
+    await admin.queryClassic(
       `
     SELECT n.nspowner::regrole::text AS schema_owner, c.relowner::regrole::text AS table_owner,
       p.proowner::regrole::text AS function_owner, p.prosecdef AS definer,
@@ -34,8 +34,8 @@ async function securityState(namespace: string) {
 
 async function asRole(role: string, text: string) {
   return fixtureTransaction(admin, async (client) => {
-    await client.query(`SET LOCAL ROLE ${quote(role)}`);
-    return client.query(text);
+    await client.script(`SET LOCAL ROLE ${quote(role)}`);
+    return (await client.script(text)).at(-1)!;
   });
 }
 
@@ -55,8 +55,9 @@ test('portable baseline replays without source roles; application SQL and provis
   const query = `SELECT * FROM ${fn}()`;
   try {
     for (const role of [sourceOwner, sourceRuntime])
-      await admin.query(`CREATE ROLE ${quote(role)} NOLOGIN`);
-    await admin.query(`
+      await admin.queryClassic(`CREATE ROLE ${quote(role)} NOLOGIN`, []);
+    await admin.withSession((session) =>
+      session.script(`
       CREATE SCHEMA ${quote(namespace)} AUTHORIZATION ${quote(sourceOwner)};
       CREATE TABLE ${table} (value text NOT NULL);
       ALTER TABLE ${table} OWNER TO ${quote(sourceOwner)};
@@ -70,7 +71,8 @@ test('portable baseline replays without source roles; application SQL and provis
       GRANT USAGE ON SCHEMA ${quote(namespace)} TO ${quote(sourceRuntime)};
       ALTER DEFAULT PRIVILEGES FOR ROLE ${quote(sourceOwner)} IN SCHEMA ${quote(namespace)}
         GRANT SELECT ON TABLES TO ${quote(sourceRuntime)};
-    `);
+    `),
+    );
     const original = await securityState(namespace);
     assert.equal(original.function_owner, sourceOwner);
     assert.equal(original.defaults, 1);
@@ -82,10 +84,12 @@ test('portable baseline replays without source roles; application SQL and provis
     await adoptBaseline(options);
     assert.deepEqual(await securityState(namespace), original);
 
-    await admin.query(`DROP SCHEMA ${quote(namespace)} CASCADE`);
-    for (const role of [sourceRuntime, sourceOwner]) await admin.query(`DROP ROLE ${quote(role)}`);
+    await admin.queryClassic(`DROP SCHEMA ${quote(namespace)} CASCADE`, []);
+    for (const role of [sourceRuntime, sourceOwner])
+      await admin.queryClassic(`DROP ROLE ${quote(role)}`, []);
     assert.deepEqual(await migrate(options), ['0001']);
-    const [login] = (await admin.query<{ name: string }>('SELECT current_user AS name')).rows;
+    const [login] = (await admin.queryClassic<{ name: string }>('SELECT current_user AS name', []))
+      .rows;
     assert.ok(login);
     const migrationRole = login.name;
     const replayed = await securityState(namespace);
@@ -98,10 +102,10 @@ test('portable baseline replays without source roles; application SQL and provis
     assert.equal(replayed.grants, null);
 
     for (const role of [owner, runtime, denied])
-      await admin.query(`CREATE ROLE ${quote(role)} NOLOGIN`);
+      await admin.queryClassic(`CREATE ROLE ${quote(role)} NOLOGIN`, []);
     async function canExecute(role: string) {
       return (
-        await admin.query('SELECT has_function_privilege($1, $2, $3) AS allowed', [
+        await admin.queryClassic('SELECT has_function_privilege($1, $2, $3) AS allowed', [
           role,
           `${fn}()`,
           'EXECUTE',
@@ -125,7 +129,7 @@ test('portable baseline replays without source roles; application SQL and provis
     // Deployment provisioning chooses different owners and runtime roles from the source.
     async function provision() {
       await fixtureTransaction(admin, async (client) => {
-        await client.query(`
+        await client.script(`
         ALTER SCHEMA ${quote(namespace)} OWNER TO ${quote(owner)};
         ALTER TABLE ${table} OWNER TO ${quote(owner)};
         ALTER FUNCTION ${fn}() OWNER TO ${quote(owner)};
@@ -140,7 +144,7 @@ test('portable baseline replays without source roles; application SQL and provis
     const provisioned = await securityState(namespace);
     await provision();
     assert.deepEqual(await securityState(namespace), provisioned);
-    await admin.query(`INSERT INTO ${table} VALUES ('replayed')`);
+    await admin.queryClassic(`INSERT INTO ${table} VALUES ('replayed')`, []);
     assert.deepEqual(
       [...(await asRole(runtime, query)).rows],
       [{ reader: owner, value: 'replayed' }],
@@ -165,8 +169,9 @@ test('portable baseline replays without source roles; application SQL and provis
     await assert.rejects(asRole(denied, `SELECT * FROM ${future}`), { code: '42501' });
   } finally {
     try {
-      await admin.query(`DROP SCHEMA IF EXISTS ${quote(namespace)} CASCADE`);
-      for (const role of roles.reverse()) await admin.query(`DROP ROLE IF EXISTS ${quote(role)}`);
+      await admin.queryClassic(`DROP SCHEMA IF EXISTS ${quote(namespace)} CASCADE`, []);
+      for (const role of roles.reverse())
+        await admin.queryClassic(`DROP ROLE IF EXISTS ${quote(role)}`, []);
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

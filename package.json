@@ -1,6 +1,6 @@
 {
   "name": "@kequtech/tenon-orm",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "license": "ISC",
   "type": "module",
   "description": "A PostgreSQL ORM designed for coding agents, with explicit SQL, typed queries, and migrations",
@@ -28,6 +28,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./check": {
+      "types": "./dist/check.d.ts",
+      "import": "./dist/check.js"
     }
   },
   "files": [
@@ -53,15 +57,11 @@
     "format:check": "prettier --check .",
     "benchmark": "npm run build && node scripts/benchmark.mjs"
   },
-  "dependencies": {
-    "pg": "8.23.1",
-    "@types/pg": "8.23.1"
-  },
   "devDependencies": {
     "@types/node": "^24.19.2",
     "prettier": "^3.9.10",
-    "typescript": "~6.0.2",
-    "typescript-next": "npm:typescript@^7.0.2"
+    "typescript-next": "npm:typescript@^7.0.2",
+    "@kequtech/pgclear": "^0.2.0"
   },
   "bin": {
     "tenon": "./dist/cli.js"
@@ -69,5 +69,11 @@
   "prettier": {
     "singleQuote": true,
     "printWidth": 100
+  },
+  "peerDependencies": {
+    "@kequtech/pgclear": ">=0.2.0 <1"
+  },
+  "dependencies": {
+    "typescript": "~6.0.2"
   }
 }

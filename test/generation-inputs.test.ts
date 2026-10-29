@@ -6,7 +6,7 @@ import { join, resolve } from 'node:path';
 import { after, before, test } from 'node:test';
 import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
-import { Pool } from 'pg';
+import { createPool, type Pool } from '@kequtech/pgclear';
 import { migrate, type SqlQuery } from '../src/index.js';
 import { qualified } from '../src/sql.js';
 import {
@@ -17,11 +17,11 @@ import {
 } from './helpers/database.js';
 import { checkGeneratedTypes, typeAssertions } from './helpers/generation.js';
 
-const pool = new Pool({ connectionString: connection });
+const pool = createPool({ connectionString: connection });
 const project = migrationProject(pool);
 const run = promisify(execFile);
 before(() => assertTestDatabase(pool));
-after(() => pool.end());
+after(() => pool.close());
 
 async function generatedQueries(
   options: MigrationProject,
@@ -64,20 +64,20 @@ test('generated mutation types enforce required fields and generated columns whi
         options,
         `
         import { sql, identifier } from ${JSON.stringify(resolve('dist/index.js'))};
-        import type { Rows } from './definitions.js';
+        import type { Database as Schema } from './definitions.js';
         ${typeAssertions}
-        type New = Rows.Insert['Inputs'];
-        type Patch = Rows.Update['Inputs'];
-        type ExpectedInsert = Assert<Equal<New, {
+        type New = Schema['Inputs']['insert'];
+        type Patch = Schema['Inputs']['update'];
+        type ExpectedInsert = Assert<Equal<New, Writable<{
           id?: never; name: string; score?: number | undefined; bio?: string | null | undefined;
           caption?: string | null | undefined; by_default?: number | undefined;
           serial_id?: number | undefined; computed?: never;
-        }>>;
-        type ExpectedPatch = Assert<Equal<Patch, {
+        }>>>;
+        type ExpectedPatch = Assert<Equal<Patch, Writable<{
           id?: never; name?: string | undefined; score?: number | undefined;
           bio?: string | null | undefined; caption?: string | null | undefined;
           by_default?: number | undefined; serial_id?: number | undefined; computed?: never;
-        }>>;
+        }>>>;
         const first: New = { name: 'first', score: undefined };
         const second: New = { name: 'second', score: 4, bio: null, caption: null,
           by_default: 20, serial_id: 30 };
@@ -87,7 +87,7 @@ test('generated mutation types enforce required fields and generated columns whi
           insert: sql\`INSERT INTO \${target} \${sql.insertValues<New>([first, second])} RETURNING *\`,
           update: sql\`UPDATE \${target} SET \${sql.assignments(patch)} WHERE name = 'second' RETURNING *\`,
         };
-        function rejected(row: Rows['Inputs']) {
+        function rejected(row: Schema['Inputs']['row']) {
           // @ts-expect-error required fields cannot be omitted
           const missing: New = {};
           // @ts-expect-error required fields cannot use undefined
@@ -176,87 +176,97 @@ test('domain defaults and nested NOT NULL constraints govern writes without narr
       await checkGeneratedTypes(
         options,
         `
-        import type { Rows } from './definitions.js';
+        import type { Database as Schema } from './definitions.js';
         ${typeAssertions}
-        type Read = Assert<Equal<Rows['Inputs'], {
+        type Read = Assert<Equal<Schema['Inputs']['row'], {
           required: number | null; defaulted: number | null;
           overridden: number | null; loose: number | null;
         }>>;
-        type Write = Assert<Equal<Rows.Insert['Inputs'], {
+        type Write = Assert<Equal<Schema['Inputs']['insert'], Writable<{
           required: number; defaulted?: number | undefined;
           overridden?: number | undefined; loose?: number | null | undefined;
-        }>>;
-        const value: Rows.Insert['Inputs'] = { required: 1, defaulted: undefined, loose: null };
-        const patch: Rows.Update['Inputs'] = { required: 2, defaulted: undefined, loose: null };
+        }>>>;
+        const value: Schema['Inputs']['insert'] = { required: 1, defaulted: undefined, loose: null };
+        const patch: Schema['Inputs']['update'] = { required: 2, defaulted: undefined, loose: null };
         // @ts-expect-error NOT NULL on a base domain requires the nested domain field
-        const missing: Rows.Insert['Inputs'] = {};
+        const missing: Schema['Inputs']['insert'] = {};
         // @ts-expect-error a domain default permits omission, not explicit null
-        const nullDefault: Rows.Insert['Inputs'] = { required: 1, defaulted: null };
+        const nullDefault: Schema['Inputs']['insert'] = { required: 1, defaulted: null };
         // @ts-expect-error updates respect inherited domain NOT NULL
-        const nullRequired: Rows.Update['Inputs'] = { required: null };
+        const nullRequired: Schema['Inputs']['update'] = { required: null };
         `,
       );
       const table = qualified(options.namespace, 'Inputs');
       assert.deepEqual(
         [
-          ...(await pool.query(`INSERT INTO ${table} (required) VALUES ($1) RETURNING *`, [1]))
-            .rows,
+          ...(
+            await pool.queryClassic(`INSERT INTO ${table} (required) VALUES ($1) RETURNING *`, [1])
+          ).rows,
         ],
         [{ required: 1, defaulted: 3, overridden: 9, loose: 5 }],
       );
-      await assert.rejects(pool.query(`INSERT INTO ${table} (required) VALUES ($1)`, [null]), {
-        code: '23502',
-      });
-      await assert.rejects(pool.query(`INSERT INTO ${table} (required) VALUES ($1)`, [0]), {
+      await assert.rejects(
+        pool.queryClassic(`INSERT INTO ${table} (required) VALUES ($1)`, [null]),
+        {
+          code: '23502',
+        },
+      );
+      await assert.rejects(pool.queryClassic(`INSERT INTO ${table} (required) VALUES ($1)`, [0]), {
         code: '23514',
       });
       await fixtureTransaction(pool, async (client) => {
-        await client.query(
+        await client.queryClassic(
           `ALTER DOMAIN ${qualified(options.namespace, 'Required')} DROP NOT NULL`,
+          [],
         );
-        await client.query(
+        await client.queryClassic(
           `ALTER DOMAIN ${qualified(options.namespace, 'NestedDefault')} DROP DEFAULT`,
+          [],
         );
       });
       // PostgreSQL 16 can retain cached checks for nested domains after their base changes.
       // A fresh backend tests the new schema rather than that backend-local cached constraint.
-      const changed = new Pool({ connectionString: connection, max: 1 });
+      const changed = createPool({ connectionString: connection, maxConnections: 1 });
       try {
-        await assert.rejects(changed.query(`INSERT INTO ${table} (required) VALUES (1)`), {
-          code: '23502',
-        });
+        await assert.rejects(
+          changed.queryClassic(`INSERT INTO ${table} (required) VALUES (1)`, []),
+          {
+            code: '23502',
+          },
+        );
         assert.deepEqual(
           [
             ...(
-              await changed.query(
+              await changed.queryClassic(
                 `INSERT INTO ${table} (required, defaulted) VALUES (NULL, 4) RETURNING *`,
+                [],
               )
             ).rows,
           ],
           [{ required: null, defaulted: 4, overridden: 9, loose: 5 }],
         );
       } finally {
-        await changed.end();
+        await changed.close();
       }
       await checkGeneratedTypes(
         options,
         `
-        import type { Rows } from './definitions.js';
+        import type { Database as Schema } from './definitions.js';
         ${typeAssertions}
-        type Changed = Assert<Equal<Rows.Insert['Inputs'], {
+        type Changed = Assert<Equal<Schema['Inputs']['insert'], Writable<{
           required?: number | null | undefined; defaulted: number;
           overridden?: number | undefined; loose?: number | null | undefined;
-        }>>;
-        const patch: Rows.Update['Inputs'] = { required: null };
+        }>>>;
+        const patch: Schema['Inputs']['update'] = { required: null };
         // @ts-expect-error the removed domain default makes this nonnullable field required
-        const missing: Rows.Insert['Inputs'] = {};
+        const missing: Schema['Inputs']['insert'] = {};
         `,
       );
     },
   );
 });
 
-test('generated write representations bind bigint, numeric, temporal, JSON and array inputs through pg', async () => {
+test('generated write representations bind bigint, numeric, temporal, JSON and array inputs through pgclear', async () => {
   await project(
     {
       '0001_values.up.sql': `
@@ -274,28 +284,30 @@ test('generated write representations bind bigint, numeric, temporal, JSON and a
         options,
         `
         import { sql, identifier } from ${JSON.stringify(resolve('dist/index.js'))};
-        import type { Rows, PgArray } from './definitions.js';
+        import type { Database as Schema } from './definitions.js';
+import {param,builtin} from ${JSON.stringify(resolve('node_modules/@kequtech/pgclear/dist/index.js'))};
+import type { PgArray } from '@kequtech/pgclear';
         ${typeAssertions}
-        type New = Rows.Insert['Values'];
-        type BigRead = Assert<Equal<Rows['Values']['big'], string>>;
-        type TimeRead = Assert<Equal<Rows['Values']['time'], Date | number>>;
-        type BigWrite = Assert<Equal<New['big'], string | bigint>>;
-        type DecimalWrite = Assert<Equal<New['decimal'], string | number>>;
-        type TimeWrite = Assert<Equal<New['time'], Date | string>>;
-        type JsonWrite = Assert<Equal<New['payload'], string>>;
-        type BigArray = Assert<Equal<New['bigs'], PgArray<string | bigint>>>;
-        type DecimalArray = Assert<Equal<New['decimals'], PgArray<string | number>>>;
-        type TimeArray = Assert<Equal<New['times'], PgArray<Date | string>>>;
-        type JsonArray = Assert<Equal<New['payloads'], PgArray<string>>>;
+        type New = Schema['Values']['insert'];
+        type BigRead = Assert<Equal<Schema['Values']['row']['big'], string>>;
+        type TimeRead = Assert<Equal<Schema['Values']['row']['time'], string>>;
+        type BigWrite = Assert<Equal<New['big'], string | import('@kequtech/pgclear').Parameter>>;
+        type DecimalWrite = Assert<Equal<New['decimal'], string | import('@kequtech/pgclear').Parameter>>;
+        type TimeWrite = Assert<Equal<New['time'], string | import('@kequtech/pgclear').Parameter>>;
+        type JsonWrite = Assert<Equal<New['payload'], string | import('@kequtech/pgclear').Parameter>>;
+        type BigArray = Assert<Equal<New['bigs'], string | import('@kequtech/pgclear').Parameter>>;
+        type DecimalArray = Assert<Equal<New['decimals'], string | import('@kequtech/pgclear').Parameter>>;
+        type TimeArray = Assert<Equal<New['times'], string | import('@kequtech/pgclear').Parameter>>;
+        type JsonArray = Assert<Equal<New['payloads'], string | import('@kequtech/pgclear').Parameter>>;
         const value: New = {
-          big: 9007199254740993n, decimal: '12345678901234567890.125', time: new Date('2026-01-01T00:00:00Z'),
-          payload: JSON.stringify(['one', null]), document: JSON.stringify('null'), bytes: Buffer.from([0, 255]), kind: 'reader',
-          bigs: ['9007199254740993', 2n, null], decimals: ['1.25', 2.5, null],
-          times: [new Date('2026-01-01T00:00:00Z'), '2026-01-02T00:00:00Z', null],
-          payloads: [JSON.stringify({ nested: true }), JSON.stringify('null'), null],
+          big: '9007199254740993', decimal: '12345678901234567890.125', time: '2026-01-01T00:00:00Z',
+          payload: JSON.stringify(['one', null]), document: JSON.stringify('null'), bytes: new Uint8Array([0,255]), kind: 'reader',
+          bigs: param(['9007199254740993','2',null],builtin.int8Array), decimals: param(['1.25','2.5',null],builtin.numericArray),
+          times: '{2026-01-01T00:00:00Z,2026-01-02T00:00:00Z,NULL}',
+          payloads: '{'+[JSON.stringify(JSON.stringify({nested:true})),JSON.stringify(JSON.stringify('null')),'NULL'].join(',')+'}',
         };
         const target = identifier(${JSON.stringify(options.namespace)}, 'Values');
-        const patch: Rows.Update['Values'] = { big: '2', decimal: 1.5, time: new Date('2026-01-01T00:00:00Z'),
+        const patch: Schema['Values']['update'] = { big: '2', decimal: '1.5', time: '2026-01-01T00:00:00Z',
           payload: JSON.stringify('null'), document: null };
         export const queries = {
           insert: sql\`INSERT INTO \${target} \${sql.insertValues(value)} RETURNING *\`,
@@ -304,6 +316,8 @@ test('generated write representations bind bigint, numeric, temporal, JSON and a
         function rejected() {
           // @ts-expect-error arbitrary numbers are not canonical bigint inputs
           const big: New['big'] = 9007199254740993;
+          // @ts-expect-error plain bigint inputs require text or an explicit encoder
+          const nativeBig: New['big'] = 9007199254740993n;
           // @ts-expect-error numeric temporal read values are not timestamp inputs
           const time: New['time'] = Infinity;
           // @ts-expect-error bigint is not a native JSON value
@@ -323,14 +337,14 @@ test('generated write representations bind bigint, numeric, temporal, JSON and a
           {
             big: '9007199254740993',
             decimal: '12345678901234567890.125',
-            time: new Date('2026-01-01T00:00:00Z'),
+            time: '2026-01-01 00:00:00+00',
             payload: ['one', null],
             document: 'null',
-            bytes: Buffer.from([0, 255]),
+            bytes: new Uint8Array([0, 255]),
             kind: 'reader',
             bigs: ['9007199254740993', '2', null],
-            decimals: [1.25, 2.5, null],
-            times: [new Date('2026-01-01T00:00:00Z'), new Date('2026-01-02T00:00:00Z'), null],
+            decimals: ['1.25', '2.5', null],
+            times: ['2026-01-01 00:00:00+00', '2026-01-02 00:00:00+00', null],
             payloads: [{ nested: true }, 'null', null],
           },
         ],
@@ -341,7 +355,7 @@ test('generated write representations bind bigint, numeric, temporal, JSON and a
           {
             big: '2',
             decimal: '1.5',
-            time: new Date('2026-01-01T00:00:00Z'),
+            time: '2026-01-01 00:00:00+00',
             payload: 'null',
             document: null,
           },

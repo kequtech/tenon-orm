@@ -1,17 +1,18 @@
+import { param, builtin } from '@kequtech/pgclear';
 import type { QueryClient } from '../src/index.js';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { after, before, beforeEach, test } from 'node:test';
-import { Pool } from 'pg';
+import { createPool, type Pool } from '@kequtech/pgclear';
 import type { QueryResult, Transaction } from '../src/index.js';
 import { CardinalityError, createTenon, identifier, migrate, sql } from '../src/index.js';
 import { qualified, quote } from '../src/sql.js';
-import type { Post, Tag, User } from './fixtures/generated-schema.js';
+import type { Post, Tag, User } from './fixtures/models.js';
 import { echoValues } from './fixtures/queries.js';
 
 import { assertTestDatabase, testConnection as connection } from './helpers/database.js';
 const namespace = `tenon_test_${randomUUID().replaceAll('-', '')}`;
-const pool = new Pool({ connectionString: connection, max: 3 });
+const pool = createPool({ connectionString: connection, maxConnections: 3 });
 const target = qualified(namespace, 'User');
 type UserSummary = Pick<User, 'id' | 'email'>;
 type UserWithPosts = UserSummary & {
@@ -121,7 +122,7 @@ function assertNativeResult(
   assert.equal(result.rowCount, rowCount);
   assert.deepEqual([...result.rows], []);
   assert.deepEqual(result.fields, []);
-  assert.notEqual(Object.getPrototypeOf(result), Object.prototype);
+  assert.equal(Object.getPrototypeOf(result), Object.prototype);
 }
 
 before(async () => {
@@ -141,10 +142,11 @@ beforeEach(async () => {
 });
 after(async () => {
   try {
-    if (ownsNamespace) await pool.query(`DROP SCHEMA IF EXISTS ${quote(namespace)} CASCADE`);
+    if (ownsNamespace)
+      await pool.queryClassic(`DROP SCHEMA IF EXISTS ${quote(namespace)} CASCADE`, []);
   } finally {
     await db.close();
-    await pool.end();
+    await pool.close();
   }
 });
 
@@ -299,7 +301,7 @@ test('native mode preserves native result metadata, explicit RETURNING rows and 
     result.fields.map((field) => field.name),
     ['id', 'email'],
   );
-  assert.notEqual(Object.getPrototypeOf(result), Object.prototype);
+  assert.equal(Object.getPrototypeOf(result), Object.prototype);
   assert.equal(
     (
       await db.query(sql<User>`SELECT * FROM ${identifier(namespace, 'User')} ORDER BY id`, {
@@ -395,7 +397,7 @@ test('query functions bind array inputs and preserve object defaults', async () 
   ) =>
     client.query(
       sql<{ ids: number[]; label: string; enabled: boolean }>`
-        SELECT ${ids}::int[] AS ids, ${details.label}::text AS label, ${enabled}::boolean AS enabled
+        SELECT ${param(ids, builtin.int4Array)}::int[] AS ids, ${details.label}::text AS label, ${enabled}::boolean AS enabled
       `,
       { returns: 'one' },
     );

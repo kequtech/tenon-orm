@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
-import { Pool } from 'pg';
+import { createPool, type Pool } from '@kequtech/pgclear';
 import { generateDefinitions, migrate } from '../src/index.js';
 import { qualified, quote } from '../src/sql.js';
 import {
@@ -9,10 +9,10 @@ import {
   migrationProject,
 } from './helpers/database.js';
 import { checkGeneratedTypes, typeAssertions } from './helpers/generation.js';
-const pool = new Pool({ connectionString: connection });
+const pool = createPool({ connectionString: connection });
 const project = migrationProject(pool);
 before(() => assertTestDatabase(pool));
-after(() => pool.end());
+after(() => pool.close());
 
 test('schema comments describe SQL constraints, defaults, identity settings and complete index definitions', async () => {
   await project(
@@ -39,7 +39,12 @@ test('schema comments describe SQL constraints, defaults, identity settings and 
     async (options) => {
       await migrate(options);
       const source = await generateDefinitions({ ...options, onWarning: () => {} });
-      const summary = source.slice(0, source.indexOf('export type '));
+      const summary = source.slice(
+        0,
+        source.indexOf('import type ') < 0
+          ? source.indexOf('export type ')
+          : source.indexOf('import type '),
+      );
       assert.match(summary, /\/\/ TABLE "Account"\n/);
       assert.match(summary, /\/\/   "code" character varying\(24\)/);
       assert.match(summary, /CONSTRAINT "Account_pkey" PRIMARY KEY \(tenant, id\)/);
@@ -71,13 +76,15 @@ test('schema comments describe SQL constraints, defaults, identity settings and 
       assert.equal(await generateDefinitions({ ...options, onWarning: () => {} }), source);
 
       // Advancing a sequence changes data, not the declared schema summary.
-      await pool.query(
+      await pool.queryClassic(
         `INSERT INTO ${qualified(options.namespace, 'Detail')} (label) VALUES ('first')`,
+        [],
       );
       assert.equal(await generateDefinitions({ ...options, onWarning: () => {} }), source);
       // A metadata-only change must still invalidate the generated artifact.
-      await pool.query(
+      await pool.queryClassic(
         `ALTER TABLE ${qualified(options.namespace, 'Detail')} ALTER COLUMN active SET DEFAULT true`,
+        [],
       );
       const changed = await generateDefinitions({ ...options, onWarning: () => {} });
       assert.notEqual(changed, source);
@@ -92,9 +99,10 @@ test('schema comments describe SQL constraints, defaults, identity settings and 
 
 test('schema deparsing preserves external references and restores borrowed connection settings', async () => {
   await project({}, async (external) => {
-    await pool.query(`CREATE SCHEMA ${quote(external.namespace)}`);
-    await pool.query(
+    await pool.queryClassic(`CREATE SCHEMA ${quote(external.namespace)}`, []);
+    await pool.queryClassic(
       `CREATE TABLE ${qualified(external.namespace, 'External')} (id integer PRIMARY KEY)`,
+      [],
     );
     await project(
       {
@@ -115,21 +123,24 @@ test('schema deparsing preserves external references and restores borrowed conne
           source,
           /CREATE INDEX "odd ON target.index" ON "Local" USING btree \(external_id\)/,
         );
-        const configured = new Pool({
+        const configured = createPool({
           connectionString: connection.replace(/([?&])options=[^&]*/, '$1'),
-          max: 1,
-          options:
-            '-c search_path=public -c quote_all_identifiers=on -c standard_conforming_strings=off',
+          maxConnections: 1,
+          startupParameters: {
+            search_path: 'public',
+            quote_all_identifiers: 'on',
+            standard_conforming_strings: 'off',
+          },
         });
         const settings = `SELECT current_setting('search_path') AS path,
         current_setting('quote_all_identifiers') AS quoted,
         current_setting('standard_conforming_strings') AS strings`;
         try {
-          const before = (await configured.query(settings)).rows;
+          const before = (await configured.queryClassic(settings, [])).rows;
           assert.equal(await generateDefinitions({ ...options, connection: configured }), source);
-          assert.deepEqual([...(await configured.query(settings)).rows], [...before]);
+          assert.deepEqual([...(await configured.queryClassic(settings, [])).rows], [...before]);
         } finally {
-          await configured.end();
+          await configured.close();
         }
       },
     );
@@ -150,7 +161,12 @@ test('catalog names and multiline SQL literals always remain comments in generat
     async (options) => {
       await migrate(options);
       const source = await generateDefinitions(options);
-      const summary = source.slice(0, source.indexOf('export type '));
+      const summary = source.slice(
+        0,
+        source.indexOf('import type ') < 0
+          ? source.indexOf('export type ')
+          : source.indexOf('import type '),
+      );
       for (const line of summary.split(/\r\n|[\n\r\u2028\u2029]/u)) {
         assert.ok(
           line === '' || line.startsWith('//'),
@@ -160,9 +176,9 @@ test('catalog names and multiline SQL literals always remain comments in generat
       await checkGeneratedTypes(
         options,
         `
-      import type { Rows } from './definitions.js';
+      import type { Database as Schema } from './definitions.js';
       ${typeAssertions}
-      type Row = Assert<Equal<Rows[${JSON.stringify(name)}], { id: number; value: string | null }>>;
+      type Row = Assert<Equal<Schema[${JSON.stringify(name)}]['row'], { id: number; value: string | null }>>;
     `,
       );
     },
@@ -188,13 +204,19 @@ test('partition indexes and foreign keys describe logical roots without physical
       );
       assert.equal(source.match(/FOREIGN KEY/g)?.length, 1);
       assert.ok(!source.includes('LedgerToday'));
-      await pool.query(`CREATE TABLE ${qualified(options.namespace, 'LedgerTomorrow')}
-      PARTITION OF ${qualified(options.namespace, 'Ledger')} FOR VALUES FROM (100) TO (200)`);
+      await pool.queryClassic(
+        `CREATE TABLE ${qualified(options.namespace, 'LedgerTomorrow')}
+      PARTITION OF ${qualified(options.namespace, 'Ledger')} FOR VALUES FROM (100) TO (200)`,
+        [],
+      );
       assert.equal(await generateDefinitions(options), source);
       // Detach first so PostgreSQL can remove its internal referencing-FK clones.
-      await pool.query(`ALTER TABLE ${qualified(options.namespace, 'Ledger')}
-      DETACH PARTITION ${qualified(options.namespace, 'LedgerTomorrow')}`);
-      await pool.query(`DROP TABLE ${qualified(options.namespace, 'LedgerTomorrow')}`);
+      await pool.queryClassic(
+        `ALTER TABLE ${qualified(options.namespace, 'Ledger')}
+      DETACH PARTITION ${qualified(options.namespace, 'LedgerTomorrow')}`,
+        [],
+      );
+      await pool.queryClassic(`DROP TABLE ${qualified(options.namespace, 'LedgerTomorrow')}`, []);
       assert.equal(await generateDefinitions(options), source);
     },
   );

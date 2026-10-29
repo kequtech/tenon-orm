@@ -1,33 +1,41 @@
 import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
-import { Pool } from 'pg';
+import { createPool, type Pool } from '@kequtech/pgclear';
 import { createTenon, identifier, sql } from '../src/index.js';
 import { withMigrationLock } from '../src/migrations/connection.js';
 import { qualified } from '../src/sql.js';
 import { assertTestDatabase, migrationProject, testConnection } from './helpers/database.js';
 
-const admin = new Pool({ connectionString: testConnection });
+const admin = createPool({ connectionString: testConnection });
 const project = migrationProject(admin);
 before(() => assertTestDatabase(admin));
-after(() => admin.end());
+after(() => admin.close());
 function observedConnection() {
   let closed!: () => void;
   const ended = new Promise<void>((resolve) => {
     closed = resolve;
   });
-  const pool = new Pool({ connectionString: testConnection, max: 1 });
-  pool.on('connect', (client) => client.once('end', closed));
-  pool.on('error', () => {});
+  const pool = createPool({
+    connectionString: testConnection,
+    maxConnections: 1,
+    onEvent: (event) => {
+      if (event.type === 'disconnect') closed();
+    },
+  });
   return { pool, ended };
 }
 async function disconnect(pid: number) {
-  const [row] = (await admin.query('SELECT pg_terminate_backend($1) AS stopped', [pid])).rows;
+  const [row] = (await admin.queryClassic('SELECT pg_terminate_backend($1) AS stopped', [pid]))
+    .rows;
   assert.equal(row!.stopped, true);
 }
 function lostConnection(error: unknown): boolean {
-  assert.ok(error instanceof AggregateError);
-  assert.match(error.errors[0].message, /connection|terminat/i);
-  assert.equal(error.errors.length, 2);
+  const errors = error instanceof AggregateError ? error.errors : [error];
+  assert.ok(
+    errors.some(
+      (item) => item && ['PGCLEAR_CLOSED', 'PGCLEAR_CONNECTION_LOST', '57P01'].includes(item.code),
+    ),
+  );
   return true;
 }
 
@@ -37,7 +45,9 @@ test(
   async () => {
     await project({}, async ({ namespace }) => {
       const target = qualified(namespace, 'writes');
-      await admin.query(`CREATE SCHEMA "${namespace}"; CREATE TABLE ${target} (id integer)`);
+      await admin.withSession((session) =>
+        session.script(`CREATE SCHEMA "${namespace}"; CREATE TABLE ${target} (id integer)`),
+      );
       const { pool, ended } = observedConnection();
       const db = createTenon({ connection: pool });
       let originalPid = 0;
@@ -52,20 +62,20 @@ test(
             await ended;
             await assert.rejects(
               tx.query(sql`INSERT INTO ${identifier(namespace, 'writes')} VALUES (2)`),
-              /connection|terminat/i,
+              /closed|connection|terminat/i,
             );
             return 'must not succeed';
           }),
           lostConnection,
         );
-        assert.equal((await admin.query(`SELECT * FROM ${target}`)).rows.length, 0);
+        assert.equal((await admin.queryClassic(`SELECT * FROM ${target}`, [])).rows.length, 0);
         const replacement = await db.transaction((tx) =>
           tx.query(sql<{ pid: number }>`SELECT pg_backend_pid() AS pid`, { returns: 'one' }),
         );
         assert.notEqual(replacement.pid, originalPid);
       } finally {
         await db.close();
-        await pool.end();
+        await pool.close();
       }
     });
   },
@@ -80,8 +90,9 @@ test(
       try {
         await assert.rejects(
           withMigrationLock({ connection: pool, namespace }, 'exclusive', async (client) => {
-            const [row] = (await client.query<{ pid: number }>('SELECT pg_backend_pid() AS pid'))
-              .rows;
+            const [row] = (
+              await client.queryClassic<{ pid: number }>('SELECT pg_backend_pid() AS pid', [])
+            ).rows;
             await disconnect(row!.pid);
             await ended;
           }),
@@ -92,7 +103,7 @@ test(
           42,
         );
       } finally {
-        await pool.end();
+        await pool.close();
       }
     });
   },
@@ -116,7 +127,7 @@ test(
       assert.notEqual(next.pid, first.pid);
     } finally {
       await db.close();
-      await pool.end();
+      await pool.close();
     }
   },
 );
@@ -126,16 +137,23 @@ test(
   { timeout: 10000 },
   async () => {
     await project({}, async ({ namespace }) => {
-      await admin.query(
-        `CREATE SCHEMA "${namespace}"; CREATE TABLE ${qualified(namespace, 'writes')} (id integer)`,
+      await admin.withSession((session) =>
+        session.script(
+          `CREATE SCHEMA "${namespace}"; CREATE TABLE ${qualified(namespace, 'writes')} (id integer)`,
+        ),
       );
       let closed!: () => void;
       const ended = new Promise<void>((resolve) => {
         closed = resolve;
       });
-      const pool = new Pool({ connectionString: testConnection, max: 2 });
-      pool.on('connect', (client) => client.once('end', closed));
-      pool.on('error', () => {});
+      const pool = createPool({
+        connectionString: testConnection,
+        maxConnections: 2,
+        onEvent: (event) => {
+          if (event.type === 'disconnect') closed();
+        },
+      });
+
       const db = createTenon({ connection: pool });
       let proceed!: () => void;
       const resumed = new Promise<void>((resolve) => {
@@ -168,13 +186,16 @@ test(
         proceed();
         await Promise.all([failed, operations[1]]);
         assert.deepEqual(
-          [...(await admin.query(`SELECT id FROM ${qualified(namespace, 'writes')}`)).rows],
+          [
+            ...(await admin.queryClassic(`SELECT id FROM ${qualified(namespace, 'writes')}`, []))
+              .rows,
+          ],
           [{ id: 2 }],
         );
       } finally {
         proceed();
         await db.close();
-        await pool.end();
+        await pool.close();
       }
     });
   },

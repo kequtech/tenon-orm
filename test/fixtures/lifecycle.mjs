@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Pool } from 'pg';
+import { createPool } from '@kequtech/pgclear';
 import {
   createTenon,
   sql,
@@ -20,7 +20,7 @@ import * as second from './second-tenon/index.js';
 
 // Runs after installing the tarball in an isolated consumer directory.
 const connection = process.env.TENON_TEST_DATABASE_URL;
-const pool = new Pool({ connectionString: connection });
+const pool = createPool({ connectionString: connection });
 const namespace = 'tenon_product_' + randomUUID().replaceAll('-', '');
 const history = namespace + '_history';
 const directory = await mkdtemp(join(tmpdir(), 'tenon-product-'));
@@ -29,7 +29,7 @@ const table = identifier(namespace, 'Account');
 const db = createTenon({ connection: pool });
 let ownsNamespace = false;
 try {
-  const database = (await pool.query('SELECT current_database() AS name')).rows;
+  const database = (await pool.queryClassic('SELECT current_database() AS name', [])).rows;
   assert.equal(database[0].name, 'tenon_orm_test');
   await writeFile(
     join(directory, '0001_accounts.up.sql'),
@@ -116,19 +116,19 @@ try {
     directory: baselineDirectory,
     schemas: [namespace],
   });
-  await pool.query('CREATE SCHEMA "' + history + '"');
+  await pool.queryClassic('CREATE SCHEMA "' + history + '"', []);
   assert.deepEqual(
     await adoptBaseline({ connection: pool, namespace: history, directory: baselineDirectory }),
     ['0001'],
   );
   assert.deepEqual(await oldRead(db, { id: account.id }), account);
-  await pool.query('DROP SCHEMA "' + history + '" CASCADE');
+  await pool.queryClassic('DROP SCHEMA "' + history + '" CASCADE', []);
 
   // Schema replay plus a logical row snapshot; not a physical backup/PITR test.
   const snapshot = await db.query(sql`SELECT id,email,active FROM ${table} ORDER BY id`, {
     returns: 'many',
   });
-  await pool.query('DROP SCHEMA "' + namespace + '" CASCADE');
+  await pool.queryClassic('DROP SCHEMA "' + namespace + '" CASCADE', []);
   await migrate({ connection: pool, namespace: history, directory: baselineDirectory });
   await db.transaction(async (tx) => {
     for (const row of snapshot) {
@@ -153,12 +153,12 @@ try {
 } finally {
   try {
     if (ownsNamespace) {
-      await pool.query('DROP SCHEMA IF EXISTS "' + namespace + '" CASCADE');
-      await pool.query('DROP SCHEMA IF EXISTS "' + history + '" CASCADE');
+      await pool.queryClassic('DROP SCHEMA IF EXISTS "' + namespace + '" CASCADE', []);
+      await pool.queryClassic('DROP SCHEMA IF EXISTS "' + history + '" CASCADE', []);
     }
   } finally {
     await db.close();
-    await pool.end();
+    await pool.close();
     await rm(directory, { recursive: true, force: true });
   }
 }

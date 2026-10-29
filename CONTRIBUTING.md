@@ -4,6 +4,11 @@ Use Node.js 24+, npm, PostgreSQL 16+, and compatible `pg_dump` client tools on P
 committed lockfile. Public usage starts at the [README](README.md); the complete `docs/` folder and
 [Changelog](CHANGELOG.md) ship with the package. This maintainer guide and
 [driver considerations](CONSIDERATIONS.md) stay in the repository.
+Historical investigations and superseded proposals belong in `notes/`, which is excluded from the
+package. See the [archived Pgclear review](notes/pgclear-author-feedback-2026-10-28.md) for the
+original adoption investigation; current contracts belong in the consumer reference.
+The [codec integration brief](notes/tenon-pgclear-integration-brief.md) defines the next parallel
+Pgclear/Tenon work and its dependency release gate.
 
 ```sh
 npm ci
@@ -25,8 +30,7 @@ postgresql://postgres:postgres@localhost:5432/tenon_orm_test
 Override the address with `TENON_TEST_DATABASE_URL`; the database name must remain `tenon_orm_test`.
 Tests check its name/server version before changes and use temporary namespaces. Some tests also
 create temporary roles, so the connection needs permission to create them. Connection-failure tests
-terminate their own backends. Fixtures suppress routine PostgreSQL notices but retain
-warnings/errors. Scripts do not load `.env` automatically.
+terminate their own backends. Scripts do not load `.env` automatically.
 
 CI uses PostgreSQL 16 and 18 with matching `pg_dump` clients. Packed-consumer tests install the
 actual artifact, compile public/generated types with TypeScript 6 and 7, and exercise the API and
@@ -55,12 +59,14 @@ not edit an application's applied history.
 Public exports are in `src/index.ts`. `query.ts` compiles detached SQL/fragments; `mutations.ts`
 builds object-write fragments. `client.ts` validates calls and reads results; `transaction.ts` owns
 callback boundaries and guarded-write savepoints. `connection.ts` owns pool lifetime and binds SQL.
-`src/driver/types.ts` shares verified pg mappings between generation and inspection. The
-execution-free Describe adapter is in `src/inspection/protocol.ts`. Keep the driver pinned and
-follow [CONSIDERATIONS.md](CONSIDERATIONS.md) before an upgrade.
+pgclear owns execution, recovery, Describe, codec mapping, and database type generation. Tenon
+uses the public driver API and a required peer dependency; follow
+[CONSIDERATIONS.md](CONSIDERATIONS.md) when changing that boundary.
 
 Generation, migrations, and inspection separate catalog/SQL work from file output and CLI handling.
-The CLI dispatches these operations. `dist/` and `.test-dist/` are disposable; build removes both
+The CLI dispatches these operations. Source checking lives in src/check/: project context and
+symbol resolution, bounded composition recovery, contract comparison, and structured reports.
+TypeScript is a runtime tooling dependency, loaded only through the check command or check subpath. `dist/` and `.test-dist/` are disposable; build removes both
 before compiling, and `npm run clean` removes them independently.
 
 ## Release checks

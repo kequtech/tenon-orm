@@ -1,13 +1,10 @@
-import type { Client } from 'pg';
-import { describe, type Description } from './protocol.js';
+import type { Session } from '@kequtech/pgclear';
+import type { Description, DescribeStatement } from '@kequtech/pgclear';
 
 interface CatalogType {
   oid: number;
   schema: string;
   name: string;
-  kind: string;
-  base: number;
-  choices: string[] | null;
 }
 
 interface ColumnSource {
@@ -27,35 +24,27 @@ export interface StatementMetadata {
 
 /** Describe the statement and read its type and source-column catalog records. */
 export async function readStatementMetadata(
-  client: Client,
-  text: string,
+  client: Session,
+  query: DescribeStatement,
 ): Promise<StatementMetadata> {
-  const statement = await describe(client, text);
+  const statement = await client.describe(query);
   const oids = [
-    ...new Set([...statement.parameters, ...statement.fields.map((c) => c.dataTypeID)]),
+    ...new Set([...statement.parameterTypes, ...statement.fields.map((c) => c.dataTypeOid)]),
   ];
   const types = (
-    await client.query<CatalogType>(
+    await client.queryClassic<CatalogType>(
       `
-    WITH RECURSIVE wanted(oid) AS (
-      SELECT pg_catalog.unnest(pg_catalog.string_to_array($1, ',')::pg_catalog.oid[])
-      UNION
-      SELECT t.typbasetype FROM pg_catalog.pg_type t JOIN wanted w ON w.oid = t.oid
-        WHERE t.typbasetype <> 0
-    )
-    SELECT t.oid, n.nspname AS schema, t.typname AS name,
-      t.typtype AS kind, t.typbasetype AS base,
-      (SELECT pg_catalog.to_json(pg_catalog.array_agg(e.enumlabel::text ORDER BY e.enumsortorder))
-        FROM pg_catalog.pg_enum e WHERE e.enumtypid = t.oid) AS choices
-    FROM wanted w JOIN pg_catalog.pg_type t ON t.oid = w.oid
+    SELECT t.oid, n.nspname AS schema, t.typname AS name
+    FROM pg_catalog.pg_type t
       JOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace
+    WHERE t.oid = ANY(pg_catalog.string_to_array($1, ',')::pg_catalog.oid[])
   `,
       [oids.join(',')],
     )
   ).rows;
-  const tables = [...new Set(statement.fields.map((c) => c.tableID).filter(Boolean))];
+  const tables = [...new Set(statement.fields.map((c) => c.tableOid).filter(Boolean))];
   const sources = (
-    await client.query<ColumnSource>(
+    await client.queryClassic<ColumnSource>(
       `
     SELECT c.oid, a.attnum AS number, n.nspname AS schema,
       c.relname AS table, a.attname AS column, a.attnotnull AS "notNull"

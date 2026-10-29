@@ -2,7 +2,7 @@ import type { QueryClient } from '../src/index.js';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { after, before, beforeEach, test } from 'node:test';
-import { Pool } from 'pg';
+import { createPool, type Pool } from '@kequtech/pgclear';
 import type { Transaction, SqlQuery, QueryReturnMode } from '../src/index.js';
 import {
   CardinalityError,
@@ -13,11 +13,11 @@ import {
   unsafeSql,
 } from '../src/index.js';
 import { qualified, quote } from '../src/sql.js';
-import type { User } from './fixtures/generated-schema.js';
+import type { User } from './fixtures/models.js';
 
 import { assertTestDatabase, testConnection as connection } from './helpers/database.js';
 const namespace = `tenon_test_${randomUUID().replaceAll('-', '')}`;
-const pool = new Pool({ connectionString: connection, max: 4 });
+const pool = createPool({ connectionString: connection, maxConnections: 4 });
 const db = createTenon({ connection: pool });
 const target = qualified(namespace, 'User');
 let ownsNamespace = false;
@@ -38,10 +38,11 @@ beforeEach(async () => {
 });
 after(async () => {
   try {
-    if (ownsNamespace) await pool.query(`DROP SCHEMA IF EXISTS ${quote(namespace)} CASCADE`);
+    if (ownsNamespace)
+      await pool.queryClassic(`DROP SCHEMA IF EXISTS ${quote(namespace)} CASCADE`, []);
   } finally {
     await db.close();
-    await pool.end();
+    await pool.close();
   }
 });
 
@@ -59,7 +60,7 @@ test('inline SQL binds values and preserves database defaults, nulls, dates, UUI
   assert.equal(row.name, "O'Reilly\\notes");
   assert.equal(row.nickname, null);
   assert.equal(row.role, 'reader');
-  assert.ok(row.createdAt instanceof Date);
+  assert.equal(typeof row.createdAt, 'string');
   assert.match(row.token, /^[0-9a-f-]{36}$/);
   assert.deepEqual(
     await db.query(
@@ -147,7 +148,7 @@ test('inline command results preserve native fields and explicitly requested RET
   assert.equal(inserted.rowCount, 2);
   assert.deepEqual([...inserted.rows], []);
   assert.deepEqual(inserted.fields, []);
-  assert.notEqual(Object.getPrototypeOf(inserted), Object.prototype);
+  assert.equal(Object.getPrototypeOf(inserted), Object.prototype);
   const changed = await db.query(
     sql<
       Pick<User, 'id' | 'active'>
@@ -157,7 +158,7 @@ test('inline command results preserve native fields and explicitly requested RET
   assert.equal(changed.command, 'UPDATE');
   assert.equal(changed.rowCount, 2);
   assert.deepEqual(
-    [...changed.rows.sort((a, b) => a.id - b.id)],
+    [...changed.rows].sort((a, b) => a.id - b.id),
     [
       { id: 1, active: true },
       { id: 2, active: true },
@@ -346,7 +347,7 @@ test('a caught PostgreSQL error cannot make an aborted transaction report succes
       }
       return 'must not be reported as committed';
     }),
-    /rolled back the aborted transaction/,
+    { code: 'PGCLEAR_TRANSACTION_STATE' },
   );
   assert.deepEqual(
     await db.query(sql<User>`SELECT * FROM ${identifier(namespace, 'User')}`, { returns: 'many' }),

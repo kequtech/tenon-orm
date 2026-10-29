@@ -115,18 +115,19 @@ export async function adoptBaseline(options: DatabaseToolOptions): Promise<reado
     if (applied.length) {
       return [];
     }
-    const schema = await client.query('SELECT 1 FROM pg_catalog.pg_namespace WHERE nspname = $1', [
-      namespace,
-    ]);
+    const schema = await client.queryClassic(
+      'SELECT 1 FROM pg_catalog.pg_namespace WHERE nspname = $1',
+      [namespace],
+    );
     if (!schema.rows.length) {
       throw new Error(
         'The baseline namespace does not exist. Use migrate to initialize a fresh database.',
       );
     }
-    await client.query('BEGIN');
+    await client.queryClassic('BEGIN', []);
     await createHistoryTable(client, namespace);
     await recordMigration(client, namespace, baseline);
-    const result = await client.query('COMMIT');
+    const result = await client.queryClassic('COMMIT', []);
     if (result.command !== 'COMMIT') {
       throw new Error('Baseline adoption was rolled back.');
     }

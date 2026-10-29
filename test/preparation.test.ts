@@ -1,19 +1,23 @@
 import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
-import { Pool } from 'pg';
+import { createPool, type Pool, json, param, builtin } from '@kequtech/pgclear';
 import { createTenon, sql, unsafeSql } from '../src/index.js';
 import { assertTestDatabase, testConnection } from './helpers/database.js';
 
-const admin = new Pool({ connectionString: testConnection });
+const admin = createPool({ connectionString: testConnection });
 before(() => assertTestDatabase(admin));
-after(() => admin.end());
+after(() => admin.close());
 
-test('compiled queries stay unnamed and retain native pg metadata', async (t) => {
-  const db = createTenon({ connection: { connectionString: testConnection, max: 1 } });
+test('compiled queries stay unnamed and retain native pgclear metadata', async (t) => {
+  const db = createTenon({ connection: { connectionString: testConnection, maxConnections: 1 } });
   t.after(() => db.close());
   const query = unsafeSql(
     'SELECT $1::integer[] AS values, $2::jsonb AS payload, $3::bigint AS big',
-    [[1, null, 3], JSON.stringify({ nested: ['one', null] }), 9007199254740993n],
+    [
+      param([1, null, 3], builtin.int4Array),
+      JSON.stringify({ nested: ['one', null] }),
+      '9007199254740993',
+    ],
   );
   for (const result of [
     await db.query(query),
@@ -25,41 +29,51 @@ test('compiled queries stay unnamed and retain native pg metadata', async (t) =>
     ]);
     assert.equal(result.rowCount, 1);
     assert.deepEqual(
-      result.fields.map((f) => f.dataTypeID),
+      result.fields.map((f) => f.dataTypeOid),
       [1007, 3802, 20],
     );
   }
-  assert.deepEqual((await db.native.query('SELECT name FROM pg_prepared_statements')).rows, []);
+  assert.deepEqual(
+    (await db.native.queryClassic('SELECT name FROM pg_prepared_statements', [])).rows,
+    [],
+  );
 });
 
 test(
   'a JSON serialization failure preserves guarded transaction recovery',
   { timeout: 10000 },
   async (t) => {
-    const native = new Pool({ connectionString: testConnection, max: 1 });
+    const native = createPool({ connectionString: testConnection, maxConnections: 1 });
     const db = createTenon({ connection: native });
     t.after(async () => {
       await db.close();
-      await native.end();
+      await native.close();
     });
-    await native.query(`CREATE TEMP TABLE preparation_json (payload jsonb);
-      CREATE TEMP TABLE preparation_audit (value text)`);
+    await native.withSession((session) =>
+      session.script(`CREATE TEMP TABLE preparation_json (payload jsonb);
+      CREATE TEMP TABLE preparation_audit (value text)`),
+    );
     const insert = (payload: object) =>
-      sql`INSERT INTO preparation_json VALUES (${payload}::jsonb)`;
+      sql`INSERT INTO preparation_json VALUES (${json(payload)}::jsonb)`;
     await db.transaction(async (tx) => {
       await tx.query(sql`INSERT INTO preparation_audit VALUES (${'kept'})`);
+      await assert.rejects(tx.query(insert({ invalid: 1n }), { affectedRows: { exact: 1 } }), {
+        code: 'PGCLEAR_ENCODE',
+      });
       await assert.rejects(
-        tx.query(insert({ invalid: 1n }), { affectedRows: { exact: 1 } }),
-        TypeError,
+        tx.query(sql`INSERT INTO preparation_audit VALUES (${1n}::text)`, {
+          affectedRows: { exact: 1 },
+        }),
+        { code: 'PGCLEAR_ENCODE' },
       );
       await tx.query(insert({ valid: true }), { affectedRows: { exact: 1 } });
     });
     assert.deepEqual(
-      [...(await native.query('SELECT * FROM preparation_json')).rows],
+      [...(await native.queryClassic('SELECT * FROM preparation_json', [])).rows],
       [{ payload: { valid: true } }],
     );
     assert.deepEqual(
-      [...(await native.query('SELECT * FROM preparation_audit')).rows],
+      [...(await native.queryClassic('SELECT * FROM preparation_audit', [])).rows],
       [{ value: 'kept' }],
     );
   },
@@ -69,14 +83,14 @@ test(
   'a concurrent serialization failure rejects its own query without shifting other results',
   { timeout: 10000 },
   async (t) => {
-    const native = new Pool({ connectionString: testConnection, max: 1 });
+    const native = createPool({ connectionString: testConnection, maxConnections: 1 });
     const db = createTenon({ connection: native });
     t.after(async () => {
       await db.close();
-      await native.end();
+      await native.close();
     });
-    const query = (payload: object) => sql`SELECT ${payload}::jsonb AS payload`;
-    // If execution starts preparing queries, this primes the cache and exposes the driver's pipeline bug.
+    const query = (payload: object) => sql`SELECT ${json(payload)}::jsonb AS payload`;
+    // Encoding failure must not change the SQL or result ownership of concurrent operations.
     await db.query(query({ tag: 'warm' }));
     const results = await Promise.allSettled(
       [{ tag: 'first' }, { invalid: 1n }, { tag: 'third' }].map((payload) =>
@@ -85,7 +99,7 @@ test(
     );
     assert.deepEqual(results[0], { status: 'fulfilled', value: { payload: { tag: 'first' } } });
     assert.equal(results[1]!.status, 'rejected');
-    if (results[1]!.status === 'rejected') assert.ok(results[1]!.reason instanceof TypeError);
+    if (results[1]!.status === 'rejected') assert.ok(results[1]!.reason.code === 'PGCLEAR_ENCODE');
     assert.deepEqual(results[2], { status: 'fulfilled', value: { payload: { tag: 'third' } } });
     assert.deepEqual(await db.query(query({ tag: 'after' }), { returns: 'one' }), {
       payload: { tag: 'after' },

@@ -4,7 +4,7 @@ import type { CaptureBaselineOptions } from './baseline.js';
 import { adoptBaseline, captureBaseline } from './baseline.js';
 import { generateDefinitions } from './generate.js';
 import { writeDefinitions } from './generation/output.js';
-import { describeFlags, runDescribe } from './inspection/cli.js';
+import { describeFlags, inspectionSettings, runDescribe } from './inspection/cli.js';
 import { migrate, migrationStatus, rollback } from './migrations.js';
 import { createMigration } from './migrations/files.js';
 
@@ -14,8 +14,10 @@ baseline capture: [--schema name ...] (default: whole database schema)
 tenon new <name> [--directory migrations] (no database required)
 tenon generate [--namespace public] [--out src/generated-schema.ts] [--check]
 tenon describe <query.sql> [--role name] [--search-path schemas] [--time-zone zone]
+tenon check [file.ts[:line]] [--project tsconfig.json] [--json]
 describe: [--connect-timeout-ms 3000] [--statement-timeout-ms 5000] [--lock-timeout-ms 1000]
 describe emits JSON metadata; it does not execute the query or verify result annotations.
+check compares source contracts; mismatches, unchecked sites and no sites fail. Unproven types are notes.
 rollback: --steps 1
 Connection: DATABASE_URL
 `;
@@ -59,6 +61,8 @@ async function main(): Promise<void> {
       check: { type: 'boolean', default: false },
       steps: { type: 'string', default: '1' },
       help: { type: 'boolean', default: false },
+      project: { type: 'string' },
+      json: { type: 'boolean', default: false },
       ...describeFlags,
     },
   });
@@ -71,8 +75,9 @@ async function main(): Promise<void> {
   // Validate explicitly supplied flags, not defaults. Silently ignoring --check
   // on migrate, for example, would turn an intended dry run into a schema change.
   const allowed = new Set(['help']);
-  if (command !== 'generate' && command !== 'describe') allowed.add('directory');
-  if (command !== 'new' && command !== 'describe') {
+  if (command !== 'generate' && command !== 'describe' && command !== 'check')
+    allowed.add('directory');
+  if (command !== 'new' && command !== 'describe' && command !== 'check') {
     allowed.add('namespace');
   }
   if (command === 'generate') {
@@ -85,7 +90,11 @@ async function main(): Promise<void> {
   if (command === 'baseline' && argument === 'capture') {
     allowed.add('schema');
   }
-  if (command === 'describe') {
+  if (command === 'check') {
+    allowed.add('project');
+    allowed.add('json');
+  }
+  if (command === 'describe' || command === 'check') {
     for (const name of Object.keys(describeFlags)) allowed.add(name);
   }
   for (const token of tokens) {
@@ -105,13 +114,15 @@ async function main(): Promise<void> {
 
   const baseline = command === 'baseline' && (argument === 'capture' || argument === 'adopt');
   const valid =
-    baseline || command === 'describe'
-      ? positionals.length === 2
-      : positionals.length === 1 &&
-        ['migrate', 'generate', 'status', 'rollback'].includes(command ?? '');
+    command === 'check'
+      ? positionals.length <= 2
+      : baseline || command === 'describe'
+        ? positionals.length === 2
+        : positionals.length === 1 &&
+          ['migrate', 'generate', 'status', 'rollback'].includes(command ?? '');
   if (!valid) {
     throw new Error(
-      'Choose new, baseline capture|adopt, migrate, generate, describe <query.sql>, status, or rollback. Use --help for options.',
+      'Choose new, baseline capture|adopt, migrate, generate, describe <query.sql>, check [file.ts[:line]], status, or rollback. Use --help for options.',
     );
   }
 
@@ -121,6 +132,27 @@ async function main(): Promise<void> {
   }
   if (command === 'describe') {
     await runDescribe(argument!, connection, values);
+    return;
+  }
+  if (command === 'check') {
+    const { checkQueries } = await import('./check.js');
+    const report = await checkQueries({
+      connection,
+      ...(argument === undefined ? {} : { target: argument }),
+      ...(values.project === undefined ? {} : { project: values.project }),
+      ...inspectionSettings(values),
+    });
+    if (values.json) process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+    else {
+      for (const diagnostic of report.diagnostics)
+        process.stdout.write(
+          `${diagnostic.file}:${diagnostic.line}:${diagnostic.column} [${diagnostic.kind}] ${diagnostic.code}: ${diagnostic.message}\n`,
+        );
+      process.stdout.write(
+        `${report.queries.length} queries, ${report.queries.filter((query) => query.status === 'analysed').length} analysed, ${report.queries.filter((query) => query.status === 'unchecked').length} unchecked, ${report.queries.reduce((count, query) => count + query.variants, 0)} variants described; ${report.diagnostics.filter((diagnostic) => diagnostic.kind === 'mismatch').length} mismatches, ${report.diagnostics.filter((diagnostic) => diagnostic.kind === 'unproven').length} unproven findings.\n`,
+      );
+    }
+    if (!report.ok) process.exitCode = 1;
     return;
   }
   const options = { connection, directory: values.directory, namespace: values.namespace };

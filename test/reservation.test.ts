@@ -1,20 +1,20 @@
 import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
-import { Pool } from 'pg';
+import { createPool, type Pool } from '@kequtech/pgclear';
 import { createTenon, sql } from '../src/index.js';
 import { withMigrationLock } from '../src/migrations/connection.js';
 import { assertTestDatabase, testConnection } from './helpers/database.js';
 
-const admin = new Pool({ connectionString: testConnection });
+const admin = createPool({ connectionString: testConnection });
 before(() => assertTestDatabase(admin));
-after(() => admin.end());
+after(() => admin.close());
 
 test(`a cold client reserves concurrent transaction sessions`, { timeout: 10000 }, async (t) => {
-  const driver = new Pool({ connectionString: testConnection, max: 3 });
+  const driver = createPool({ connectionString: testConnection, maxConnections: 3 });
   const db = createTenon({ connection: driver });
   t.after(async () => {
     await db.close();
-    await driver.end();
+    await driver.close();
   });
   let entered = 0;
   let release!: () => void;
@@ -56,12 +56,12 @@ test(`a cold client reserves concurrent transaction sessions`, { timeout: 10000 
 });
 
 test(`a cold client can acquire and release a tooling lock`, { timeout: 10000 }, async (t) => {
-  const driver = new Pool({ connectionString: testConnection, max: 1 });
-  t.after(() => driver.end());
+  const driver = createPool({ connectionString: testConnection, maxConnections: 1 });
+  t.after(() => driver.close());
   const options = { connection: driver, namespace: 'tenon_cold_reservation' };
   assert.equal(
     await withMigrationLock(options, 'exclusive', async (client) => {
-      const [row] = (await client.query<{ value: number }>('SELECT 42 AS value')).rows;
+      const [row] = (await client.queryClassic<{ value: number }>('SELECT 42 AS value', [])).rows;
       return row!.value;
     }),
     42,

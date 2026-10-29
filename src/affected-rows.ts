@@ -29,7 +29,6 @@ export function checkAffectedRows(
   if (
     !['INSERT', 'UPDATE', 'DELETE', 'MERGE'].includes(result.command) ||
     result.rowCount === null ||
-    !Number.isSafeInteger(result.rowCount) ||
     result.rowCount < 0
   ) {
     throw new AffectedRowsError(constraint, result.rowCount, result.command, false);

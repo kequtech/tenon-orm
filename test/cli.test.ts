@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { after, before, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { Pool } from 'pg';
+import { createPool, type Pool } from '@kequtech/pgclear';
 import { qualified } from '../src/sql.js';
 import { recordMigrations } from './fixtures/record-migrations.js';
 import {
@@ -13,10 +13,10 @@ import {
   testConnection as connection,
   migrationProject,
 } from './helpers/database.js';
-const pool = new Pool({ connectionString: connection });
+const pool = createPool({ connectionString: connection });
 const project = migrationProject(pool);
 before(() => assertTestDatabase(pool));
-after(() => pool.end());
+after(() => pool.close());
 const run = promisify(execFile);
 const cli = fileURLToPath(new URL('../src/cli.js', import.meta.url));
 
@@ -62,8 +62,9 @@ test('CLI migration and .d.ts generation remain separate; check mode catches sta
         return true;
       },
     );
-    await pool.query(
+    await pool.queryClassic(
       `ALTER TABLE ${qualified(options.namespace, 'Record')} ALTER COLUMN name SET DEFAULT 'draft'`,
+      [],
     );
     await assert.rejects(
       run(process.execPath, [cli, 'generate', ...generation, '--check'], { env }),
@@ -82,8 +83,9 @@ test('CLI migration and .d.ts generation remain separate; check mode catches sta
     assert.equal(await readFile(output, 'utf8'), first);
     await run(process.execPath, [cli, 'generate', ...generation], { env });
     assert.notEqual(await readFile(output, 'utf8'), first);
-    await pool.query(
+    await pool.queryClassic(
       `ALTER TABLE ${qualified(options.namespace, 'Record')} ALTER COLUMN name DROP DEFAULT`,
+      [],
     );
     await run(process.execPath, [cli, 'generate', ...generation], { env });
     assert.equal(await readFile(output, 'utf8'), first);
@@ -109,13 +111,13 @@ test('CLI migration and .d.ts generation remain separate; check mode catches sta
     const unsupported = await run(process.execPath, [cli, 'generate', ...generation], {
       env,
     });
-    assert.ok(unsupported.stderr.includes('"Record"."amount"'));
-    assert.ok(unsupported.stderr.includes('"pg_catalog"."interval"'));
+    assert.equal(unsupported.stderr, '');
+
     const withUnknown = await readFile(output, 'utf8');
     const current = await run(process.execPath, [cli, 'generate', ...generation, '--check'], {
       env,
     });
-    assert.ok(current.stderr.trim());
+    assert.equal(current.stderr, '');
     assert.equal(await readFile(output, 'utf8'), withUnknown);
     await writeFile(
       join(options.directory, '0004_partition.up.sql'),
@@ -125,10 +127,13 @@ test('CLI migration and .d.ts generation remain separate; check mode catches sta
     await run(process.execPath, [cli, 'generate', ...generation], { env });
     const withPartition = await readFile(output, 'utf8');
     await run(process.execPath, [cli, 'generate', ...generation, '--check'], { env });
-    await pool.query(`CREATE TABLE ${qualified(options.namespace, 'PartitionedDaily')}
-      PARTITION OF ${qualified(options.namespace, 'Partitioned')} DEFAULT`);
+    await pool.queryClassic(
+      `CREATE TABLE ${qualified(options.namespace, 'PartitionedDaily')}
+      PARTITION OF ${qualified(options.namespace, 'Partitioned')} DEFAULT`,
+      [],
+    );
     await run(process.execPath, [cli, 'generate', ...generation, '--check'], { env });
-    await pool.query(`DROP TABLE ${qualified(options.namespace, 'PartitionedDaily')}`);
+    await pool.queryClassic(`DROP TABLE ${qualified(options.namespace, 'PartitionedDaily')}`, []);
     await run(process.execPath, [cli, 'generate', ...generation, '--check'], { env });
     assert.equal(await readFile(output, 'utf8'), withPartition);
     // Migration file edits do not affect schema introspection.
@@ -175,7 +180,7 @@ test('flags for other commands reject before changing files or the database', as
       await assert.rejects(run(process.execPath, [cli, ...args, ...common], { env }));
     }
     const rows = (
-      await pool.query('SELECT 1 FROM pg_namespace WHERE nspname = $1', [options.namespace])
+      await pool.queryClassic('SELECT 1 FROM pg_namespace WHERE nspname = $1', [options.namespace])
     ).rows;
     assert.deepEqual([...rows], []);
     await assert.rejects(readFile(join(options.directory, '0002_unexpected.up.sql')), {

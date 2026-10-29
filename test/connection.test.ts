@@ -1,35 +1,33 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { Client } from 'pg';
+import { connect, listen } from '@kequtech/pgclear';
 import { createTenon, sql, type Connection, type ConnectionOptions } from '../src/index.js';
 import { testConnection } from './helpers/database.js';
 
-test('connections pass pg configuration without mutating caller options', async (t) => {
-  const options: ConnectionOptions = {
-    max: 2,
-    connectionTimeoutMillis: 1500,
-    application_name: 'tenon_options',
-    options: '-c timezone=UTC',
-  };
-  const connection: ConnectionOptions = {
-    connectionString: testConnection.replace(/([?&])options=[^&]*/, '$1'),
-    ...options,
-  };
-  const db = createTenon({ connection });
+test('connections preserve native configuration without mutating caller options', async (t) => {
+  const options: ConnectionOptions = Object.freeze({
+    connectionString: testConnection,
+    maxConnections: 2,
+    connectTimeoutMs: 1500,
+    applicationName: 'tenon_options',
+    startupParameters: Object.freeze({ statement_timeout: '1500' }),
+  });
+  const db = createTenon({ connection: options });
   t.after(() => db.close());
-  assert.equal(db.native.options.max, 2);
-  assert.equal(db.native.options.connectionTimeoutMillis, 1500);
   const row = await db.query(
-    sql`SELECT current_setting('application_name') AS name, current_setting('TimeZone') AS zone`,
+    sql`SELECT current_setting('application_name') AS name,
+    current_setting('TimeZone') AS zone`,
     { returns: 'one' },
   );
   assert.deepEqual(row, { name: 'tenon_options', zone: 'UTC' });
-  assert.deepEqual(options, {
-    max: 2,
-    connectionTimeoutMillis: 1500,
-    application_name: 'tenon_options',
-    options: '-c timezone=UTC',
-  });
+  const leases = await Promise.all([db.native.acquire(), db.native.acquire()]);
+  try {
+    assert.equal(db.native.stats.leased, 2);
+    await assert.rejects(db.native.acquire({ timeoutMs: 0 }), { code: 'PGCLEAR_TIMEOUT' });
+  } finally {
+    await Promise.all(leases.map((lease) => lease.release()));
+  }
+  assert.equal(options.connectTimeoutMs, 1500);
 });
 
 test('removed URI wrappers reject before creating a pool', () => {
@@ -37,47 +35,56 @@ test('removed URI wrappers reject before creating a pool', () => {
     { url: '' },
     { url: ' ' },
     { url: 42 },
-    { url: testConnection, max: 1 },
-    { url: testConnection.replace(/([?&])options=[^&]*/, '$1'), options: null },
-    { url: testConnection.replace(/([?&])options=[^&]*/, '$1'), options: [] },
+    { url: testConnection, maxConnections: 1 },
+    { url: testConnection, options: null },
+    { url: testConnection, options: [] },
   ])
     assert.throws(() => createTenon({ connection: connection as Connection }));
 });
 
 test(
-  'native pools expose standard pg connect, notification and end events',
+  'native pools expose held sessions and dedicated listeners retain explicit ownership',
   { timeout: 10000 },
   async (t) => {
-    const db = createTenon({
-      connection: { connectionString: testConnection, max: 2 },
-    });
+    const db = createTenon({ connection: testConnection });
     t.after(() => db.close({ timeoutMs: 0 }));
-    const client = await db.native.connect();
-    client.on('error', () => {});
-    const notification = new Promise<{ channel: string; payload?: string }>((resolve) =>
-      client.once('notification', resolve),
-    );
-    await client.query('LISTEN tenon_connection');
-    await db.native.query("SELECT pg_notify('tenon_connection','hello')");
-    const event = await notification;
-    assert.equal(event.channel, 'tenon_connection');
-    assert.equal(event.payload, 'hello');
-    client.release();
-    await db.close();
-    await assert.rejects(db.native.query('SELECT 1'), /after calling end/);
+    const delivered = Promise.withResolvers<string>();
+    const channel = 'tenon_connection_' + process.pid;
+    const listener = await listen(testConnection, {
+      channels: [channel],
+      onNotification: (event) => delivered.resolve(event.payload),
+    });
+    try {
+      const lease = await db.native.acquire();
+      assert.deepEqual((await lease.queryClassic('SELECT $1::integer AS value', [42])).rows, [
+        { value: 42 },
+      ]);
+      await lease.release();
+      await assert.rejects(lease.queryClassic('SELECT 1', []), { code: 'PGCLEAR_EXPIRED' });
+      await db.native.queryClassic('SELECT pg_notify($1,$2)', [channel, 'hello']);
+      assert.equal(await delivered.promise, 'hello');
+      await db.close();
+      await assert.rejects(db.native.queryClassic('SELECT 1', []), { code: 'PGCLEAR_CLOSED' });
+      assert.equal(listener.status.state, 'connected');
+    } finally {
+      await listener.close();
+    }
   },
 );
 
-test('a standalone pg Client is rejected instead of being mistaken for a borrowed pool', () => {
-  const client = new Client({ connectionString: testConnection });
-  assert.throws(
-    () => createTenon({ connection: client as unknown as Connection }),
-    /Connection configuration/,
-  );
+test('a standalone connection is rejected instead of being mistaken for a borrowed pool', async () => {
+  const client = await connect(testConnection);
+  try {
+    assert.throws(() => createTenon({ connection: client as unknown as Connection }));
+    assert.equal((await client.queryClassic('SELECT 1 AS value', [])).rows[0]!.value, 1);
+  } finally {
+    await client.close();
+  }
 });
 
-test('owned pools keep pg defaults unless connection options override them', async (t) => {
+test('owned pools remain cold until first use and close idempotently', async () => {
   const db = createTenon({ connection: testConnection });
-  t.after(() => db.close());
-  assert.equal(db.native.options.connectionTimeoutMillis, undefined);
+  assert.deepEqual(db.native.stats, { total: 0, idle: 0, leased: 0, waiting: 0 });
+  await db.close();
+  await db.close();
 });

@@ -37,7 +37,7 @@ export function createTenon(options: TenonOptions): Database {
   if (options.onQuery !== undefined && typeof options.onQuery !== 'function') {
     throw new Error('onQuery must be a function.');
   }
-  const { pool, run, close } = createConnection(options.connection);
+  const { pool, close } = createConnection(options.connection);
   let closing: Promise<void> | undefined;
 
   function checkOpen() {
@@ -48,12 +48,8 @@ export function createTenon(options: TenonOptions): Database {
 
   const query: QueryExecutor = (text, input, readResult, guarded) => {
     checkOpen();
-    return run(async () => {
-      if (guarded) {
-        return withTransaction(pool, (query) => query(text, input, readResult, false));
-      }
-      return readResult(await executeSql(pool, text, input));
-    });
+    if (guarded) return withTransaction(pool, (query) => query(text, input, readResult, false));
+    return executeSql(pool, text, input).then(readResult);
   };
 
   return {
@@ -61,9 +57,7 @@ export function createTenon(options: TenonOptions): Database {
     native: pool,
     async transaction(callback) {
       checkOpen();
-      return run(() =>
-        withTransaction(pool, (query) => callback(createClient(query, options.onQuery))),
-      );
+      return withTransaction(pool, (query) => callback(createClient(query, options.onQuery)));
     },
     close(options) {
       if (closing) return closing;

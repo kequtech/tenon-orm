@@ -13,7 +13,8 @@
     "types": ["node"],
     "paths": {
       "@kequtech/tenon-orm": ["./src/index.ts"]
-    }
+    },
+    "lib": ["ES2024"]
   },
   "include": ["src/**/*.ts", "test/**/*.ts"]
 }

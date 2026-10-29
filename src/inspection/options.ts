@@ -45,12 +45,6 @@ export function inspectionOptions(
   if (!['postgres:', 'postgresql:'].includes(url.protocol)) {
     throw new Error('Describe requires a PostgreSQL connection URI.');
   }
-  for (const [name, value] of [
-    ['statement_timeout', limits.statementMs],
-    ['lock_timeout', limits.lockMs],
-  ] as const) {
-    url.searchParams.set(name, String(value));
-  }
   if (!url.searchParams.has('application_name')) {
     url.searchParams.set('application_name', 'tenon-describe');
   }

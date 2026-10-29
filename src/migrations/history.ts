@@ -1,4 +1,4 @@
-import type { PoolClient } from 'pg';
+import type { Session } from '@kequtech/pgclear';
 import { qualified } from '../sql.js';
 import type { SqlMigration } from './files.js';
 
@@ -10,19 +10,20 @@ interface AppliedMigration {
 }
 
 export async function migrationState(
-  client: PoolClient,
+  client: Session,
   namespace: string,
   migrations: readonly SqlMigration[],
 ): Promise<readonly AppliedMigration[]> {
-  const exists = await client.query<{ name: string | null }>(
+  const exists = await client.queryClassic<{ name: string | null }>(
     'SELECT to_regclass($1)::text AS name',
     [qualified(namespace, migrationTable)],
   );
   if (exists.rows[0]!.name === null) {
     return [];
   }
-  const { rows: applied } = await client.query<AppliedMigration>(
+  const { rows: applied } = await client.queryClassic<AppliedMigration>(
     `SELECT id, name, checksum FROM ${qualified(namespace, migrationTable)} ORDER BY id::numeric`,
+    [],
   );
   for (const [i, record] of applied.entries()) {
     const file = migrations[i];
@@ -40,23 +41,24 @@ export async function migrationState(
   return applied;
 }
 
-export async function createHistoryTable(client: PoolClient, namespace: string): Promise<void> {
-  await client.query(
+export async function createHistoryTable(client: Session, namespace: string): Promise<void> {
+  await client.queryClassic(
     `CREATE TABLE IF NOT EXISTS ${qualified(namespace, migrationTable)} (
       id TEXT PRIMARY KEY CHECK (id ~ '^[0-9]+$'),
       name TEXT NOT NULL,
       checksum TEXT NOT NULL,
       applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )`,
+    [],
   );
 }
 
 export async function recordMigration(
-  client: PoolClient,
+  client: Session,
   namespace: string,
   migration: SqlMigration,
 ): Promise<void> {
-  await client.query(
+  await client.queryClassic(
     `INSERT INTO ${qualified(namespace, migrationTable)} (id, name, checksum) VALUES ($1, $2, $3)`,
     [migration.id, migration.name, migration.checksum],
   );

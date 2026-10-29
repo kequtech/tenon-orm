@@ -51,7 +51,8 @@ test('tools preserve work and rollback failures and discard the failed session',
     return result(text);
   });
   await assert.rejects(
-    withMigrationLock({ connection: driver.sql }, 'exclusive', async () => {
+    withMigrationLock({ connection: driver.sql }, 'exclusive', async (client) => {
+      await client.queryClassic('BEGIN', []);
       throw work;
     }),
     (error) => {
@@ -86,5 +87,5 @@ test('a non-Error rejection remains a failure after successful cleanup', async (
     }),
     (error) => error === undefined,
   );
-  assert.equal(driver.release.mock.callCount(), 1);
+  assert.equal(driver.discard.mock.callCount(), 1);
 });

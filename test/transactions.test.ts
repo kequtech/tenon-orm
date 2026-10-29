@@ -1,31 +1,12 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import type { Transaction as NativeTransaction } from '@kequtech/pgclear';
 import type { Transaction } from '../src/index.js';
 import { createTenon, sql, unsafeSql } from '../src/index.js';
 import { mockDriver, result } from './helpers/driver.js';
-
-function gate() {
-  let open!: () => void;
-  const promise = new Promise<void>((resolve) => {
-    open = resolve;
-  });
-  return { promise, open };
-}
+const gate = () => Promise.withResolvers<void>();
 
 test('queries reject direct transaction boundaries before dispatch on root and callback clients', async (t) => {
-  const commands = [
-    'BEGIN',
-    'begin work',
-    'START TRANSACTION',
-    'COMMIT',
-    'COMMIT AND CHAIN',
-    "COMMIT PREPARED 'name'",
-    'END TRANSACTION',
-    'ABORT WORK',
-    'ROLLBACK',
-    "PREPARE TRANSACTION 'name'",
-    '; -- comment\nCOMMIT;',
-  ];
   const statements: string[] = [];
   const driver = mockDriver(t, async (text) => {
     statements.push(text);
@@ -33,162 +14,202 @@ test('queries reject direct transaction boundaries before dispatch on root and c
   });
   const db = createTenon({ connection: driver.sql });
   const check = async (client: Transaction) => {
-    for (const text of commands)
+    for (const text of [
+      'BEGIN',
+      'begin work',
+      'START TRANSACTION',
+      'COMMIT',
+      'COMMIT AND CHAIN',
+      "COMMIT PREPARED 'name'",
+      'END TRANSACTION',
+      'ABORT WORK',
+      'ROLLBACK',
+      "PREPARE TRANSACTION 'name'",
+      '; -- comment\nCOMMIT;',
+    ])
       await assert.rejects(client.query(unsafeSql(text, [])), /cannot start or end a transaction/);
   };
   await check(db);
   await db.transaction(check);
-  assert.deepEqual(statements, ['BEGIN', 'COMMIT']);
-  assert.equal(driver.release.mock.callCount(), 1);
+  assert.deepEqual(statements, []);
   await db.close();
 });
 
-for (const boundary of ['COMMIT', 'ROLLBACK'] as const) {
-  test(`callback scope expires while ${boundary} is pending`, async (t) => {
+for (const boundary of ['COMMIT', 'ROLLBACK'])
+  test(`callback scope expires while driver ${boundary} is pending`, async (t) => {
     const entered = gate(),
-      finish = gate();
-    const failure = new Error('callback failed');
-    const statements: string[] = [];
-    const driver = mockDriver(t, async (text) => {
-      statements.push(text);
-      if (text === boundary) {
-        entered.open();
+      finish = gate(),
+      failure = new Error('work');
+    const driver = mockDriver(t);
+    t.mock.method(
+      driver.sql,
+      'transaction',
+      async <T>(work: (tx: NativeTransaction) => Promise<T>) => {
+        let value: T | undefined,
+          error: unknown,
+          failed = false;
+        try {
+          value = await work(driver.transaction);
+        } catch (cause) {
+          failed = true;
+          error = cause;
+        }
+        entered.resolve();
         await finish.promise;
-      }
-      return result(text);
-    });
+        if (failed) throw error;
+        return value as T;
+      },
+    );
     const db = createTenon({ connection: driver.sql });
-    let expired!: Transaction;
+    let escaped!: Transaction;
     const pending = db.transaction(async (tx) => {
-      expired = tx;
+      escaped = tx;
       if (boundary === 'ROLLBACK') throw failure;
       return 'saved';
     });
     const outcome = pending.then(
       (value) => ({ value }),
-      (error: unknown) => ({ error }),
+      (error) => ({ error }),
     );
     await entered.promise;
     try {
-      await assert.rejects(expired.query(sql`SELECT 1`), /transaction has finished/);
-      assert.equal(driver.release.mock.callCount(), 0);
-      assert.deepEqual(statements, ['BEGIN', boundary]);
+      await assert.rejects(escaped.query(sql`SELECT 1`), /transaction has finished/);
     } finally {
-      finish.open();
+      finish.resolve();
     }
     assert.deepEqual(
       await outcome,
       boundary === 'COMMIT' ? { value: 'saved' } : { error: failure },
     );
-    assert.equal(driver.release.mock.callCount(), 1);
     await db.close();
   });
-}
 
-test('failed commit preserves the original error and rolls back before release', async (t) => {
-  const failure = new Error('commit failed');
-  const statements: string[] = [];
+test('driver commit failures propagate without Tenon retry or recovery SQL', async (t) => {
+  const failure = new Error('commit failed'),
+    statements: string[] = [];
   const driver = mockDriver(t, async (text) => {
     statements.push(text);
-    if (text === 'COMMIT') throw failure;
     return result(text);
   });
+  let calls = 0;
+  t.mock.method(
+    driver.sql,
+    'transaction',
+    async <T>(work: (tx: NativeTransaction) => Promise<T>) => {
+      calls++;
+      await work(driver.transaction);
+      throw failure;
+    },
+  );
   const db = createTenon({ connection: driver.sql });
   await assert.rejects(
     db.transaction(async () => 'saved'),
     (error) => error === failure,
   );
-  assert.deepEqual(statements, ['BEGIN', 'COMMIT', 'ROLLBACK']);
-  assert.equal(driver.release.mock.callCount(), 1);
+  assert.equal(calls, 1);
+  assert.deepEqual(statements, []);
   await db.close();
 });
 
-test('failed BEGIN discards the reservation without running application work', async (t) => {
+test('failed driver BEGIN prevents application work without Tenon recovery SQL', async (t) => {
   const failure = new Error('BEGIN failed');
-  const driver = mockDriver(t, async (text) => {
-    if (text === 'BEGIN') throw failure;
-    return result(text);
+  const driver = mockDriver(t);
+  const work = t.mock.fn(async () => 'must not run');
+  t.mock.method(driver.sql, 'transaction', async () => {
+    throw failure;
   });
   const db = createTenon({ connection: driver.sql });
-  const work = t.mock.fn(async () => 'must not run');
   await assert.rejects(db.transaction(work), (error) => error === failure);
   assert.equal(work.mock.callCount(), 0);
-  assert.equal(driver.discard.mock.callCount(), 1);
-  assert.equal(driver.release.mock.callCount(), 0);
   await db.close();
 });
 
-test('work and rollback failures retain both errors and discard the session', async (t) => {
-  const failure = new Error('work failed'),
-    rollback = new Error('rollback failed');
-  const driver = mockDriver(t, async (text) => {
-    if (text === 'ROLLBACK') throw rollback;
-    return result(text);
-  });
+test('combined driver work and rollback failures retain their identity', async (t) => {
+  const failure = new Error('work'),
+    rollback = new Error('rollback'),
+    combined = new AggregateError([failure, rollback]);
+  const driver = mockDriver(t);
+  t.mock.method(
+    driver.sql,
+    'transaction',
+    async <T>(work: (tx: NativeTransaction) => Promise<T>) => {
+      try {
+        return await work(driver.transaction);
+      } catch (error) {
+        assert.equal(error, failure);
+        throw combined;
+      }
+    },
+  );
   const db = createTenon({ connection: driver.sql });
   await assert.rejects(
     db.transaction(async () => {
       throw failure;
     }),
-    (error) => {
-      assert.ok(error instanceof AggregateError);
-      assert.deepEqual(error.errors, [failure, rollback]);
-      return true;
-    },
+    (error) => error === combined,
   );
-  assert.equal(driver.discard.mock.callCount(), 1);
-  assert.equal(driver.release.mock.callCount(), 0);
   await db.close();
 });
 
-test('failed savepoint recovery prevents a caught failure from committing', async (t) => {
+test('driver savepoint recovery failures remain failures when application code catches the query error', async (t) => {
   const recovery = new Error('savepoint recovery failed');
-  const statements: string[] = [];
-  const driver = mockDriver(t, async (text) => {
-    statements.push(text);
-    if (text.startsWith('ROLLBACK TO')) throw recovery;
-    return result(text.startsWith('UPDATE') ? 'UPDATE' : text, text.startsWith('UPDATE') ? 2 : 0);
+  const driver = mockDriver(t, async () => result('UPDATE', 2));
+  let poisoned = false;
+  t.mock.method(driver.transaction, 'savepoint', async () => {
+    poisoned = true;
+    throw recovery;
   });
+  t.mock.method(driver.transaction, 'queryClassic', async () => {
+    throw recovery;
+  });
+  t.mock.method(
+    driver.sql,
+    'transaction',
+    async <T>(work: (tx: NativeTransaction) => Promise<T>) => {
+      const value = await work(driver.transaction);
+      if (poisoned) throw recovery;
+      return value;
+    },
+  );
   const db = createTenon({ connection: driver.sql });
   await assert.rejects(
     db.transaction(async (tx) => {
       await assert.rejects(tx.query(sql`UPDATE items SET value=1`, { affectedRows: { max: 1 } }));
-      await assert.rejects(tx.query(sql`SELECT 1`), /recovery failed/);
+      await assert.rejects(tx.query(sql`SELECT 1`), (error) => error === recovery);
       return 'must not commit';
     }),
-    /recovery failed/,
+    (error) => error === recovery,
   );
-  assert.ok(!statements.includes('COMMIT'));
-  assert.equal(statements.at(-1), 'ROLLBACK');
   await db.close();
 });
 
-test('transaction waits for accepted pending operations before rollback and release', async (t) => {
+test('transaction drains accepted operations before returning a callback failure to its driver', async (t) => {
   const entered = gate(),
-    finish = gate();
-  const statements: string[] = [];
+    finish = gate(),
+    failure = new Error('work');
   const driver = mockDriver(t, async (text) => {
-    statements.push(text);
-    if (text === 'SELECT 1') {
-      entered.open();
-      await finish.promise;
-    }
+    entered.resolve();
+    await finish.promise;
     return result(text);
   });
   const db = createTenon({ connection: driver.sql });
-  const failure = new Error('callback failed');
+  let settled = false;
   let operation!: Promise<unknown>;
   const pending = db.transaction(async (tx) => {
     operation = tx.query(sql`SELECT 1`);
     await entered.promise;
     throw failure;
   });
-  const checked = assert.rejects(pending, (error) => error === failure);
+  const failed = assert
+    .rejects(pending, (error) => error === failure)
+    .then(() => {
+      settled = true;
+    });
   await entered.promise;
-  assert.equal(driver.release.mock.callCount(), 0);
-  finish.open();
-  await checked;
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(settled, false);
+  finish.resolve();
   await operation;
-  assert.deepEqual(statements, ['BEGIN', 'SELECT 1', 'ROLLBACK']);
+  await failed;
   await db.close();
 });

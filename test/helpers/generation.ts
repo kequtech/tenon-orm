@@ -33,15 +33,23 @@ export async function checkGeneratedTypes(
         moduleResolution: 'NodeNext',
         types: ['node'],
         typeRoots: [resolve('node_modules/@types')],
-        paths: { '@kequtech/tenon-orm': [resolve('dist/index.d.ts')] },
+        paths: {
+          '@kequtech/tenon-orm': [resolve('dist/index.d.ts')],
+          '@kequtech/pgclear': [resolve('node_modules/@kequtech/pgclear/dist/index.d.ts')],
+        },
       },
       files: ['consumer.ts'],
     }),
   );
-  await run(process.execPath, [resolve('node_modules/typescript/bin/tsc'), '--project', config]);
+  try {
+    await run(process.execPath, [resolve('node_modules/typescript/bin/tsc'), '--project', config]);
+  } catch (error) {
+    throw new Error((error as { stdout?: string }).stdout ?? String(error), { cause: error });
+  }
 }
 
 export const typeAssertions = `
   type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
   type Assert<T extends true> = T;
+  type Writable<T> = { [K in keyof T]: Exclude<T[K], undefined> extends never ? never : T[K] | import('@kequtech/pgclear').Parameter };
 `;

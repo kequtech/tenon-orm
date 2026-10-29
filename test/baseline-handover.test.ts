@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { after, before, test } from 'node:test';
-import { Pool } from 'pg';
+import { createPool, type Pool } from '@kequtech/pgclear';
 import {
   adoptBaseline,
   captureBaseline,
@@ -15,9 +15,9 @@ import {
 import { qualified, quote } from '../src/sql.js';
 import { assertTestDatabase, migrationProject, testConnection } from './helpers/database.js';
 
-const pool = new Pool({ connectionString: testConnection });
+const pool = createPool({ connectionString: testConnection });
 before(() => assertTestDatabase(pool));
-after(() => pool.end());
+after(() => pool.close());
 
 // An application can use a frozen checkpoint before its first adoption. These guards are
 // deliberately test-local: Tenon doesn't know a legacy runner's ledger or schema contract.
@@ -28,11 +28,14 @@ test('scoped handover checks a frozen checkpoint, preserves existing rows and ex
     const history = qualified(options.namespace, 'legacy_history');
     const provision = qualified(options.namespace, 'provision');
     const helper = qualified(dependency, 'next_id');
-    await pool.query(
-      `CREATE SCHEMA ${quote(options.namespace)}; CREATE SCHEMA ${quote(dependency)}`,
+    await pool.withSession((session) =>
+      session.script(
+        `CREATE SCHEMA ${quote(options.namespace)}; CREATE SCHEMA ${quote(dependency)}`,
+      ),
     );
     try {
-      await pool.query(`
+      await pool.withSession((session) =>
+        session.script(`
         CREATE TABLE ${qualified(dependency, 'unrelated')} (id integer PRIMARY KEY);
         INSERT INTO ${qualified(dependency, 'unrelated')} VALUES (99);
         CREATE FUNCTION ${helper}() RETURNS integer LANGUAGE sql AS 'SELECT 7';
@@ -42,11 +45,12 @@ test('scoped handover checks a frozen checkpoint, preserves existing rows and ex
         INSERT INTO ${history} VALUES ('001'), ('002');
         CREATE FUNCTION ${provision}() RETURNS integer LANGUAGE sql
           SET search_path TO pg_catalog AS 'SELECT ${helper}()';
-      `);
+      `),
+      );
       const functions = async () => {
         const rows = await fixtureTransaction(pool, async (client) => {
-          await client.query('SET LOCAL search_path TO pg_catalog');
-          return client.query<{ definition: string }>(
+          await client.queryClassic('SET LOCAL search_path TO pg_catalog', []);
+          return client.queryClassic<{ definition: string }>(
             `
             SELECT pg_catalog.pg_get_functiondef(p.oid) AS definition
             FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid=p.pronamespace
@@ -55,7 +59,7 @@ test('scoped handover checks a frozen checkpoint, preserves existing rows and ex
             [options.namespace],
           );
         });
-        return createHash('sha256').update(JSON.stringify(rows)).digest('hex');
+        return createHash('sha256').update(JSON.stringify(rows.rows)).digest('hex');
       };
       const checkpoint = {
         definitions: await generateDefinitions(options),
@@ -74,7 +78,7 @@ test('scoped handover checks a frozen checkpoint, preserves existing rows and ex
         const state = await migrationStatus(options);
         if (!state.applied.length) {
           assert.deepEqual(
-            [...(await pool.query(`SELECT id FROM ${history} ORDER BY id`)).rows],
+            [...(await pool.queryClassic(`SELECT id FROM ${history} ORDER BY id`, [])).rows],
             checkpoint.history,
           );
           assert.equal(await generateDefinitions(options), checkpoint.definitions);
@@ -83,14 +87,17 @@ test('scoped handover checks a frozen checkpoint, preserves existing rows and ex
         await adoptBaseline(options);
         return migrate(options);
       };
-      await pool.query(`DELETE FROM ${history} WHERE id='002'`);
+      await pool.queryClassic(`DELETE FROM ${history} WHERE id='002'`, []);
       await assert.rejects(adoptChecked(), assert.AssertionError);
-      await pool.query(`INSERT INTO ${history} VALUES ('002')`);
-      await pool.query(`ALTER TABLE ${accounts} ADD COLUMN drift text`);
+      await pool.queryClassic(`INSERT INTO ${history} VALUES ('002')`, []);
+      await pool.queryClassic(`ALTER TABLE ${accounts} ADD COLUMN drift text`, []);
       await assert.rejects(adoptChecked(), assert.AssertionError);
-      await pool.query(`ALTER TABLE ${accounts} DROP COLUMN drift`);
-      await pool.query(`CREATE OR REPLACE FUNCTION ${provision}() RETURNS integer LANGUAGE sql
-        SET search_path TO pg_catalog AS 'SELECT 999'`);
+      await pool.queryClassic(`ALTER TABLE ${accounts} DROP COLUMN drift`, []);
+      await pool.queryClassic(
+        `CREATE OR REPLACE FUNCTION ${provision}() RETURNS integer LANGUAGE sql
+        SET search_path TO pg_catalog AS 'SELECT 999'`,
+        [],
+      );
       assert.equal(
         await generateDefinitions(options),
         checkpoint.definitions,
@@ -98,8 +105,11 @@ test('scoped handover checks a frozen checkpoint, preserves existing rows and ex
       );
       await assert.rejects(adoptChecked(), assert.AssertionError);
       assert.deepEqual((await migrationStatus(options)).applied, []);
-      await pool.query(`CREATE OR REPLACE FUNCTION ${provision}() RETURNS integer LANGUAGE sql
-        SET search_path TO pg_catalog AS 'SELECT ${helper}()'`);
+      await pool.queryClassic(
+        `CREATE OR REPLACE FUNCTION ${provision}() RETURNS integer LANGUAGE sql
+        SET search_path TO pg_catalog AS 'SELECT ${helper}()'`,
+        [],
+      );
       await writeFile(
         join(options.directory, '0002_active.up.sql'),
         'ALTER TABLE accounts ADD COLUMN active boolean NOT NULL DEFAULT true;',
@@ -111,26 +121,37 @@ test('scoped handover checks a frozen checkpoint, preserves existing rows and ex
         'later migrations do not change the frozen cutover guard',
       );
       assert.deepEqual(
-        [...(await pool.query(`SELECT * FROM ${accounts}`)).rows],
+        [...(await pool.queryClassic(`SELECT * FROM ${accounts}`, [])).rows],
         [{ id: 1, name: 'existing', active: true }],
       );
       const definitions = await generateDefinitions(options);
-      await pool.query(
-        `DROP SCHEMA ${quote(options.namespace)} CASCADE; DROP FUNCTION ${helper}()`,
+      await pool.withSession((session) =>
+        session.script(
+          `DROP SCHEMA ${quote(options.namespace)} CASCADE; DROP FUNCTION ${helper}()`,
+        ),
       );
       await migrate(options);
       assert.equal(await generateDefinitions(options), definitions);
-      await assert.rejects(pool.query(`SELECT ${provision}()`), { code: '42883' });
+      await assert.rejects(pool.queryClassic(`SELECT ${provision}()`, []), { code: '42883' });
       // A scoped dump does not provision dependencies in another schema.
-      await pool.query(`CREATE FUNCTION ${helper}() RETURNS integer LANGUAGE sql AS 'SELECT 7'`);
-      assert.deepEqual([...(await pool.query(`SELECT ${provision}() AS id`)).rows], [{ id: 7 }]);
-      assert.deepEqual([...(await pool.query(`SELECT * FROM ${accounts}`)).rows], []);
+      await pool.queryClassic(
+        `CREATE FUNCTION ${helper}() RETURNS integer LANGUAGE sql AS 'SELECT 7'`,
+        [],
+      );
       assert.deepEqual(
-        [...(await pool.query(`SELECT * FROM ${qualified(dependency, 'unrelated')}`)).rows],
+        [...(await pool.queryClassic(`SELECT ${provision}() AS id`, [])).rows],
+        [{ id: 7 }],
+      );
+      assert.deepEqual([...(await pool.queryClassic(`SELECT * FROM ${accounts}`, [])).rows], []);
+      assert.deepEqual(
+        [
+          ...(await pool.queryClassic(`SELECT * FROM ${qualified(dependency, 'unrelated')}`, []))
+            .rows,
+        ],
         [{ id: 99 }],
       );
     } finally {
-      await pool.query(`DROP SCHEMA ${quote(dependency)} CASCADE`);
+      await pool.queryClassic(`DROP SCHEMA ${quote(dependency)} CASCADE`, []);
     }
   });
 });

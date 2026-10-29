@@ -15,7 +15,7 @@ export interface QueryOptions {
 export type QueryOutput<Row extends object, Mode extends QueryReturnMode> = Mode extends 'native'
   ? QueryResult<Row>
   : Mode extends 'many'
-    ? Row[]
+    ? readonly Row[]
     : Mode extends 'oneOrNone'
       ? Row | undefined
       : Row;

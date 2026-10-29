@@ -18,23 +18,39 @@ import {
   sql,
   unsafeSql,
 } from '../src/index.js';
-import type { User } from './fixtures/generated-schema.js';
+import type { User } from './fixtures/models.js';
 import { echoValues } from './fixtures/queries.js';
+import { checkQueries, type CheckReport } from '../src/check.js';
+
+async function checkingContracts(connection: string) {
+  const report: CheckReport = await checkQueries({
+    connection,
+    target: 'queries.ts:23',
+    project: 'tsconfig.json',
+    readTypes: { 23: 'string' },
+  });
+  const ok: boolean = report.ok;
+  // @ts-expect-error use file:line rather than a separate line option
+  await checkQueries({ connection, line: 23 });
+  // @ts-expect-error readTypes values must be TypeScript type expressions
+  await checkQueries({ connection, readTypes: { 23: 42 } });
+  return ok;
+}
+void checkingContracts;
 
 type Equal<A, B> =
   (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
 type Assert<T extends true> = T;
 
 async function contracts(db: Database, options?: QueryOptions) {
-  const nativeRows = await db.native.query<{ value: number }>('SELECT $1::integer AS value', [1]);
+  const nativeRows = await db.native.queryClassic<{ value: number }>(
+    'SELECT $1::integer AS value',
+    [1],
+  );
   const nativeType: Assert<Equal<(typeof nativeRows.rows)[number], { value: number }>> = true;
   void nativeType;
-  const client = await db.native.connect();
-  client.on('notification', (event) => {
-    const channel: string = event.channel;
-    void channel;
-  });
-  client.release();
+  const client = await db.native.acquire();
+  await client.release();
   // @ts-expect-error the driver reference is readonly
   db.native = db.native;
   type Summary = Pick<User, 'id' | 'email'>;
@@ -48,13 +64,13 @@ async function contracts(db: Database, options?: QueryOptions) {
   const untypedMany = await db.query(sql`SELECT 1 AS value`, { returns: 'many' });
   const untypedNative = await db.query(sql`SELECT 1 AS value`);
   const expected: [
-    Assert<Equal<typeof many, Summary[]>>,
+    Assert<Equal<typeof many, readonly Summary[]>>,
     Assert<Equal<typeof optional, Summary | undefined>>,
     Assert<Equal<typeof one, Summary>>,
     Assert<Equal<typeof native, QueryResult<Summary>>>,
     Assert<Equal<typeof untyped, UnknownRow>>,
     Assert<Equal<typeof untypedOptional, UnknownRow | undefined>>,
-    Assert<Equal<typeof untypedMany, UnknownRow[]>>,
+    Assert<Equal<typeof untypedMany, readonly UnknownRow[]>>,
     Assert<Equal<typeof untypedNative, QueryResult<UnknownRow>>>,
   ] = [true, true, true, true, true, true, true, true];
   void expected;
@@ -78,7 +94,7 @@ async function contracts(db: Database, options?: QueryOptions) {
   await db.query<Summary, 'one'>(query);
   // Runtime-selected options cannot promise a particular return shape.
   const dynamic = await db.query(query, options);
-  type DynamicResult = QueryResult<Summary> | Summary[] | Summary | undefined;
+  type DynamicResult = QueryResult<Summary> | readonly Summary[] | Summary | undefined;
   const dynamicType: Assert<Equal<typeof dynamic, DynamicResult>> = true;
   void dynamicType;
 
@@ -99,8 +115,8 @@ async function contracts(db: Database, options?: QueryOptions) {
   const removed = await remove(db, { id: 1 });
   const types: [
     Assert<Equal<typeof found, Summary | undefined>>,
-    Assert<Equal<typeof echoed, { label: string; enabled: boolean }[]>>,
-    Assert<Equal<typeof every, Summary[]>>,
+    Assert<Equal<typeof echoed, readonly { label: string; enabled: boolean }[]>>,
+    Assert<Equal<typeof every, readonly Summary[]>>,
     Assert<Equal<typeof removed, QueryResult<UnknownRow>>>,
   ] = [true, true, true, true];
   void types;
@@ -123,7 +139,7 @@ async function contracts(db: Database, options?: QueryOptions) {
     sql<Summary>`SELECT id, email FROM public."User" WHERE ${predicate}`,
     { returns: 'many' },
   );
-  const compositionType: Assert<Equal<typeof composed, Summary[]>> = true;
+  const compositionType: Assert<Equal<typeof composed, readonly Summary[]>> = true;
   void compositionType;
   // @ts-expect-error fragments do not declare returned rows
   sql.fragment<Summary>`id = 1`;
@@ -210,16 +226,16 @@ function mutationContracts() {
 
 function connectionContracts() {
   const options: ConnectionOptions = {
-    max: 2,
-    connectionTimeoutMillis: 5000,
-    application_name: 'tenon',
+    maxConnections: 2,
+    connectTimeoutMs: 5000,
+    applicationName: 'tenon',
   };
   const connection = {
     ...options,
     connectionString: 'postgresql://unused',
   } satisfies ConnectionOptions;
   const db = createTenon({ connection });
-  // @ts-expect-error pg connectionString requires a string
+  // @ts-expect-error pgclear connectionString requires a string
   const invalid: ConnectionOptions = { connectionString: 42 };
   const inspection: DescribeOptions = {
     connection: connection.connectionString,

@@ -44,15 +44,12 @@ npm install --no-save --package-lock=false --ignore-scripts /absolute/path/pgcle
 TENON_TEST_PGCLEAR_TARBALL=/absolute/path/pgclear-candidate.tgz npm run check
 ```
 
-The consumer harness also overrides Tenon's transitive dependency for this candidate. Ordinary
-checks use the declared registry dependency. Before release, finalize the semver dependency and
-lockfile against a published pgclear release and restore a clean `npm ci` installation. Candidate
-checks do not establish registry availability. Keep local artifact paths out of release metadata.
-
-For a coordinated unpublished driver patch, a prepared registry lock entry may use the final
-candidate tarball's actual integrity. Until that driver is published, use the candidate override for
-consumer tests. Publish the driver first and verify its registry integrity matches the locked
-artifact before releasing Tenon; refresh the lockfile and rerun checks if the artifact differs.
+The consumer harness overrides Tenon's transitive dependency for this candidate. Ordinary checks
+use the declared registry dependency. A coordinated unpublished patch may prepare a registry lock
+entry using the final candidate's actual integrity; keep local paths out of committed dependencies.
+Candidate checks do not establish registry availability. Before releasing Tenon, publish pgclear
+first, verify its registry integrity against the lockfile, then run `npm ci` and ordinary checks.
+Refresh the lockfile and rerun checks if the published artifact differs.
 
 ### Regenerate the fixture
 

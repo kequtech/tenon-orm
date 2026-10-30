@@ -26,6 +26,14 @@ test('the packed package preserves API contracts and consumes generated .d.ts sc
   // npm publish --dry-run passes this setting into its lifecycle tests. Exercise
   // that environment while explicitly creating the local pack/install fixtures.
   const npmEnv = { ...process.env, npm_config_dry_run: 'true' };
+  const installArgs = [
+    'install',
+    '--dry-run=false',
+    '--prefer-offline',
+    '--ignore-scripts',
+    '--no-audit',
+    '--no-fund',
+  ];
   try {
     const packed = await run(
       'npm',
@@ -99,18 +107,7 @@ test('the packed package preserves API contracts and consumes generated .d.ts sc
     // npm ci caches tarballs, but not necessarily the registry metadata needed
     // for a fresh dependency graph. Prefer the cache, fetching anything missing.
     // Install the packed artifact without lifecycle scripts or repository sources.
-    await run(
-      'npm',
-      [
-        'install',
-        '--dry-run=false',
-        '--prefer-offline',
-        '--ignore-scripts',
-        '--no-audit',
-        '--no-fund',
-      ],
-      { cwd: consumer, env: npmEnv },
-    );
+    await run('npm', installArgs, { cwd: consumer, env: npmEnv });
     const installed = join(consumer, 'node_modules/@kequtech/tenon-orm');
     // Relative documentation links must also work for readers of the installed package.
     for (const path of paths.filter((path) => path.endsWith('.md'))) {
@@ -330,19 +327,7 @@ ${result.stderr ?? ''}`);
         },
       }),
     );
-    await run(
-      'npm',
-      [
-        'install',
-        '--dry-run=false',
-        '--omit=dev',
-        '--prefer-offline',
-        '--ignore-scripts',
-        '--no-audit',
-        '--no-fund',
-      ],
-      { cwd: production, env: npmEnv },
-    );
+    await run('npm', [...installArgs, '--omit=dev'], { cwd: production, env: npmEnv });
     await cp(join(installed, 'dist'), join(production, 'second-tenon'), { recursive: true });
     await cp(
       join(production, 'node_modules/@kequtech/pgclear'),

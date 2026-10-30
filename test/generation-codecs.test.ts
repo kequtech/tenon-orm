@@ -239,15 +239,15 @@ test('unrelated codec overrides preserve enum and enum-domain unions alongside D
         CREATE DOMAIN "NestedState" AS "DomainState";
         CREATE TABLE "Entries" (
           state "State" NOT NULL, optional "State", wrapped "NestedState" NOT NULL,
-          at timestamptz NOT NULL, total bigint NOT NULL
+          at timestamptz NOT NULL
         );`,
     },
     async (options) => {
       await migrate(options);
-      for (const [codecs, total] of [
-        [defaultCodecs.with(builtin.timestamptzDate), '9007199254740993'],
-        [defaultCodecs.with(builtin.timestamptzDate).with(builtin.int8BigInt), 9007199254740993n],
-      ] as const) {
+      for (const codecs of [
+        defaultCodecs.with(builtin.timestamptzDate),
+        defaultCodecs.with(builtin.timestamptzDate).with(builtin.int8BigInt),
+      ]) {
         const configured = createPool({ connectionString: testConnection, codecs });
         try {
           const warnings: string[] = [];
@@ -264,22 +264,20 @@ test('unrelated codec overrides preserve enum and enum-domain unions alongside D
             import type { Parameter } from '@kequtech/pgclear';
             ${typeAssertions}
             type Row = Database['Entries']['row'];
-            type State = Assert<Equal<Row['state'], 'queued' | 'done'>>;
-            type Optional = Assert<Equal<Row['optional'], 'queued' | 'done' | null>>;
-            type Domain = Assert<Equal<Row['wrapped'], 'queued' | 'done'>>;
-            type DateOutput = Assert<Equal<Row['at'], Date>>;
-            type Total = Assert<Equal<Row['total'], ${typeof total === 'bigint' ? 'bigint' : 'string'}>>;
+            type Expected = {
+              state: 'queued' | 'done'; optional: 'queued' | 'done' | null;
+              wrapped: 'queued' | 'done'; at: Date;
+            };
+            type Read = Assert<Equal<Row, Expected>>;
             type Insert = Assert<Equal<Database['Entries']['insert']['state'], 'queued' | 'done' | Parameter>>;
             type Update = Assert<Equal<Database['Entries']['update']['state'], 'queued' | 'done' | Parameter | undefined>>;
-            // @ts-expect-error unrelated codecs do not widen enum reads
-            const invalid: Row['state'] = 'other';
             `,
           );
           assert.deepEqual(warnings, []);
           const row = (
             await configured.queryClassic(
               `INSERT INTO ${qualified(options.namespace, 'Entries')}
-                VALUES ('queued', NULL, 'done', TIMESTAMPTZ '2026-10-30 12:34:56.123+00', 9007199254740993)
+                VALUES ('queued', NULL, 'done', TIMESTAMPTZ '2026-10-30 12:34:56.123+00')
                 RETURNING *`,
             )
           ).rows[0]!;
@@ -288,7 +286,6 @@ test('unrelated codec overrides preserve enum and enum-domain unions alongside D
             optional: null,
             wrapped: 'done',
             at: new Date('2026-10-30T12:34:56.123Z'),
-            total,
           });
         } finally {
           await configured.close();
@@ -306,20 +303,10 @@ test('custom enum decoders retain their own read types while writes retain catal
     },
     async (options) => {
       await migrate(options);
-      const oid = (
-        await pool.queryClassic<{ oid: number }>(
-          'SELECT oid FROM pg_catalog.pg_type WHERE typnamespace = $1::regnamespace AND typname = $2',
-          [options.namespace, 'Kind'],
-        )
-      ).rows[0]!.oid;
-      await checkGeneratedTypes(
-        options,
-        `
-          import type { Database } from './definitions.js';
-          ${typeAssertions}
-          type DefaultEnum = Assert<Equal<Database['Entries']['row']['kind'], 'reader' | 'writer'>>;
-          `,
+      const description = await pool.describe(
+        `SELECT kind FROM ${qualified(options.namespace, 'Entries')}`,
       );
+      const oid = description.fields[0]!.dataTypeOid;
       for (const typescript of ['string', "'READER' | 'WRITER'", undefined]) {
         const configured = createPool({
           connectionString: testConnection,

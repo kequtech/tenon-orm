@@ -15,10 +15,12 @@ function columnTypes(
     );
     read = 'unknown';
   }
-  const choices = column.choices?.map((choice) => JSON.stringify(choice)).join(' | ') || 'never';
-  if (column.typeKind === 'e' && codecs.isDefaultDecoder(oid) && read === 'string') read = choices;
   let write = defaultCodecs.typescript(oid)!;
-  if (column.typeKind === 'e') write = choices;
+  if (column.typeKind === 'e') {
+    const choices = column.choices?.map((choice) => JSON.stringify(choice)).join(' | ') || 'never';
+    if (read === 'string' && codecs.isDefaultDecoder(oid)) read = choices;
+    write = choices;
+  }
   if (write === 'unknown' || write.startsWith('PgArray<')) write = 'string';
   if ([20, 1700].includes(oid)) write += ' | bigint';
   if ([1082, 1114, 1184].includes(oid)) write += ' | globalThis.Date | TemporalInput';

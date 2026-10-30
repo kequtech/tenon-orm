@@ -194,9 +194,12 @@ await listener.close();
 ```
 
 A listener has a separate lifetime and is not closed by `db.close()`. Subscription changes share its
-dedicated connection; reconnect restores the current channel membership. Applications own subscriber
-counts, authorization, and routing. Notifications are not replayed after a disconnection; use the
-listener's status/generation changes to detect a possible gap and reconcile persistent state.
+dedicated connection; reconnect restores the last acknowledged channel set. Subscriptions are set
+operations: repeated subscribes do not add reference counts. Applications own subscriber counts,
+authorization, and routing. Notifications are not replayed after a disconnection; use the listener's
+status/generation changes to detect a possible gap and reconcile persistent state. See
+[pgclear's notification guide](https://github.com/kequtech/pgclear/blob/main/docs/notifications.md)
+for deadlines, cancellation, and changes queued during reconnect.
 
 ## Update the driver
 

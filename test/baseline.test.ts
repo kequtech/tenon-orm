@@ -11,6 +11,7 @@ import { createPool, type Pool } from '@kequtech/pgclear';
 import {
   adoptBaseline,
   captureBaseline,
+  createTenon,
   generateDefinitions,
   migrate,
   migrationStatus,
@@ -271,31 +272,17 @@ test('baseline CLI captures and adopts without replaying live data or exposing c
       [...(await pool.queryClassic(`SELECT * FROM ${table}`, [])).rows],
       [...original],
     );
-    await run(
-      process.execPath,
-      [
-        cli,
-        'generate',
-        '--namespace',
-        options.namespace,
-        '--out',
-        join(options.directory, 'definitions.ts'),
-      ],
-      { env },
-    );
-    await run(
-      process.execPath,
-      [
-        cli,
-        'generate',
-        '--namespace',
-        options.namespace,
-        '--out',
-        join(options.directory, 'definitions.ts'),
-        '--check',
-      ],
-      { env },
-    );
+    const db = createTenon({ connection: pool });
+    try {
+      const generation = {
+        namespace: options.namespace,
+        out: join(options.directory, 'definitions.ts'),
+      };
+      await db.generateTypes(generation);
+      await db.generateTypes({ ...generation, check: true });
+    } finally {
+      await db.close();
+    }
     await rm(join(options.directory, '0001_baseline.up.sql'));
     await assert.rejects(
       run(process.execPath, [cli, 'baseline', 'capture', ...args, '--schema', options.namespace], {

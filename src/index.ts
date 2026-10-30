@@ -34,7 +34,7 @@ export type {
 export { adoptBaseline, captureBaseline } from './baseline.js';
 export type { CaptureBaselineOptions, CapturedBaseline } from './baseline.js';
 export { generateDefinitions } from './generate.js';
-export type { GenerateOptions } from './generate.js';
+export type { GenerateOptions, GenerateTypesOptions } from './generate.js';
 export { migrate, migrationStatus, rollback } from './migrations.js';
 export type { MigrationStatus } from './migrations.js';
 export type { DatabaseToolOptions } from './migrations/connection.js';

@@ -5,12 +5,50 @@ import { renderDatabase } from './generation/render.js';
 import { domainSummaries, schemaSummary, tableSummary } from './generation/schema-summary.js';
 import { withMigrationLock } from './migrations/connection.js';
 import { migrationTable } from './migrations/history.js';
-import { quote } from './sql.js';
+import { quote, validateName } from './sql.js';
+import { plainObject } from './validation.js';
+import { writeDefinitions } from './generation/output.js';
 
 export interface GenerateOptions {
   readonly connection: Connection;
   readonly namespace?: string;
   readonly onWarning?: (message: string) => void | Promise<void>;
+}
+
+export interface GenerateTypesOptions {
+  /** Output path, resolved from the working directory. */
+  readonly out: string;
+  /** Schema to inspect; defaults to public. */
+  readonly namespace?: string;
+  /** Reject missing or stale output without writing. Defaults to false. */
+  readonly check?: boolean;
+  readonly onWarning?: (message: string) => void | Promise<void>;
+}
+
+/** Generate with the owning database's connection and preserve exact file freshness checks. */
+export async function generateTypes(
+  connection: Connection,
+  options: GenerateTypesOptions,
+): Promise<void> {
+  const config = plainObject(options, 'Generation options');
+  for (const key of Object.keys(config)) {
+    if (!['out', 'namespace', 'check', 'onWarning'].includes(key)) {
+      throw new Error(`Unknown generation option: ${key}`);
+    }
+  }
+  if (typeof config.out !== 'string' || !config.out.trim() || config.out.includes('\0')) {
+    throw new Error('Generation out must be a nonempty file path.');
+  }
+  if (config.check !== undefined && typeof config.check !== 'boolean') {
+    throw new Error('Generation check must be a boolean.');
+  }
+  if (options.namespace !== undefined) validateName(options.namespace);
+  const source = await generateDefinitions({
+    connection,
+    ...(options.namespace !== undefined && { namespace: options.namespace }),
+    ...(options.onWarning !== undefined && { onWarning: options.onWarning }),
+  });
+  await writeDefinitions(source, config.out, config.check === true);
 }
 
 /** Read one schema snapshot with default catalog codecs and the selected application read mappings. */

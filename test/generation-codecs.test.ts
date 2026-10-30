@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { writeFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { after, before, test } from 'node:test';
 import { promisify } from 'node:util';
 import { builtin, createPool, defaultCodecs } from '@kequtech/pgclear';
-import { generateDefinitions, migrate } from '../src/index.js';
+import { createTenon, migrate } from '../src/index.js';
 import { qualified } from '../src/sql.js';
 import { assertTestDatabase, migrationProject, testConnection } from './helpers/database.js';
 import { checkGeneratedTypes, typeAssertions } from './helpers/generation.js';
@@ -343,16 +343,25 @@ test('generation restores borrowed session settings and temporary state and keep
           [{ value: 'retained' }],
         );
         const failure = new Error('application warning handler failed');
-        await assert.rejects(
-          generateDefinitions({
-            ...options,
-            connection: configured,
-            onWarning: () => {
-              throw failure;
-            },
-          }),
-          (error) => error === failure,
-        );
+        const out = join(options.directory, 'definitions.ts');
+        const saved = await readFile(out, 'utf8');
+        const db = createTenon({ connection: configured });
+        try {
+          await assert.rejects(
+            db.generateTypes({
+              namespace: options.namespace,
+              out,
+              onWarning: async () => {
+                await Promise.resolve();
+                throw failure;
+              },
+            }),
+            (error) => error === failure,
+          );
+          assert.equal(await readFile(out, 'utf8'), saved);
+        } finally {
+          await db.close();
+        }
         // Tooling discards a failed checkout, but the borrowed pool remains application-owned.
         const after = (await configured.queryClassic(state)).rows[0]!;
         assert.deepEqual(

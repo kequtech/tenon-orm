@@ -47,6 +47,11 @@ Temporal inputs use server type inference; output conversions to bigint, Date, o
 explicit codec choices. JSON and PostgreSQL arrays use explicit helpers. See the
 [value mappings](docs/reference.md#generated-types-and-checking).
 
+Generate schema declarations through the configured database with
+`await db.generateTypes({ out: 'src/generated-schema.d.ts' })`; pass `check: true` to verify saved
+output without rewriting it. Use an [application-owned script](docs/human-guide.md#generate-types)
+so generation shares your runtime codecs.
+
 Joins, relationships, aggregates, and upserts use PostgreSQL SQL. Object-based writes can use
 `sql.insertValues` and `sql.assignments` while keeping the surrounding statement explicit.
 `db.native` exposes the underlying pgclear `Pool` for prepared statements, streams, COPY, and

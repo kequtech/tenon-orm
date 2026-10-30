@@ -4,6 +4,13 @@ Replace application queries independently of migration ownership. Tenon can quer
 and generate types while the current migration runner stays in place. For a Tenon version upgrade,
 read the [Changelog](../CHANGELOG.md).
 
+## Upgrade from Tenon 0.4.0
+
+Replace `tenon generate` scripts with `db.generateTypes({ out, namespace?, check? })` on your
+configured database instance. Run checks with `check: true` and close the instance when the script
+finishes. See the [generation script example](human-guide.md#generate-types). The source-string
+`generateDefinitions` API remains available. Query codecs remain database-wide.
+
 ## Upgrade from Tenon 0.3.x
 
 Tenon 0.4 uses pgclear 0.3.x in place of pg. Keep the existing database, credentials,
@@ -11,7 +18,7 @@ migration history, and application query functions. Pgclear is included as a run
 With npm, update Tenon:
 
 ```sh
-npm install @kequtech/tenon-orm@^0.4.0
+npm install @kequtech/tenon-orm@^0.4.1
 ```
 
 Use the project's existing package manager and then review these boundaries:
@@ -32,8 +39,9 @@ Use the project's existing package manager and then review these boundaries:
 4. Regenerate database declarations against the intended development/test schema. Replace former
    `Rows['users']`, `Rows.Insert['users']`, and `Rows.Update['users']` accesses with
    `Database['users']['row']`, `Database['users']['insert']`, and `Database['users']['update']`.
-   Tenon owns generation and uses the configured driver's codec representations. If code imports
-   `generateDefinitions` from pgclear, import it from Tenon and use Tenon's options instead. Review
+   Generate with `db.generateTypes({ out, namespace })` to inherit the configured driver's codec
+   representations. If code needs source text from `generateDefinitions`, import it from Tenon
+   instead of pgclear and supply the application's configured connection. Review
    the generated diff and exclude exact generator output from formatting. Generated helper types
    now import from Tenon; applications do not need a separate Pgclear dependency for them.
 5. Run the project's typecheck and database tests for queries, transactions, JSON/arrays, and native
@@ -73,8 +81,8 @@ application code or SQL where required.
 
 1. Optionally generate persistence types from the existing schema:
 
-   ```sh
-   npx tenon generate --namespace public --out src/generated-schema.d.ts
+   ```ts
+   await db.generateTypes({ namespace: 'public', out: 'src/generated-schema.d.ts' });
    ```
 
    This needs no Tenon migration history. Use the application's namespace and commit exact output.

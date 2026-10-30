@@ -20,8 +20,8 @@ Use `sql` from `@kequtech/tenon-orm` for `db.query`. Tenon also re-exports Pgcle
 original helpers and types; Pgclear continues to own conversion. Generated schema declarations
 import their helper types from Tenon.
 
-`createTenon({ connection, onQuery? })` returns a `Database` with `query`, `transaction`, `native`,
-and `close`. The required `connection` accepts a PostgreSQL URI, pgclear `PoolOptions`, or an existing
+`createTenon({ connection, onQuery? })` returns a `Database` with `query`, `transaction`, `generateTypes`,
+`native`, and `close`. The required `connection` accepts a PostgreSQL URI, pgclear `PoolOptions`, or an existing
 pgclear `Pool`, borrowed by identity. `ConnectionOptions` aliases pgclear's `PoolOptions`.
 
 ```ts
@@ -141,15 +141,26 @@ import { unsafeSql, type QueryClient } from '@kequtech/tenon-orm';
 
 async function queryRows(tx: QueryClient, text: string, values: readonly unknown[]) {
   const result = await tx.query(unsafeSql(text, values));
-  return { rows: result.rows };
+  return { rows: [...result.rows] };
 }
 ```
 
-Alternatively, request `{ returns: 'many' }` and wrap the returned array in `{ rows }`. Supply the
+Alternatively, request `{ returns: 'many' }` and copy the returned array into `{ rows: [...rows] }`. Supply the
 callback's `tx` when the adapter's work must commit with application writes. A native pool query
 uses a separate checkout and does not join that transaction. Await adapter calls before returning
 from the callback, retain commit/rollback tests, and make recording helpers return pgclear native
-results. The adapter's SQL text must be trusted and values must remain separately bound.
+results. The adapter's SQL text must be trusted and values must remain separately bound. This
+example assumes values are already valid Tenon inputs: external JavaScript arrays and objects need
+explicit, type-aware `param(value, codec)`, `json(value)`, or text encoding at the adapter boundary.
+Output codecs do not select input encoders.
+
+Callback transactions inherit the database's codecs. Passing a transaction adapter to pg-boss lets
+pg-boss author job SQL and execute it through that same transaction; the application's changes and
+job changes commit or roll back together. Pg-boss's own connection handles independent operations.
+Enqueueing a job and returning its ID needs no timestamp conversion. When adapter calls return job
+timestamps, handle them using the configured representation or convert the relevant fields at the
+application boundary before code expects Date behavior. Tenon keeps codecs database-wide and does
+not offer per-query overrides; a separate pool or `db.native` query does not join the transaction.
 
 ## SQL parameters and identifiers
 
@@ -293,22 +304,39 @@ query outcome. Query success inside a callback does not establish outer commit.
 
 ## Generated types and checking
 
-`generateDefinitions({ connection, namespace?, onWarning? })` reads schema catalogs and renders
-TypeScript declarations in Tenon. It interprets defaults, domains, identities, writable columns, and
-schema summaries, coordinates with the migration advisory lock, and excludes its history table.
-It needs no migration files/history. The CLI owns atomic output and freshness checks. Decoder
-representations come from pgclear's selected registry rather than a second conversion registry.
+`db.generateTypes({ out, namespace?, check?, onWarning? })` reads schema catalogs, renders
+TypeScript declarations, and writes or checks an output file using the instance's existing pool and
+configured codecs. `GenerateTypesOptions` is exported. It returns `Promise<void>` and emits no
+progress messages. It is available on `Database`, not on a callback `Transaction`; call it outside
+transactions after migrations have committed.
 
-```sh
-npx tenon generate --out src/generated-schema.d.ts
-npx tenon generate --out src/generated-schema.d.ts --check
+```ts
+await db.generateTypes({ out: 'src/generated-schema.d.ts' });
+await db.generateTypes({ out: 'src/generated-schema.d.ts', check: true });
 ```
 
-The default namespace is `public`; default output is `src/generated-schema.ts`. Commit exact output
-and exclude it from formatting. `--check` never rewrites: missing/stale output fails with a bounded
-diff. This checks file freshness, not query annotations, pending migrations, or every database object.
-Upgrading pgclear can change output without schema drift. Preserve reviewed generator-specific
-references for existing adoption guards; see [baseline verification](adoption-guide.md#check-and-adopt-an-existing-database).
+`out` is required and resolves from the working directory. The default namespace is `public`,
+independent of runtime `search_path`; pass the schema explicitly when it differs. `check` defaults
+to false. Generation creates parent directories and replaces the complete file atomically, cleaning
+up temporary files on failure. With `check: true`, missing/stale output rejects with a bounded diff
+for stale files, without creating directories or rewriting output. Other filesystem errors propagate.
+`onWarning` may be synchronous or asynchronous; it defaults to `console.warn`. Generation rejects
+if warning handling fails and leaves the existing output intact. Calls after `db.close()` reject;
+borrowed pools remain application-owned.
+
+Generation interprets defaults, domains, identities, writable columns, and schema summaries,
+coordinates with the migration advisory lock, and excludes its history table. It needs no migration
+files/history. `generateDefinitions({ connection, namespace?, onWarning? })` remains available for
+callers needing the source string without file handling; supply the application's configured pool
+or connection options to preserve its read representations.
+
+Run generation from an [application-owned script](human-guide.md#generate-types), for example
+`npm run db:generate` and `npm run db:check-types`. The standalone `tenon generate` command has been
+removed because it could not inherit application codecs. Commit exact output and exclude it from
+formatting. Freshness checking does not check query annotations, pending migrations, or every
+database object. Upgrading pgclear can change output without schema drift. Preserve reviewed
+generator-specific references for existing adoption guards; see
+[baseline verification](adoption-guide.md#check-and-adopt-an-existing-database).
 
 The generated module exports `Database[table]['row' | 'insert' | 'update']`. Ordinary tables and
 partitioned roots are included. Views, foreign tables, and attached partitions need authored types.
@@ -343,9 +371,9 @@ Default-registry enum rows use catalog label unions. With a custom registry, a d
 representation stays string because that decoder may transform the labels; an explicit codec
 representation can declare a narrower output type. Enum write inputs retain the database choices.
 
-Programmatic generation uses the registry configured on its connection or supplied pool. The CLI
-uses default codecs. Regenerate committed definitions after a driver mapping change before running
-`generate --check`; custom decoder types that remain unknown need application-owned contracts.
+`db.generateTypes` uses the registry configured on the database instance. Regenerate committed
+definitions after a driver mapping change before running freshness checks with `check: true`;
+custom decoder types that remain unknown need application-owned contracts.
 Catalog queries use default result decoders on the same borrowed session and snapshot, while
 application row types follow that session's configured registry. Custom application codecs therefore
 do not change the generator's own metadata-reading types.
@@ -481,20 +509,20 @@ can discard required fields; see [the cookbook](mutations.md#input-types-and-run
 
 ## Choosing a validation tool
 
-Run these against the intended development/test schema and role. The database tools use the CLI's
-`DATABASE_URL`; TypeScript itself needs no connection.
+Run these against the intended development/test schema and role. CLI tools use `DATABASE_URL`;
+generation uses the configured database instance. TypeScript itself needs no connection.
 
-| Tool                                                     | Question answered                                                                                 | Limits                                                                                                               |
-| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `tsc --noEmit`                                           | Does the application satisfy its TypeScript contracts?                                            | Does not inspect SQL or the live schema.                                                                             |
-| `tenon check [file.ts[:line]]`                           | Does recoverable authored SQL contradict its input/result declarations?                           | Unsupported composition fails as unchecked; inconclusive properties stay unproven. Does not execute application SQL. |
-| `tenon describe query.sql`                               | What parameter/result metadata does PostgreSQL report for this finished SQL?                      | Does not compare source annotations or validate bound values. Does not execute the statement.                        |
-| `tenon generate --out src/generated-schema.d.ts --check` | Does saved generated output match this schema and driver mapping?                                 | Does not check query annotations or replace migration status. Use the project's actual output path.                  |
-| Project database tests                                   | Do representative queries produce the required rows, effects, permissions, and rollback behavior? | Cover exercised inputs and paths; retain cases for runtime-dependent composition and application validation.         |
+| Tool                                     | Question answered                                                                                 | Limits                                                                                                               |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `tsc --noEmit`                           | Does the application satisfy its TypeScript contracts?                                            | Does not inspect SQL or the live schema.                                                                             |
+| `tenon check [file.ts[:line]]`           | Does recoverable authored SQL contradict its input/result declarations?                           | Unsupported composition fails as unchecked; inconclusive properties stay unproven. Does not execute application SQL. |
+| `tenon describe query.sql`               | What parameter/result metadata does PostgreSQL report for this finished SQL?                      | Does not compare source annotations or validate bound values. Does not execute the statement.                        |
+| `db.generateTypes({ out, check: true })` | Does saved generated output match this schema and driver mapping?                                 | Does not check query annotations or replace migration status. Use the project's actual output path.                  |
+| Project database tests                   | Do representative queries produce the required rows, effects, permissions, and rollback behavior? | Cover exercised inputs and paths; retain cases for runtime-dependent composition and application validation.         |
 
 After a schema or driver mapping change, apply migrations to the test database, regenerate and
 review declarations, then run the project's typecheck, applicable source checks, and database tests.
-In CI, `generate --check` detects stale committed output without replacing it.
+In CI, `db.generateTypes({ out, check: true })` detects stale committed output without replacing it.
 
 ## Source-aware checking
 
@@ -535,7 +563,7 @@ Use error codes and structured fields rather than matching message wording. Driv
 | Empty assignments                                 | Every selected patch field was missing/undefined. Skip the update or branch to an expression-only statement when that is intended. Null remains a bound value.                                                                                                                                                                                                                                                       |
 | SQLSTATE `42P18` / `42P08` during inspection      | PostgreSQL cannot establish an unambiguous parameter type. Add the intended SQL cast, or pass `parameterTypes` OID hints to `describeQuery`. Inspection does not bind query values.                                                                                                                                                                                                                                  |
 | Query checker reports `unchecked`                 | SQL structure or an expansion shape could not be recovered, a limit was exceeded, or inspection failed. Follow the diagnostic; optional generated patch fields and dynamic fragment lists can be valid at runtime but remain unchecked. See [responding to findings](query-checking.md#responding-to-findings).                                                                                                      |
-| Missing/stale generated definitions               | Check the namespace, schema, driver version, and output path. Regenerate with the same options without `--check`, review the diff, and commit intended output. Freshness checks never rewrite the file.                                                                                                                                                                                                              |
+| Missing/stale generated definitions               | Check the namespace, schema, driver version, and output path. Regenerate with the same options and `check: false`, review the diff, and commit intended output. Freshness checks never rewrite the file.                                                                                                                                                                                                             |
 
 Inside a transaction, catch a guarded query failure only after its promise rejects; savepoint
 cleanup completes before rejection. An unguarded server SQL error normally leaves the transaction
@@ -547,15 +575,14 @@ see [transactions and errors](#transactions-guarded-writes-and-errors) before ad
 
 Database commands require `DATABASE_URL`. `new` and `--help` work offline. No environment files are
 loaded. Paths are relative to the working directory. Explicit flags unsupported by a command are
-rejected. The generate --check flag checks file freshness; the check command checks authored SQL.
-Neither is a migration dry run.
+rejected. The check command checks authored SQL; generated-file freshness is checked through
+`db.generateTypes({ out, check: true })`. Neither is a migration dry run.
 
 ```text
 tenon new <name> [--directory migrations]
 tenon migrate [--directory migrations] [--namespace public]
 tenon status [--directory migrations] [--namespace public]
 tenon rollback [--directory migrations] [--namespace public] [--steps 1]
-tenon generate [--namespace public] [--out src/generated-schema.ts] [--check]
 tenon check [file.ts[:line]] [--project tsconfig.json] [--json]
   [--role name] [--search-path value] [--time-zone value]
   [--connect-timeout-ms 3000] [--statement-timeout-ms 5000] [--lock-timeout-ms 1000]

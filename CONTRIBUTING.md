@@ -61,11 +61,24 @@ To regenerate the committed fixture, first ensure `tenon_fixture` is an unused s
 npm run build
 export DATABASE_URL=postgresql://postgres:postgres@localhost:5432/tenon_orm_test
 node dist/cli.js migrate --directory test/fixtures/migrations --namespace tenon_fixture
-node dist/cli.js generate --namespace tenon_fixture --out test/fixtures/generated-schema.ts
+node --input-type=module <<'JS'
+import { createTenon } from './dist/index.js';
+
+const db = createTenon({ connection: process.env.DATABASE_URL });
+try {
+  await db.generateTypes({
+    namespace: 'tenon_fixture',
+    out: 'test/fixtures/generated-schema.ts',
+  });
+} finally {
+  await db.close();
+}
+JS
 ```
 
-Remove the scratch namespace afterward. Replay changed fixture migrations into a fresh namespace; do
-not edit an application's applied history.
+Generation uses the instance's configured pool and codecs. Set `check: true` to verify the fixture
+without rewriting it. Remove the scratch namespace afterward. Replay changed fixture migrations into
+a fresh namespace; do not edit an application's applied history.
 
 ## Source layout
 
@@ -78,7 +91,8 @@ checking. Use the public driver API and the 0.3.x runtime dependency; follow
 [CONSIDERATIONS.md](CONSIDERATIONS.md) when changing that boundary.
 
 Generation, migrations, and inspection separate catalog/SQL work from file output and CLI handling.
-The CLI dispatches these operations. Source checking lives in src/check/: project context and
+Generation is exposed through `db.generateTypes`; the CLI dispatches migrations, inspection, and
+source checking. Source checking lives in src/check/: project context and
 symbol resolution, bounded composition recovery, contract comparison, and structured reports.
 TypeScript is a runtime tooling dependency, loaded only through the check command or check subpath.
 `dist/` and `.test-dist/` are disposable; build removes both before compiling, and `npm run clean`

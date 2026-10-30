@@ -59,12 +59,41 @@ CREATE TABLE public.users (
 DROP TABLE public.users;
 ```
 
-For development, add a script to `package.json` that applies migrations and updates generated types:
+## Generate types
+
+Generate through the configured database instance so declarations match runtime codecs, including
+Date, bigint, or Temporal outputs. Create an application-owned script:
+
+```ts
+// scripts/generate-types.ts (run directly with Node.js 24+)
+import { parseArgs } from 'node:util';
+import { db } from '../src/db.ts';
+
+const { values } = parseArgs({ options: { check: { type: 'boolean', default: false } } });
+try {
+  await db.generateTypes({
+    out: 'src/generated-schema.d.ts',
+    check: values.check,
+  });
+} finally {
+  await db.close();
+}
+```
+
+Reuse the application's database configuration. To generate against a test database, supply its
+connection URL through the same configuration or database factory, retaining the runtime codecs.
+Keep the configuration module independent of generated runtime imports and application startup.
+The namespace defaults to `public`; pass `namespace` to `db.generateTypes` for a different schema.
+Generation runs outside callback transactions, after migrations have committed.
+
+For development, add scripts to `package.json`:
 
 ```json
 {
   "scripts": {
-    "db:migrate": "tenon migrate && tenon generate --out src/generated-schema.d.ts"
+    "db:generate": "node scripts/generate-types.ts",
+    "db:check-types": "npm run db:generate -- --check",
+    "db:migrate": "tenon migrate && npm run db:generate"
   }
 }
 ```
@@ -72,6 +101,16 @@ For development, add a script to `package.json` that applies migrations and upda
 ```sh
 npm run db:migrate
 ```
+
+In CI, apply migrations to the test database and check the committed declarations:
+
+```sh
+npx tenon migrate
+npm run db:check-types
+```
+
+Use the same database and namespace for migration and generation. The development `db:migrate`
+script above regenerates output; running it before a freshness check would hide stale declarations.
 
 Commit migrations and generated types together. In production, run only `npx tenon migrate`; deploy
 the already-built application. If you do not use generated table types, omit generation from the
@@ -201,7 +240,7 @@ Use `Pick` to limit editable fields. Keep expressions, predicates, conflict hand
 
 The three database tools answer different questions: `tenon check` compares authored queries with
 their TypeScript contracts, `tenon describe` reports metadata for finished SQL, and
-`tenon generate --check` checks whether saved database declarations are current. See
+`npm run db:check-types` checks whether saved database declarations are current. See
 [validation tools](reference.md#choosing-a-validation-tool) for their limits.
 
 After migrating a development/test database, run the optional source-aware checker:

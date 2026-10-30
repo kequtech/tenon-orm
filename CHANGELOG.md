@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.1
+
+- Add `db.generateTypes({ out, namespace?, check?, onWarning? })`, using the instance's configured codecs.
+- Remove `tenon generate`; run generation and freshness checks from an application script.
+
 ## 0.4.0
 
 ### Breaking changes

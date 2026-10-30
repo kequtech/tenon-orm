@@ -185,6 +185,15 @@ test('the packed package preserves API contracts and consumes generated .d.ts sc
         const reverse = second.sql.join([sql.fragment\`TRUE\`], 'AND');
         const types: [Assert<Equal<typeof a, { id: number }>>, Assert<Equal<typeof b, { id: number }>>,
           Assert<Equal<typeof c, readonly { id: number }[]>>, Assert<Equal<typeof d, { id: number } | undefined>>] = [true, true, true, true];
+        const generation: Promise<void> = db.generateTypes({ out: 'schema.d.ts', check: true });
+        // @ts-expect-error generation needs an explicit output path
+        await db.generateTypes({ check: true });
+        // @ts-expect-error generation always uses the database instance's codecs
+        await db.generateTypes({ out: 'schema.d.ts', codecs: second.defaultCodecs });
+        await db.transaction(async (tx) => {
+          // @ts-expect-error generation belongs to the database, not a callback transaction
+          await tx.generateTypes({ out: 'schema.d.ts' });
+        });
         // @ts-expect-error crossing package copies preserves the input contract
         await fromSecond(db, { id: 'wrong' });
       }
@@ -228,11 +237,26 @@ test('the packed package preserves API contracts and consumes generated .d.ts sc
         );
         const generateUser = () =>
           run(
-            cli,
-            ['generate', '--namespace', options.namespace, '--out', 'generated-user.d.ts'],
+            process.execPath,
+            [
+              '--input-type=module',
+              '-e',
+              `
+              import { createTenon } from '@kequtech/tenon-orm';
+              const db = createTenon({ connection: process.env.DATABASE_URL });
+              try {
+                await db.generateTypes({ namespace: ${JSON.stringify(options.namespace)}, out: 'generated-user.d.ts' });
+                await db.generateTypes({ namespace: ${JSON.stringify(options.namespace)}, out: 'generated-user.d.ts', check: true });
+              } finally {
+                await db.close();
+              }
+            `,
+            ],
             commandOptions,
           );
-        await generateUser();
+        const generated = await generateUser();
+        assert.equal(generated.stdout, '');
+        assert.equal(generated.stderr, '');
         await access(join(consumer, 'generated-user.d.ts'));
         await assert.rejects(access(join(consumer, 'generated-user.js')), { code: 'ENOENT' });
         await writeFile(

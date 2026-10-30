@@ -197,4 +197,4 @@ import configuration or an application entry point automatically.
 pgclear owns execution, Describe, value conversion, and codec representation metadata. Tenon owns
 schema queries and declaration rendering as well as source discovery, composition recovery,
 TypeScript comparison, diagnostics, and file output.
-`tenon generate --check` remains a separate generated-file freshness check.
+`db.generateTypes({ out, check: true })` remains a separate generated-file freshness check.

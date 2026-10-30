@@ -1,11 +1,8 @@
 import assert from 'node:assert/strict';
-import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { cp, readFile, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { after, before, test } from 'node:test';
-import { fileURLToPath } from 'node:url';
-import { promisify } from 'node:util';
 import { createPool, type Pool } from '@kequtech/pgclear';
 import {
   createTenon,
@@ -28,8 +25,6 @@ const pool = createPool({ connectionString: connection });
 const project = migrationProject(pool);
 before(() => assertTestDatabase(pool));
 after(() => pool.close());
-const run = promisify(execFile);
-const cli = fileURLToPath(new URL('../src/cli.js', import.meta.url));
 
 test('fresh migration replay generates the exact committed definitions independently of namespace', async () => {
   await project({}, async (options) => {
@@ -443,11 +438,12 @@ test('foreign tables use authored types without affecting ordinary table generat
           source,
         );
         assert.deepEqual(warnings, []);
-        await run(
-          process.execPath,
-          [cli, 'generate', '--namespace', options.namespace, '--out', output, '--check'],
-          { env: { ...process.env, DATABASE_URL: connection } },
-        );
+        const db = createTenon({ connection: pool });
+        try {
+          await db.generateTypes({ namespace: options.namespace, out: output, check: true });
+        } finally {
+          await db.close();
+        }
         assert.equal(await readFile(output, 'utf8'), source);
         await checkGeneratedTypes(
           options,

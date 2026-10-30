@@ -43,6 +43,9 @@ Tenon owns schema catalog queries, defaults/domain/identity interpretation, sche
 `Database[table]['row' | 'insert' | 'update']` rendering. It obtains conversion representations from
 pgclear rather than maintaining a second decoder registry. Tenon also owns the migration advisory
 lock, history-table exclusion, generated-file policy, atomic output, and freshness checks.
+`db.generateTypes({ out, namespace?, check?, onWarning? })` uses the database instance's existing
+pool and codec registry. Application-owned scripts run generation and freshness checks; there is no
+standalone generation command. `generateDefinitions` remains available for source-string callers.
 
 Generation reads catalogs in a repeatable-read snapshot on its borrowed session. Public driver
 registry access and per-operation result-codec selection keep metadata decoding on default codecs
@@ -51,14 +54,19 @@ avoids opening another connection merely to bypass custom codecs. Pgclear does n
 application imports or render database declarations. See [query checking](docs/query-checking.md)
 for the source-aware checker and its coverage limits.
 
+Per-operation decoder selection is internal to catalog queries. Application queries keep the
+database-wide registry, including within callback transactions; Tenon's query options do not expose
+codec overrides.
+
 ## Upgrade validation
 
 Review the installed driver's release notes, configuration, and representation changes. Retain
 runtime, Describe, generated-type, Unicode, transaction recovery, shutdown, and packed-consumer
 regressions. Run `npm run check`, inspect the packed artifact, and verify PostgreSQL 16/18 CI.
 Generated-file freshness can change after a driver or generator update without schema drift.
-Applications using custom codecs must pass the same registry to generation/inspection and provide
-declarations for application types referenced by codec metadata.
+Generation inherits custom codecs from the database instance. Pass that same registry explicitly
+to inspection and source checking, and provide declarations for application types referenced by
+codec metadata.
 
 Default int8 values and SQL aggregates such as count(*) use exact strings; command counts use safe
 integer numbers. Plain bigint, Date, and supported native/polyfilled Temporal inputs encode as text

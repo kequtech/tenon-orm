@@ -154,10 +154,10 @@ npx tenon describe query.sql --search-path app,public --time-zone UTC
 
 The CLI uses `DATABASE_URL` and prints JSON. Session flags are `--role`, `--search-path`, and
 `--time-zone`. Timeout flags are `--connect-timeout-ms`, `--statement-timeout-ms`, and
-`--lock-timeout-ms`. Migration/generation flags such as `--namespace` and `--check` are rejected.
+`--lock-timeout-ms`. Unrelated flags such as `--namespace` and the removed `--check` flag are rejected.
 
 Exit 0 means description succeeded, including reports with unresolved findings. Exit 1 means input,
 connection, timeout, or PostgreSQL analysis failed. The inspected statement is never executed.
 
 See [source-aware checking](query-checking.md) for the separate TypeScript/SQL contract
-checking command. `tenon generate --check` only checks generated-file freshness.
+checking command. `db.generateTypes({ out, check: true })` only checks generated-file freshness.

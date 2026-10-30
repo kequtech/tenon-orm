@@ -154,7 +154,7 @@ not establish that the outer transaction committed.
 ## Inspect and validate
 
 Choose the tool for the task: `tenon check` compares source contracts, `tenon describe` reports
-finished SQL metadata, and `tenon generate --check` checks generated-file freshness. None replaces
+finished SQL metadata, and `db.generateTypes({ out, check: true })` checks generated-file freshness. None replaces
 TypeScript or database tests. See [validation tools](reference.md#choosing-a-validation-tool).
 
 Run tenon check on the TypeScript project, a file, or file:line. It recovers authored SQL and types
@@ -180,16 +180,18 @@ prove bound values, JSON members, nullability, cardinality or runtime execution 
 
 ## Schema changes
 
-With Tenon's runner, development can use
-`tenon migrate && tenon generate --out src/generated-schema.d.ts`. Commit migrations and exact
-generated output together; exclude the generated file from automatic formatting. Production runs
-migrations and deploys committed types. `generate --check` detects representation drift, not pending
-migrations or every schema change.
+With Tenon's runner, development can use `tenon migrate && npm run db:generate`. Define the
+application-owned generation script with `db.generateTypes({ out: 'src/generated-schema.d.ts' })`
+on the configured database instance so runtime codecs determine read types. See the
+[generation script example](human-guide.md#generate-types). Use `check: true` for CI freshness
+checks. Commit migrations and exact generated output together; exclude the generated file from
+automatic formatting. Production runs migrations and deploys committed types. Freshness checks
+detect representation drift, not pending migrations or every schema change.
 
 All database CLI commands require `DATABASE_URL`. `tenon new <name>` creates empty up/down files
 offline; fill them before migrating. Migration commands use `--directory migrations` and
-`--namespace public` by default; generation also accepts `--namespace`. Pass a custom namespace to
-both migration and generation. Omit the down file for an irreversible migration; never edit applied
+`--namespace public` by default. Pass a custom namespace to both migration and
+`db.generateTypes({ out, namespace })` when applicable. Omit the down file for an irreversible migration; never edit applied
 history. Each file commits independently with its history entry. Tools use session advisory locks,
 so use a direct or session-pooled connection. Nontransactional DDL needs a separate procedure. See
 the [command reference](reference.md#command-reference).

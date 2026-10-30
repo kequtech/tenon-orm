@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.4.4
+
+- Pass the shared `TenonConfig` directly to `createTenon`, including its connection, codecs, and
+  `onQuery` observer. `TenonConfig` replaces the `TenonOptions` type.
+- Defer pool creation and connection validation until the first query, transaction, or native-pool
+  access. Importing configuration and closing an unused instance need no credentials. Generated
+  configs use plain environment reads; remove eager credential checks from existing configs.
+- Support named config exports for multiple databases and CLI selection with `--database`. A sole
+  config is selected automatically; ambiguous or unknown names fail without fallback. `tenon init`
+  generates a named `main` export, and existing default exports remain supported.
+- Allow migration-file creation without database credentials while retaining each selected config's
+  migration, generation, and checking settings.
+
 ## 0.4.3
 
 - Add shared runtime/CLI configuration and offline `tenon init`. Restore `tenon generate`, share migration defaults, and require config for generation/checking/inspection.

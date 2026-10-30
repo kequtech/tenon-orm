@@ -3,7 +3,7 @@ import { access, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { captureBaseline, createTenon, type TenonOptions } from '../src/index.js';
+import { captureBaseline, createTenon, sql, type Connection } from '../src/index.js';
 import { withMigrationLock } from '../src/migrations/connection.js';
 import { mockDriver, result } from './helpers/driver.js';
 
@@ -29,8 +29,10 @@ test('baseline capture rejects implicit connections and empty schema selections 
 
 test('runtime and tools reject invalid connections before acquisition', async () => {
   for (const value of [undefined, null, '', ' ', 42, false, [], new Date()]) {
-    const connection = value as TenonOptions['connection'];
-    assert.throws(() => createTenon({ connection }));
+    const connection = value as Connection;
+    const db = createTenon({ connection });
+    await assert.rejects(db.query(sql`SELECT 1`));
+    await db.close();
     await assert.rejects(withMigrationLock({ connection }, 'shared', async () => {}));
   }
   await createTenon({ connection: {} }).close();

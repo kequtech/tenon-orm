@@ -1,6 +1,7 @@
 import { plainObject } from '../validation.js';
 import type { DescribeOptions, InspectionSession, InspectionTimeouts } from './types.js';
 import type { ConnectionOptions } from '../connection.js';
+import { configConnection } from '../config/connection.js';
 
 const defaults = { connectMs: 3000, statementMs: 5000, lockMs: 1000 };
 
@@ -36,18 +37,9 @@ export function timeoutOptions(value: unknown): InspectionTimeouts {
 export function inspectionOptions(
   options: Pick<DescribeOptions, 'connection' | 'session' | 'timeouts'>,
 ) {
-  let connection: ConnectionOptions;
-  if (typeof options.connection === 'string') {
-    if (!options.connection.trim())
-      throw new Error('Describe requires an explicit nonempty connection string.');
-    connection = { connectionString: options.connection };
-  } else {
-    plainObject(options.connection, 'Inspection connection');
-    if ('acquire' in options.connection || 'close' in options.connection) {
-      throw new Error('Inspection requires connection options, not an open pool.');
-    }
-    connection = { ...options.connection };
-  }
+  const selected = configConnection(options.connection);
+  let connection: ConnectionOptions =
+    typeof selected === 'string' ? { connectionString: selected } : { ...selected };
   if (connection.startupParameters !== undefined) {
     plainObject(connection.startupParameters, 'Startup parameters');
   }

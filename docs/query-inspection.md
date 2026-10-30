@@ -9,9 +9,9 @@ compare TypeScript source annotations instead, use [query checking](query-checki
 ```ts
 // scripts/inspect-query.ts
 import { describeQuery, sql } from '@kequtech/tenon-orm';
-import config from '../tenon.config.ts';
+import { main } from '../tenon.config.ts';
 
-const connection = config.connection;
+const connection = main.connection;
 
 const query = sql<{ id: number; total: string }>`
   SELECT ${42}::integer AS id, count(*) AS total FROM pg_catalog.pg_class

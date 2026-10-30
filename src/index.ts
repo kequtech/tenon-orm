@@ -12,7 +12,6 @@ export type {
 export type { Connection, ConnectionConfig, ConnectionOptions, QueryResult } from './connection.js';
 export type { AffectedRowsConstraint } from './affected-rows.js';
 export { createTenon } from './database.js';
-export type { TenonOptions } from './database.js';
 export type { TenonConfig } from './config.js';
 export { AffectedRowsError, CardinalityError } from './errors.js';
 export type { QueryOptions, QueryOutput, QueryReturnMode } from './query-options.js';

@@ -10,12 +10,19 @@ Requires Node.js 24+, PostgreSQL 16+, and ESM. TypeScript consumers need TypeScr
 development typings. Install `@kequtech/tenon-orm`; pgclear is included as a runtime dependency.
 
 ```text
-createTenon({ connection, onQuery? }): Database
+createTenon(config: TenonConfig): Database
 ```
 
-`connection` is required: a PostgreSQL URI string, pgclear `PoolOptions`, or an existing pgclear
-`Pool`. `Connection` names this union; `ConnectionOptions` aliases `PoolOptions`. A supplied pool
-retains application ownership. Unknown Tenon or driver configuration options reject.
+Pass one database config directly. Its `connection` holds a PostgreSQL URI, pgclear pool-option
+values, or an application-owned pool. Its optional `onQuery` callback observes runtime queries.
+`ConnectionOptions` aliases pgclear `PoolOptions`; a supplied pool retains application ownership.
+Unknown config keys reject. Connection validation and pool creation wait until the first query,
+transaction, or native-pool access. Closing an unused instance needs no credentials.
+
+`tenon init` generates a named `main` config with plain environment reads and no eager credential
+check. Import it and call `createTenon(main)`. Runtime does not discover files. For multiple databases,
+export one config per database and select the matching export in the CLI with `--database`.
+See [shared configuration](configuration.md) for the complete setup.
 
 The returned `Database` provides:
 
@@ -280,21 +287,23 @@ prepared statements, and dedicated notification listeners.
 
 ## Troubleshooting
 
-| Symptom                                      | Response                                                                                                                                                     |
-| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Missing shared configuration                 | Run `tenon init` or select an existing config with `--config`. Generation, checking, and inspection require it.                                              |
-| `DATABASE_URL is required`                   | Supply the variable for migration commands without config, or from your shared config module. No `.env` files are loaded automatically.                      |
-| `PGCLEAR_ENCODE`                             | Check inputs: objects/arrays need `json`/`param`; direct undefined, unsafe integers, nonfinite numbers, and invalid Dates reject. JSON still rejects bigint. |
-| `CardinalityError`                           | Check the expected row count and predicate. To choose one of several rows, author deterministic `ORDER BY ... LIMIT 1`.                                      |
-| `TENON_AFFECTED_ROWS_MISMATCH`               | The guarded operation rolled back. Inspect `actual` and the predicate; retain the intended bound.                                                            |
-| `TENON_AFFECTED_ROWS_UNSUPPORTED`            | The final command lacks a supported write count. Use guards on INSERT/UPDATE/DELETE/MERGE; result modes check returned rows.                                 |
-| Empty assignments                            | All selected fields were missing/undefined. Skip the update or branch to an expression-only statement.                                                       |
-| Duplicate result columns                     | Alias columns uniquely, especially in joins. The driver rejects duplicate object keys.                                                                       |
-| SQLSTATE `42P18` / `42P08` during inspection | Add the intended parameter cast or Describe OID hints. Inspection binds no values.                                                                           |
-| Checker reports `unchecked`                  | Follow the diagnostic. Runtime fragments and optional patches can execute correctly yet remain unsupported by source recovery.                               |
-| Missing/stale generated output               | Check schema, namespace, registry, driver version, and path. Regenerate, review, and commit intended output.                                                 |
-| Migration history conflict                   | Restore original applied files. Add new changes in a forward migration. Checksums include down SQL too.                                                      |
-| Tooling lock wait                            | Check concurrent migration/DDL work, use direct or session pooling, and configure server timeouts.                                                           |
+| Symptom                                       | Response                                                                                                                                                     |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Missing shared configuration                  | Run `tenon init` or select an existing config with `--config`. Generation, checking, and inspection require it.                                              |
+| Multiple databases or unknown database export | Select a named config with `--database name`. Use `--config path` when it belongs to another file.                                                           |
+| Missing or empty config connection            | Set the environment variable read by that database's config before using it. Imports alone need no credentials.                                              |
+| `DATABASE_URL is required`                    | Supply the variable for migration commands without config. Tenon does not load `.env` files.                                                                 |
+| `PGCLEAR_ENCODE`                              | Check inputs: objects/arrays need `json`/`param`; direct undefined, unsafe integers, nonfinite numbers, and invalid Dates reject. JSON still rejects bigint. |
+| `CardinalityError`                            | Check the expected row count and predicate. To choose one of several rows, author deterministic `ORDER BY ... LIMIT 1`.                                      |
+| `TENON_AFFECTED_ROWS_MISMATCH`                | The guarded operation rolled back. Inspect `actual` and the predicate; retain the intended bound.                                                            |
+| `TENON_AFFECTED_ROWS_UNSUPPORTED`             | The final command lacks a supported write count. Use guards on INSERT/UPDATE/DELETE/MERGE; result modes check returned rows.                                 |
+| Empty assignments                             | All selected fields were missing/undefined. Skip the update or branch to an expression-only statement.                                                       |
+| Duplicate result columns                      | Alias columns uniquely, especially in joins. The driver rejects duplicate object keys.                                                                       |
+| SQLSTATE `42P18` / `42P08` during inspection  | Add the intended parameter cast or Describe OID hints. Inspection binds no values.                                                                           |
+| Checker reports `unchecked`                   | Follow the diagnostic. Runtime fragments and optional patches can execute correctly yet remain unsupported by source recovery.                               |
+| Missing/stale generated output                | Check schema, namespace, registry, driver version, and path. Regenerate, review, and commit intended output.                                                 |
+| Migration history conflict                    | Restore original applied files. Add new changes in a forward migration. Checksums include down SQL too.                                                      |
+| Tooling lock wait                             | Check concurrent migration/DDL work, use direct or session pooling, and configure server timeouts.                                                           |
 
 After a guarded query rejects, savepoint cleanup has finished. An unguarded server error normally
 aborts a transaction. A timeout or lost connection does not itself establish whether a commit
@@ -302,12 +311,14 @@ happened; review the transaction contract before adding retries.
 
 ## Command reference
 
-All commands accept `--config path`. `generate`, `check`, and `describe` require
+All commands accept `--config path`. Commands using a database config also accept `--database name`
+to select its export. A file with one config is selected automatically; multiple configs require an
+explicit selection. `generate`, `check`, and `describe` require
 [shared configuration](configuration.md) and use its connection/codecs. Migration and baseline
 commands use config when present and fall back to `DATABASE_URL` only when no config is found.
 `init` creates config without importing application code; `new` uses the configured migration
-directory without opening a database; `--help` loads no config.
-Config modules may read environment variables, but Tenon loads no `.env` files automatically.
+directory without opening a database; `--help` loads no config. Config modules may read environment variables, but Tenon loads no `.env`
+files automatically.
 Configured paths resolve from the config file; CLI path flags resolve from the working directory.
 Unsupported command flags reject.
 

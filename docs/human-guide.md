@@ -34,10 +34,8 @@ The command writes `tenon.config.ts` without opening a database or overwriting e
 // tenon.config.ts
 import type { TenonConfig } from '@kequtech/tenon-orm';
 
-const connectionString = process.env.DATABASE_URL;
-if (!connectionString) throw new Error('DATABASE_URL is required');
-export default {
-  connection: { connectionString },
+export const main = {
+  connection: { connectionString: process.env.DATABASE_URL },
   migrations: { directory: 'migrations', namespace: 'public' },
   generate: { out: 'src/generated-schema.d.ts' },
   check: { project: 'tsconfig.json' },
@@ -49,13 +47,19 @@ Use it in the application too:
 ```ts
 // src/db.ts
 import { createTenon } from '@kequtech/tenon-orm';
-import config from '../tenon.config.ts';
+import { main } from '../tenon.config.ts';
 
-export const db = createTenon({ connection: config.connection });
+export const db = createTenon(main);
 ```
 
 These `.ts` imports use Node.js 24+ TypeScript support. See
 [shared configuration](configuration.md) for import conventions, custom codecs, discovery, and overrides.
+
+Importing the config and constructing `db` need no database credentials. The first query or transaction
+validates the connection and initializes its pool; `db.native` access also initializes it. Keep
+database operations out of module imports that run during builds. For another database, add a named
+config export in the same file, pass it to `createTenon`, and select that export in CLI commands with
+`--database`.
 
 Reuse `db` across requests. Call `await db.close()` when a standalone script finishes or a server
 shuts down. See [connections](connections.md) for pool options and application-owned pools.

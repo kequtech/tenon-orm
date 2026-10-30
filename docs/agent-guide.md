@@ -104,9 +104,8 @@ establishes that contract; do not cast merely to silence a diagnostic. See
 [responding to findings](query-checking.md#responding-to-findings).
 
 Share runtime connection/codecs through `tenon.config.ts`; CLI generation, checking, inspection,
-and migrations read it. Use `--config` for another role/deployment. Match runtime role, search path,
-timezone, and codecs. Describe uses a separate session and
-cannot establish result nullability, JSON members, cardinality, or execution permissions. Native
+and migrations read it. Select a named export with `--database`, or another file with `--config`.
+Match runtime role, search path, timezone, and codecs. Describe uses a separate session and cannot establish result nullability, JSON members, cardinality, or execution permissions. Native
 calls bypass Tenon's guards/observations and need explicit resource ownership; see
 [connections and driver access](connections.md). For common failures, use
 [troubleshooting](reference.md#troubleshooting).

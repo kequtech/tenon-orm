@@ -29,7 +29,7 @@ export interface InspectionContext {
 
 export interface DescribeOptions {
   /** URI or pool configuration values. Inspection owns a separate, short-lived connection. */
-  readonly connection: ConnectionConfig;
+  readonly connection: ConnectionConfig | undefined;
   /** Finished SQL; query values are neither bound nor executed. */
   readonly query: string | DescribeStatement;
   /** Use the same registry as execution; custom decoder types can remain unresolved. */

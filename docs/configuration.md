@@ -1,55 +1,119 @@
 # Shared runtime and CLI configuration
 
-Keep connection settings and codec choices in one module used by the application and Tenon's CLI.
-From the project root, create the configuration file:
+A `TenonConfig` describes one database: its connection, codecs, runtime query observer, and CLI
+defaults. The application and CLI use the same object, so generated types and query checks follow
+the representations returned at runtime.
+
+Create the configuration from the project root:
 
 ```sh
 npx tenon init
 ```
 
-Initialization opens no database connection, imports no application code, and never overwrites a
-file. Without `--config`, it refuses when a config is already discoverable in this directory or a
-parent. Use `tenon init --config path.mjs` for an explicit additional destination or JavaScript output. The generated TypeScript config looks like this:
+The command writes `tenon.config.ts` with a named `main` export:
 
 ```ts
 import type { TenonConfig } from '@kequtech/tenon-orm';
 
-const connectionString = process.env.DATABASE_URL;
-if (!connectionString) throw new Error('DATABASE_URL is required');
-
-export default {
-  connection: {
-    connectionString,
-  },
+export const main = {
+  connection: { connectionString: process.env.DATABASE_URL },
   migrations: { directory: 'migrations', namespace: 'public' },
   generate: { out: 'src/generated-schema.d.ts' },
   check: { project: 'tsconfig.json' },
 } satisfies TenonConfig;
 ```
 
-Add the application's registry as `connection.codecs` when choosing custom representations.
+Add `connection.codecs` when choosing custom representations. Initialization needs no credentials,
+imports no application code, and never overwrites a file. It refuses to create a default config when
+one is already discoverable in the current directory or a parent. Use `--config path.mjs` for an
+explicit destination or JavaScript output.
 
-`TenonConfig` and `ConnectionConfig` are exported TypeScript types; configuration is a plain
-default-exported object. Use that connection when constructing the application instance:
+Import the config into the application and pass it directly to `createTenon`:
 
 ```ts
 // src/db.ts
 import { createTenon } from '@kequtech/tenon-orm';
-import config from '../tenon.config.ts';
+import { main } from '../tenon.config.ts';
 
-export const db = createTenon({ connection: config.connection });
+export const db = createTenon(main);
 ```
 
-The `.ts` imports above run directly with Node.js 24+ TypeScript support. For typechecking with
-`noEmit`, enable `allowImportingTsExtensions`; emitting projects can use
-`rewriteRelativeImportExtensions`. Config and its runtime imports must be runnable by Node without
-bundler aliases or transformations. ESM JavaScript is also supported.
+## Initialization and imports
 
-Export configuration values, not an open pool, database instance, or factory. Importing the config
-must not start the server, open listeners, or depend on generated runtime files. Tenon opens and
-closes its own tooling resources. `createTenon` still accepts application-owned pools separately.
+Constructing `db` checks the config's shape without validating credentials or creating a pool. The
+first query or transaction initializes one pool, which subsequent and concurrent calls reuse.
+Accessing `db.native` also initializes the pool and validates its settings; the driver connects when
+an operation needs a session. Closing an unused instance creates no pool and needs no credentials.
+
+Read environment values in the config without a top-level credential check. This lets builds import
+application modules without database access. An undefined or empty `connection`, or an explicitly
+undefined or empty `connectionString`, fails when the database is used and never selects the driver's
+localhost defaults. Environment values are captured when the module is imported, so supply runtime
+variables before starting the application. Queries performed during a build still need credentials.
+
+The `.ts` imports above run with Node.js 24+ TypeScript support. For typechecking with `noEmit`, enable
+`allowImportingTsExtensions`; emitting projects can use `rewriteRelativeImportExtensions`. Config
+files and their imports must run in Node without bundler aliases or transformations. ESM JavaScript
+is also supported.
+
+Keep config files free of resource initialization: export connection values and codecs, and let Tenon
+open and close its tooling resources. The application reuses its database instance and closes it at
+shutdown. Programmatic configs can also borrow an existing pool; see [pool ownership](connections.md#use-an-application-owned-pool).
+
+## Multiple databases
+
+Export one config per database from the same file. For example, add `analytics` beside `main` in
+`tenon.config.ts`:
+
+```ts
+export const analytics = {
+  connection: { connectionString: process.env.ANALYTICS_DATABASE_URL },
+  migrations: { directory: 'analytics/migrations', namespace: 'public' },
+  generate: { out: 'src/analytics-schema.d.ts' },
+  check: { project: 'tsconfig.json' },
+} satisfies TenonConfig;
+```
+
+Each export has its own connection settings and codecs. Use the same `connection.codecs` value when
+databases share a registry, and give each database its own migrations and generated output.
+Application code selects the export through an ordinary import:
+
+```ts
+import { createTenon } from '@kequtech/tenon-orm';
+import { main, analytics } from '../tenon.config.ts';
+
+export const db = createTenon(main);
+export const analyticsDb = createTenon(analytics);
+```
+
+The CLI selects the corresponding export with `--database`:
+
+```sh
+npx tenon migrate --database main
+npx tenon migrate --database analytics
+npx tenon generate --database analytics
+npx tenon check src/analytics/queries.ts --database analytics
+npx tenon new add_events --database analytics
+```
+
+A file with one config is selected automatically. Multiple database exports require `--database`;
+an unknown name fails without selecting another connection. Named objects with a `connection` field
+are database configs, while other helper exports are ignored. Existing default exports remain
+supported and can be selected explicitly as `--database default`.
+
+Only the selected config's settings are validated, although importing the file evaluates the whole
+module. Keep credentials as plain environment reads so one database does not require another's
+credentials. Runtime selection uses the imported object and does not depend on the working directory.
+Close each instance separately. For databases with different schemas, use separate checker projects
+or select the relevant query file when running `tenon check`.
+
+`--config` selects a file and `--database` selects an export within it. For example,
+`tenon init --config config/tenon.production.ts` creates another file, and
+`tenon migrate --config config/tenon.production.ts --database main` selects its `main` export.
 
 ## Run commands
+
+With the single config generated by `tenon init`:
 
 ```sh
 npx tenon new create_users
@@ -61,86 +125,87 @@ npx tenon check src/users.ts:23 --json
 npx tenon describe query.sql
 ```
 
-`generate`, `check`, and `describe` require configuration. They use its connection and codec registry
-and never fall back to `DATABASE_URL` merely because a config is missing or invalid. Your config
-chooses which environment variables to read; Tenon does not load `.env` files automatically.
+Generation, checking, and inspection require configuration and use its connection and codecs. A
+missing or invalid config fails instead of falling back to `DATABASE_URL`. The config chooses which
+environment variables to read; Tenon does not load `.env` files.
 
-`new`, migration/status/rollback, and baseline commands also discover configuration. Without a
-config, they retain the existing migration-directory defaults and `DATABASE_URL` connection
-workflow. `init`, `new`, and `--help` open no database connection. Config imports may still require environment
-values, according to the module you wrote. Invalid session/timeout settings are rejected when config
-loads, even for commands that do not inspect queries. Migration SQL and history reads use default decoding;
-application codec overrides do not change migration bookkeeping.
+Migration creation, migration/status/rollback, and baseline commands also discover configuration.
+Without a config or an explicit `--database`, they retain the migration-directory defaults and
+`DATABASE_URL` workflow. `init`, `new`, and `--help` need no database credentials. `new` reads migration
+settings without validating the connection; `--help` loads no config. Any eager checks in your own
+config module still run when that module is imported.
+
+The CLI validates the selected config's tooling sections when loading it, including session and
+timeout settings for commands that do not inspect queries. Migration SQL and history reads use
+default decoding, independently of application codec overrides.
 
 ## Discovery, paths, and overrides
 
-Tenon searches the working directory and then parents for the nearest directory containing
-`tenon.config.ts`, `.mts`, `.js`, or `.mjs`. Multiple recognized files in that directory are an error.
-Select one explicitly when needed:
+Tenon searches the working directory and then its parents for the nearest directory containing
+`tenon.config.ts`, `.mts`, `.js`, or `.mjs`. Multiple recognized files in that directory require an
+explicit selection:
 
 ```sh
 npx tenon generate --config config/tenon.production.mts --check
 ```
 
-`--config` resolves from the working directory. An explicit missing file or an import failure is an
-error; Tenon never switches to another configuration after that failure.
+`--config` resolves from the working directory. A missing file, missing database export, or import
+failure is an error; Tenon does not switch to another configuration after a failure.
 
-Paths stored in config resolve from the config file's directory. Configured migration directories,
-generation output, and checker projects therefore work when a command runs from a nested directory.
-An omitted migration directory means `migrations` beside the config; an omitted checker project
-means `tsconfig.json` beside it. Relative CLI path arguments and flags resolve from the working
-directory. CLI flags override the corresponding configured values.
+Configured paths resolve from the config file's directory. An omitted migration directory means
+`migrations` beside the config, and an omitted checker project means `tsconfig.json` beside it. CLI
+path flags resolve from the working directory and override the corresponding configured values.
 
 ## Configuration fields
 
-| Field                  | Purpose                                                                                                                                                     |
-| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `connection`           | Required PostgreSQL URI or pgclear pool-option values, including TLS, password callbacks, startup parameters, and codecs. Open pools are rejected.          |
-| `migrations.directory` | Migration files; defaults to `migrations` relative to config.                                                                                               |
-| `migrations.namespace` | Migration/history schema; defaults to `public`. Also supplies the generation namespace when generation does not specify one.                                |
-| `generate.out`         | Required when a `generate` section is present. Otherwise supply `--out` to the generation command.                                                          |
-| `generate.namespace`   | Schema to generate; overrides the migration namespace for generation only.                                                                                  |
-| `baseline.schemas`     | Optional nonempty list of schemas for native baseline capture. Omission captures the whole database, independently of the migration namespace.              |
-| `baseline.connection`  | Optional native libpq connection for baseline capture; `--connection` overrides it.                                                                         |
-| `check.project`        | TypeScript project; defaults to `tsconfig.json` relative to config.                                                                                         |
-| `check.readTypes`      | Explicit type expressions for custom decoders whose representations are unidentified. See [checking](query-checking.md#programmatic-use-and-custom-codecs). |
-| `session`              | Optional inspection/checking `role`, `searchPath`, and `timeZone` overrides. They do not configure runtime queries or migrations.                           |
-| `timeouts`             | Optional inspection/checking `connectMs`, `statementMs`, and `lockMs` bounds.                                                                               |
+| Field                  | Purpose                                                                                                                                         |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `connection`           | PostgreSQL URI or pgclear pool options, including TLS, password callbacks, startup parameters, and codecs. Required when the database is used.  |
+| `onQuery`              | Optional observer for completed runtime queries. CLI tooling and native calls do not invoke it.                                                 |
+| `migrations.directory` | Migration files; defaults to `migrations` beside the config.                                                                                    |
+| `migrations.namespace` | Migration/history schema; defaults to `public`. Also supplies the generation namespace unless overridden.                                       |
+| `generate.out`         | Required when `generate` is present. Otherwise supply `--out`.                                                                                  |
+| `generate.namespace`   | Schema to generate; overrides the migration namespace for generation.                                                                           |
+| `baseline.schemas`     | Optional nonempty schema list for native baseline capture. Omission captures the whole database.                                                |
+| `baseline.connection`  | Optional native libpq connection for baseline capture; `--connection` overrides it.                                                             |
+| `check.project`        | TypeScript project; defaults to `tsconfig.json` beside the config.                                                                              |
+| `check.readTypes`      | Fallback type expressions for unidentified decoder representations. See [query checking](query-checking.md#programmatic-use-and-custom-codecs). |
+| `session`              | Inspection/checking overrides for `role`, `searchPath`, and `timeZone`.                                                                         |
+| `timeouts`             | Inspection/checking bounds for `connectMs`, `statementMs`, and `lockMs`.                                                                        |
 
-Generation and runtime queries use `connection.codecs`. Checking and inspection inherit that registry
-too. Their internal catalog queries keep default decoding. Runtime startup parameters are retained,
-with inspection's statement/lock timeout bounds applied regardless of startup-parameter casing; explicit `session` settings and CLI flags
-then override role, search path, or timezone for inspection. See [connections](connections.md) and
-[inspection limits](query-inspection.md#session-and-timeouts).
+Generation, checking, and inspection inherit `connection.codecs`; their internal catalog queries
+keep default decoding. Runtime startup parameters are retained. Inspection applies its statement
+and lock timeout bounds regardless of startup-parameter casing, then applies explicit session and
+CLI overrides. These inspection settings do not change runtime queries or migrations. See
+[connection settings](connections.md) and [inspection limits](query-inspection.md#session-and-timeouts).
 
-Keep credentials and deployment-specific addresses in environment variables or the existing secret
-provider. For a migration role different from the application role, select a separate config that
-imports shared settings and supplies that role's connection. Avoid duplicating codec definitions.
+Keep credentials and deployment addresses in environment variables or the existing secret provider.
+For a separate migration role, add a config export with that role's connection and the shared codecs.
 
-Baseline capture uses native `pg_dump`, which accepts a libpq connection string rather than pgclear
-option objects or password callbacks. Configure its native connection and scope explicitly when
-needed:
+## Native baseline capture
+
+Baseline capture uses `pg_dump`, which requires a native libpq connection string. If the main
+connection uses a driver-options object, add the native URI to the config:
 
 ```ts
-// Additional fields in the shared config:
-baseline: { connection: connectionString, schemas: ['public'] }
+// Within the database config:
+baseline: { connection: process.env.DATABASE_URL, schemas: ['public'] }
 ```
 
 Capture uses `--connection`, then `baseline.connection`, then a string main connection or the
 no-config `DATABASE_URL` fallback. `--schema` flags replace `baseline.schemas`. Adoption ignores
-capture-only settings. Supply the same database and required native TLS/authentication settings;
-Tenon does not translate driver-specific settings into libpq settings.
+capture-only settings. Supply the same database and its required native TLS/authentication settings;
+Tenon does not translate driver options into libpq settings.
 
 ## Programmatic APIs
 
+`createTenon(config)` accepts the shared object and initializes its connection lazily. Other
+programmatic APIs take explicit connection and operation options; none discover config files.
+
 The CLI owns generated-file output and freshness checks. `generateDefinitions` returns source text
-without file handling for callers building custom tooling; it accepts explicit connection/options.
+for custom tooling without writing files. `describeQuery` and `checkQueries` inherit codecs from
+connection-option values; an explicit `codecs` argument selects their reported read mappings. These
+inspection APIs own separate, short-lived sessions and do not join callback transactions.
 
-`describeQuery` and `checkQueries` accept a URI or connection-option values and inherit
-`connection.codecs`. An explicit `codecs` argument selects the read mappings reported by those
-inspection APIs. They own separate, short-lived sessions and do not join callback transactions.
-Migration APIs continue accepting explicit connection/options. No programmatic API discovers config.
-
-The CLI imports the selected trusted config and its dependencies. Source checking subsequently reads
-query source without importing those query modules or executing application SQL. TypeScript loads
-only for source checking, not for normal queries, migrations, generation, or inspection.
+The CLI imports the selected trusted config and its dependencies. Source checking then reads query
+modules without importing them or executing their SQL. TypeScript loads only for source checking.

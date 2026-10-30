@@ -8,6 +8,7 @@ import { adoptBaseline, captureBaseline } from './baseline.js';
 import { describeFlags, inspectionSettings } from './inspection/cli.js';
 import { loadConfig } from './config/load.js';
 import { initConfig } from './config/init.js';
+import { configConnection } from './config/connection.js';
 import { generateDefinitions } from './generate.js';
 import { writeDefinitions } from './generation/output.js';
 import { validatePath } from './validation.js';
@@ -28,7 +29,8 @@ describe: [--connect-timeout-ms 3000] [--statement-timeout-ms 5000] [--lock-time
 describe emits JSON metadata; it does not execute the query or verify result annotations.
 check compares source contracts; mismatches, unchecked sites and no sites fail. Unproven types are notes.
 rollback: --steps 1
-All commands accept --config path. Migration commands fall back to DATABASE_URL only without config.
+All commands accept --config path. Database commands accept --database <export> to select a named config.
+Multiple database exports require --database. Migration commands fall back to DATABASE_URL only without config.
 `;
 
 function warn(message: string): void {
@@ -76,6 +78,7 @@ async function main(): Promise<void> {
       connection: { type: 'string' },
       namespace: { type: 'string' },
       config: { type: 'string' },
+      database: { type: 'string' },
       out: { type: 'string' },
       check: { type: 'boolean', default: false },
       schema: { type: 'string', multiple: true },
@@ -110,6 +113,7 @@ async function main(): Promise<void> {
     allowed.add('check');
   }
   allowed.add('config');
+  if (command !== 'init') allowed.add('database');
   if (command === 'baseline' && argument === 'capture') {
     allowed.add('schema');
     allowed.add('connection');
@@ -139,7 +143,7 @@ async function main(): Promise<void> {
     if (positionals.length !== 2) {
       throw new Error('Use new <name> to create a migration pair.');
     }
-    const config = await loadConfig(values.config, false);
+    const config = await loadConfig(values.config, values.database, false);
     const files = await createMigration({
       name: argument!,
       directory: values.directory ?? config?.migrations?.directory ?? 'migrations',
@@ -163,14 +167,14 @@ async function main(): Promise<void> {
   }
 
   if (command === 'generate' || command === 'check' || command === 'describe') {
-    const config = await loadConfig(values.config);
+    const config = await loadConfig(values.config, values.database);
     if (command === 'generate') {
       const out = values.out === undefined ? config.generate?.out : resolve(values.out);
       if (out === undefined) throw new Error('Configure generate.out or pass --out.');
       const namespace =
         values.namespace ?? config.generate?.namespace ?? config.migrations?.namespace;
       const source = await generateDefinitions({
-        connection: config.connection,
+        connection: configConnection(config.connection),
         onWarning: warn,
         ...(namespace !== undefined && { namespace }),
       });
@@ -182,7 +186,7 @@ async function main(): Promise<void> {
     }
     const flags = inspectionSettings(values);
     const settings = {
-      connection: config.connection,
+      connection: configConnection(config.connection),
       session: { ...config.session, ...flags.session },
       timeouts: { ...config.timeouts, ...flags.timeouts },
     };
@@ -211,12 +215,12 @@ async function main(): Promise<void> {
     if (!report.ok) process.exitCode = 1;
     return;
   }
-  const config = await loadConfig(values.config, false);
+  const config = await loadConfig(values.config, values.database, false);
   const capture = command === 'baseline' && argument === 'capture';
   const connection =
     values.connection ??
     (capture ? config?.baseline?.connection : undefined) ??
-    config?.connection ??
+    (config === undefined ? undefined : configConnection(config.connection)) ??
     process.env.DATABASE_URL;
   if (!connection) throw new Error('DATABASE_URL is required.');
   const options = {

@@ -5,32 +5,49 @@ needed only when your application imports native pgclear APIs directly.
 
 ## Configure a database instance
 
+Define connection settings in the shared config:
+
 ```ts
-import { createTenon } from '@kequtech/tenon-orm';
+// tenon.config.ts
+import type { TenonConfig } from '@kequtech/tenon-orm';
 
-const connection = process.env.DATABASE_URL;
-if (!connection) throw new Error('DATABASE_URL is required');
-
-export const db = createTenon({
+export const main = {
   connection: {
-    connectionString: connection,
+    connectionString: process.env.DATABASE_URL,
     maxConnections: 10,
     connectTimeoutMs: 5000,
     acquireTimeoutMs: 5000,
     idleTimeoutMs: 30_000,
     startupParameters: { search_path: 'app,public' },
   },
-});
+} satisfies TenonConfig;
 ```
 
-`connection` accepts a PostgreSQL URI, pgclear `PoolOptions`, or an existing pgclear `Pool`.
-`ConnectionOptions` is Tenon's alias for `PoolOptions`. Object fields override URI settings.
-Reuse an instance for each database configuration.
+Pass the config to the constructor:
 
-The driver does not load environment variables, `.env`, pgpass, or service files.
-[Shared configuration](configuration.md) supplies connection values to the CLI and application.
-Migration commands retain `DATABASE_URL` fallback when no config exists. An empty options object
-uses localhost:5432, the current OS user and a database with that user's name.
+```ts
+import { createTenon } from '@kequtech/tenon-orm';
+import { main } from '../tenon.config.ts';
+
+export const db = createTenon(main);
+```
+
+`createTenon` takes one `TenonConfig` object. Connection validation and pool creation wait until the
+first query, transaction, or `db.native` access. The pool connects when it needs a session. Closing an
+unused instance does not resolve its connection. Subsequent operations reuse the same pool.
+
+The config's `connection` field accepts a PostgreSQL URI or pgclear pool-option values.
+`ConnectionOptions` is Tenon's alias for `PoolOptions`. Object fields override URI settings. A
+programmatically constructed config may also supply an existing pool, preserving its ownership.
+
+Keep codecs in `connection.codecs` so runtime and tooling use the same representations. See
+[shared configuration](configuration.md) for build-safe environment values and
+[multiple databases](configuration.md#multiple-databases) for named exports and CLI selection.
+
+The config supplies environment values to the driver, which does not load `.env`, pgpass, or service
+files. An explicitly missing URI fails when the instance is used. Deliberately configuring
+`connection: {}` uses the driver's local defaults: localhost:5432, the current OS user, and a database
+with that user's name.
 
 Use `tls: {}` for TLS with certificate and hostname verification using system trust. Supply the
 provider's CA or other required TLS settings through pgclear's `tls` options. Preserve the
@@ -68,10 +85,9 @@ without closing the instance.
 When another part of the application already owns a pgclear pool:
 
 ```ts
-import { createPool } from '@kequtech/pgclear';
 import { createTenon } from '@kequtech/tenon-orm';
+import { pool } from './existing-pool.js';
 
-const pool = createPool(connection);
 const db = createTenon({ connection: pool });
 // db.native === pool
 
@@ -84,37 +100,42 @@ outstanding work. Tool APIs that accept `Connection` follow the same ownership r
 
 ## Choose output conversions
 
-Outputs follow the pool's codec registry. For example, to read int8 as JavaScript bigint and
-`timestamptz` as Date:
+Outputs follow the configured codec registry. To read int8 as JavaScript bigint and `timestamptz` as
+Date, set the registry in `tenon.config.ts`:
 
 ```ts
-import { builtin, createTenon, defaultCodecs } from '@kequtech/tenon-orm';
+import { builtin, defaultCodecs, type TenonConfig } from '@kequtech/tenon-orm';
 
 const codecs = defaultCodecs.with(builtin.int8BigInt).with(builtin.timestamptzDate);
-const db = createTenon({ connection: { connectionString: connection, codecs } });
+export const main = {
+  connection: { connectionString: process.env.DATABASE_URL, codecs },
+} satisfies TenonConfig;
 ```
 
 These choices apply across the database instance, including callback transactions. Tenon's query
 options have no per-query codec override. Input encoders remain separate: a `param(value, codec)`
 carries its own encoder, and passing a Date does not select a Date output decoder.
 
-Place the registry in shared `connection.codecs` for runtime queries and CLI generation, inspection,
-and checking. Programmatic
-`describeQuery` and `checkQueries` inherit codecs from connection-option values too. See
+The CLI uses that registry for generation, inspection, and checking. Programmatic `describeQuery`
+and `checkQueries` inherit codecs from connection-option values too. See
 [schema types and values](schema-types.md#custom-codecs) for custom representations and Temporal.
 
 ## Observe completed queries
 
+Set `onQuery` on the database config:
+
 ```ts
-const db = createTenon({
-  connection,
+import type { TenonConfig } from '@kequtech/tenon-orm';
+
+export const main = {
+  connection: { connectionString: process.env.DATABASE_URL },
   onQuery(event) {
     console.log(event.label, event.durationMs, event.outcome, event.rowCount);
   },
-});
+} satisfies TenonConfig;
 ```
 
-Set `{ label: 'user-by-email' }` on a query to identify it. `onQuery` receives duration, outcome,
+Set `{ label: 'user-by-email' }` on a query to identify it. The observer receives duration, outcome,
 and available command/count/error-code metadata, with no SQL text or bound values. Validation
 failures before execution are not observed. Native driver calls and tooling are outside this hook.
 
@@ -153,7 +174,8 @@ import the native one as `pgSql`.
 
 ### Listen for notifications
 
-Import `listen` directly from pgclear for a dedicated connection:
+During application startup, pass a validated PostgreSQL URI (`connection` below) to pgclear's
+`listen` for a dedicated notification connection:
 
 ```ts
 import { listen } from '@kequtech/pgclear';

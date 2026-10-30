@@ -1,14 +1,12 @@
 import { createClient } from './client.js';
-import type { Connection, QueryExecutor } from './connection.js';
-import { createConnection, executeSql } from './connection.js';
+import type { QueryExecutor } from './connection.js';
+import { createConnection, executeSql, isPool } from './connection.js';
+import type { TenonConfig } from './config.js';
+import { configConnection } from './config/connection.js';
+import { configObject } from './config/validate.js';
 import { withTransaction } from './transaction.js';
-import type { CloseOptions, Database, QueryEvent } from './types.js';
+import type { CloseOptions, Database } from './types.js';
 import { plainObject } from './validation.js';
-
-export interface TenonOptions {
-  readonly connection: Connection;
-  readonly onQuery?: (event: QueryEvent) => void | Promise<void>;
-}
 
 function closeTimeout(options: CloseOptions | undefined): number {
   const settings = plainObject(options === undefined ? {} : options, 'Close options');
@@ -27,17 +25,10 @@ function closeTimeout(options: CloseOptions | undefined): number {
   return timeoutMs;
 }
 
-export function createTenon(options: TenonOptions): Database {
-  for (const key of Object.keys(plainObject(options, 'Tenon options'))) {
-    if (key !== 'connection' && key !== 'onQuery') {
-      throw new Error(`Unknown Tenon option: ${key}`);
-    }
-  }
-
-  if (options.onQuery !== undefined && typeof options.onQuery !== 'function') {
-    throw new Error('onQuery must be a function.');
-  }
-  const { pool, close } = createConnection(options.connection);
+export function createTenon(config: TenonConfig): Database {
+  configObject(config);
+  const onQuery = config.onQuery;
+  let connection: ReturnType<typeof createConnection> | undefined;
   let closing: Promise<void> | undefined;
 
   function checkOpen() {
@@ -46,25 +37,38 @@ export function createTenon(options: TenonOptions): Database {
     }
   }
 
+  function currentConnection() {
+    if (!connection) {
+      checkOpen();
+      const value = config.connection;
+      connection = createConnection(isPool(value) ? value : configConnection(value));
+    }
+    return connection;
+  }
+
   const query: QueryExecutor = (text, input, readResult, guarded) => {
     checkOpen();
+    const { pool } = currentConnection();
     if (guarded) return withTransaction(pool, (query) => query(text, input, readResult, false));
     return executeSql(pool, text, input).then(readResult);
   };
 
   return {
-    ...createClient(query, options.onQuery),
-    native: pool,
+    ...createClient(query, onQuery),
+    get native() {
+      return currentConnection().pool;
+    },
     async transaction(callback) {
       checkOpen();
-      return withTransaction(pool, (query) => callback(createClient(query, options.onQuery)));
+      const { pool } = currentConnection();
+      return withTransaction(pool, (query) => callback(createClient(query, onQuery)));
     },
     close(options) {
       if (closing) return closing;
       try {
         const timeoutMs = closeTimeout(options);
         // Cache before invoking driver callbacks, so reentrant/concurrent callers share shutdown.
-        closing = Promise.resolve().then(() => close(timeoutMs));
+        closing = Promise.resolve().then(() => connection?.close(timeoutMs));
         return closing;
       } catch (error) {
         return Promise.reject(error);

@@ -18,11 +18,8 @@ export async function initConfig(filename?: string): Promise<string> {
     }
   }
   const typed = extension === '.ts' || extension === '.mts';
-  const source = `${typed ? "import type { TenonConfig } from '@kequtech/tenon-orm';\n\n" : ''}const connectionString = process.env.DATABASE_URL;
-if (!connectionString) throw new Error('DATABASE_URL is required');
-
-export default {
-  connection: { connectionString },
+  const source = `${typed ? "import type { TenonConfig } from '@kequtech/tenon-orm';\n\n" : ''}export const main = {
+  connection: { connectionString: process.env.DATABASE_URL },
   migrations: { directory: 'migrations', namespace: 'public' },
   generate: { out: 'src/generated-schema.d.ts' },
   check: { project: 'tsconfig.json' },

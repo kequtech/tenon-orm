@@ -30,7 +30,7 @@ test('connections preserve native configuration without mutating caller options'
   assert.equal(options.connectTimeoutMs, 1500);
 });
 
-test('removed URI wrappers reject before creating a pool', () => {
+test('removed URI wrappers reject on first use before connecting', async () => {
   for (const connection of [
     { url: '' },
     { url: ' ' },
@@ -38,8 +38,11 @@ test('removed URI wrappers reject before creating a pool', () => {
     { url: testConnection, maxConnections: 1 },
     { url: testConnection, options: null },
     { url: testConnection, options: [] },
-  ])
-    assert.throws(() => createTenon({ connection: connection as Connection }));
+  ]) {
+    const db = createTenon({ connection: connection as Connection });
+    await assert.rejects(db.query(sql`SELECT 1`));
+    await db.close();
+  }
 });
 
 test(
@@ -75,7 +78,9 @@ test(
 test('a standalone connection is rejected instead of being mistaken for a borrowed pool', async () => {
   const client = await connect(testConnection);
   try {
-    assert.throws(() => createTenon({ connection: client as unknown as Connection }));
+    const db = createTenon({ connection: client as unknown as Connection });
+    await assert.rejects(db.query(sql`SELECT 1`));
+    await db.close();
     assert.equal((await client.queryClassic('SELECT 1 AS value', [])).rows[0]!.value, 1);
   } finally {
     await client.close();

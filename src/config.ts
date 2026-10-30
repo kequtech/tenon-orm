@@ -1,9 +1,14 @@
+import type { Pool } from '@kequtech/pgclear';
 import type { ConnectionConfig } from './connection.js';
+import type { QueryEvent } from './types.js';
 import type { InspectionSession, InspectionTimeouts } from './inspection/types.js';
 
 /** Shared runtime connection values and CLI defaults. Export without opening a database. */
 export interface TenonConfig {
-  readonly connection: ConnectionConfig;
+  /** Environment values may be absent during builds; database use validates them. */
+  readonly connection: ConnectionConfig | Pool | undefined;
+  /** Observe runtime queries; native driver calls and CLI tooling do not invoke this callback. */
+  readonly onQuery?: (event: QueryEvent) => void | Promise<void>;
   readonly generate?: {
     readonly out: string;
     readonly namespace?: string;
@@ -14,7 +19,7 @@ export interface TenonConfig {
   };
   /** Native pg_dump connection/scope; defaults to the main connection only when it is a string. */
   readonly baseline?: {
-    readonly connection?: string;
+    readonly connection?: string | undefined;
     readonly schemas?: readonly string[];
   };
   readonly check?: {

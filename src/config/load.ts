@@ -5,6 +5,7 @@ import type { TenonConfig } from '../config.js';
 import { sessionOptions, timeoutOptions } from '../inspection/options.js';
 import { validateName } from '../sql.js';
 import { plainObject, validatePath } from '../validation.js';
+import { configObject, configSection } from './validate.js';
 
 export const configNames = [
   'tenon.config.ts',
@@ -22,12 +23,26 @@ async function exists(path: string): Promise<boolean> {
   }
 }
 
-function keys(value: unknown, label: string, allowed: readonly string[]) {
-  const config = plainObject(value, label);
-  for (const key of Object.keys(config)) {
-    if (!allowed.includes(key)) throw new Error(`Unknown ${label} option: ${key}`);
+function selectDatabase(exports: Record<string, unknown>, database: string | undefined): unknown {
+  const names = Object.keys(exports).filter((name) => {
+    const value = exports[name];
+    return (
+      name === 'default' || (value !== null && typeof value === 'object' && 'connection' in value)
+    );
+  });
+  if (database !== undefined && !names.includes(database)) {
+    throw new Error(
+      `Unknown database export: ${database}. Available: ${names.join(', ') || 'none'}.`,
+    );
   }
-  return config;
+  if (database === undefined && names.length !== 1) {
+    throw new Error(
+      names.length
+        ? `Multiple databases exported: ${names.join(', ')}. Select one with --database.`
+        : 'No database configurations exported. Export a Tenon config with a connection field.',
+    );
+  }
+  return exports[database ?? names[0]!];
 }
 
 /** Find configuration without importing it, including for offline initialization. */
@@ -52,48 +67,37 @@ export async function findConfig(directory = process.cwd()): Promise<string | un
 }
 
 /** Import only the selected trusted configuration module; never discover application entry points. */
-export function loadConfig(filename?: string): Promise<TenonConfig>;
+export function loadConfig(filename?: string, database?: string): Promise<TenonConfig>;
 export function loadConfig(
   filename: string | undefined,
+  database: string | undefined,
   required: false,
 ): Promise<TenonConfig | undefined>;
 export async function loadConfig(
   filename?: string,
+  database?: string,
   required = true,
 ): Promise<TenonConfig | undefined> {
   if (filename !== undefined) validatePath(filename, 'Config filename');
+  if (database !== undefined && (!database.trim() || database.includes('\0'))) {
+    throw new Error('--database must be a nonempty export name without NUL.');
+  }
   const selected = filename === undefined ? await findConfig() : resolve(filename);
-  if (!selected && !required) return undefined;
+  if (!selected && !required && database === undefined) return undefined;
   if (!selected)
     throw new Error('Tenon configuration is required. Run tenon init or pass --config.');
-  let value: unknown;
+  let exports: Record<string, unknown>;
   try {
-    value = (await import(pathToFileURL(selected).href)).default;
+    exports = await import(pathToFileURL(selected).href);
   } catch {
     // Import errors may contain credentials from environment validation or dependency messages.
     throw new Error(
       `Could not load Tenon configuration: ${selected}. Check the module and its imports.`,
     );
   }
-  const config = keys(value, 'Tenon config', [
-    'connection',
-    'generate',
-    'migrations',
-    'baseline',
-    'check',
-    'session',
-    'timeouts',
-  ]);
-  if (typeof config.connection === 'string') {
-    if (!config.connection.trim()) throw new Error('Tenon config connection must be nonempty.');
-  } else {
-    const connection = plainObject(config.connection, 'Tenon config connection');
-    if ('acquire' in connection || 'close' in connection) {
-      throw new Error('Tenon config requires connection options, not an open pool.');
-    }
-  }
+  const config = configObject(selectDatabase(exports, database));
   const root = dirname(selected);
-  const migrations = keys(
+  const migrations = configSection(
     config.migrations === undefined ? {} : config.migrations,
     'migration config',
     ['directory', 'namespace'],
@@ -102,7 +106,7 @@ export async function loadConfig(
   if (migrations.namespace !== undefined) validateName(migrations.namespace as string);
   let generate: TenonConfig['generate'];
   if (config.generate !== undefined) {
-    const options = keys(config.generate, 'generation config', ['out', 'namespace']);
+    const options = configSection(config.generate, 'generation config', ['out', 'namespace']);
     validatePath(options.out, 'Generation out');
     if (options.namespace !== undefined) validateName(options.namespace as string);
     generate = {
@@ -110,7 +114,7 @@ export async function loadConfig(
       ...(options.namespace !== undefined && { namespace: options.namespace as string }),
     };
   }
-  const check = keys(config.check === undefined ? {} : config.check, 'checking config', [
+  const check = configSection(config.check === undefined ? {} : config.check, 'checking config', [
     'project',
     'readTypes',
   ]);
@@ -130,10 +134,11 @@ export async function loadConfig(
       }
     }
   }
-  const baseline = keys(config.baseline === undefined ? {} : config.baseline, 'baseline config', [
-    'connection',
-    'schemas',
-  ]);
+  const baseline = configSection(
+    config.baseline === undefined ? {} : config.baseline,
+    'baseline config',
+    ['connection', 'schemas'],
+  );
   if (
     baseline.connection !== undefined &&
     (typeof baseline.connection !== 'string' ||
@@ -151,6 +156,9 @@ export async function loadConfig(
   const timeouts = timeoutOptions(config.timeouts === undefined ? {} : config.timeouts);
   return {
     connection: config.connection as TenonConfig['connection'],
+    ...(config.onQuery !== undefined && {
+      onQuery: config.onQuery as NonNullable<TenonConfig['onQuery']>,
+    }),
     migrations: {
       directory: resolve(root, (migrations.directory as string | undefined) ?? 'migrations'),
       ...(migrations.namespace !== undefined && { namespace: migrations.namespace as string }),

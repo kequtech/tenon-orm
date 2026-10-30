@@ -177,7 +177,6 @@ test('the packed package preserves API contracts and consumes generated .d.ts sc
         generate: {out: 'schema.d.ts'}, migrations: {directory: 'migrations', namespace: 'app'},
         check: {project: 'tsconfig.json'}, timeouts: {statementMs: 1000},
       };
-      // @ts-expect-error shared configuration holds connection values, not an open pool
       const poolConfiguration: TenonConfig = {connection: {} as second.Database['native']};
       declare const db: Database;
       declare const other: second.Database;
@@ -389,6 +388,18 @@ ${result.stderr ?? ''}`);
       assert.deepEqual(composed.values, [7]);
       const db = createTenon({ connection: 'postgresql://unused' });
       await db.close();
+      const buildConfig = {connection: {connectionString: undefined}};
+      const buildOnly = createTenon(buildConfig);
+      await buildOnly.close();
+      const missing = createTenon(buildConfig);
+      await assert.rejects(missing.query(sql\`SELECT 1\`), /connectionString.*nonempty/);
+      await missing.close();
+      const configured = createTenon({connection: {
+        connectionString: process.env.TENON_TEST_DATABASE_URL,
+        codecs: defaultCodecs.with(builtin.int8BigInt),
+      }});
+      assert.equal((await configured.query(sql\`SELECT 42::bigint AS total\`, {returns: 'one'})).total, 42n);
+      await configured.close();
       const owned = createTenon({ connection: { connectionString: process.env.TENON_TEST_DATABASE_URL, maxConnections: 1 } });
       assert.equal((await owned.native.queryClassic('SELECT 42 AS value', [])).rows[0].value, 42);
       const converted = await owned.query(sql\`SELECT \${json({ok: true})}::jsonb AS payload, \${param([1, null, 2], builtin.int4Array)}::int[] AS ids\`, {returns: 'one'});

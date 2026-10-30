@@ -23,7 +23,7 @@ export interface CloseOptions {
   readonly timeoutMs?: number | undefined;
 }
 export type Database = Transaction & {
-  /** The underlying pool-level driver client; native calls bypass Tenon's query and transaction guards. */
+  /** The underlying pool; access initializes shared config. Native calls bypass Tenon's guards. */
   readonly native: Pool;
   /** Await all work inside the callback. Commit on success; rollback on an escaping error. */
   transaction<T>(callback: (tx: Transaction) => Promise<T>): Promise<T>;

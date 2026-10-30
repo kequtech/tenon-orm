@@ -163,17 +163,22 @@ both become null. For raw JSON text or Date/bigint outputs, configure codecs.
 
 ## Custom codecs
 
-Configure the registry on the application's connection. For example:
+Configure the registry in `tenon.config.ts` so runtime queries and generated declarations use the
+same representations:
 
 ```ts
-import { builtin, createTenon, defaultCodecs } from '@kequtech/tenon-orm';
+import { builtin, defaultCodecs, type TenonConfig } from '@kequtech/tenon-orm';
 
 const codecs = defaultCodecs.with(builtin.int8BigInt).with(builtin.timestamptzDate);
-const db = createTenon({ connection: { connectionString: connection, codecs } });
+export const main = {
+  connection: { connectionString: process.env.DATABASE_URL, codecs },
+  generate: { out: 'src/generated-schema.d.ts' },
+} satisfies TenonConfig;
 ```
 
-Int8 now reads as bigint, and timestamptz reads as a millisecond-precision Date. Regenerate using this
-instance. Scalar overrides affect derived built-in arrays; explicit array overrides win. Date and
+Int8 now reads as bigint, and timestamptz reads as a millisecond-precision Date. Run `tenon generate`
+with this config to update declarations. Scalar overrides affect derived built-in arrays; explicit
+array overrides win. Date and
 Temporal output codecs reject infinity and values outside their supported ranges.
 
 For Temporal, import `createTemporalCodecs` from Tenon and supply a native or compatible polyfill

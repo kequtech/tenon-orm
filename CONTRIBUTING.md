@@ -54,7 +54,7 @@ checks do not establish registry availability. Keep local artifact paths out of 
 First confirm that `tenon_fixture` is an unused scratch schema. Create a temporary `tenon.fixture.config.mjs` in the repository root:
 
 ```js
-export default {
+export const fixture = {
   connection:
     process.env.TENON_TEST_DATABASE_URL ??
     'postgresql://postgres:postgres@localhost:5432/tenon_orm_test',

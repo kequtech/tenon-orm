@@ -15,14 +15,14 @@ typings. The PostgreSQL driver, [pgclear](https://github.com/kequtech/pgclear), 
 
 ## Query with SQL
 
-This example assumes a `public.users` table with integer `id` and text `email` columns:
+This example assumes a `public.users` table with integer `id` and text `email` columns and a
+`main` export in your [shared configuration](docs/configuration.md):
 
 ```ts
 import { createTenon, sql } from '@kequtech/tenon-orm';
+import { main } from './tenon.config.ts';
 
-const connection = process.env.DATABASE_URL;
-if (!connection) throw new Error('DATABASE_URL is required');
-const db = createTenon({ connection });
+const db = createTenon(main);
 
 try {
   const email = 'reader@example.test';
@@ -97,10 +97,12 @@ choosing application types.
 
 ## Share configuration with the CLI
 
-Run `tenon init` to create `tenon.config.ts`, put connection settings and codecs there, and use its
-`connection` in `createTenon`.
-Then run `tenon generate`, `tenon generate --check`, `tenon check`, and `tenon describe query.sql`
-without custom scripts. Migration commands also use the shared connection and migration defaults.
+Run `tenon init` to create `tenon.config.ts`. Put connection settings and codecs in its `main` export,
+then reuse that object with `createTenon(main)`. Initialization stays lazy, so builds that only import
+the database instance need no credentials.
+
+The CLI uses the same config for migrations, `tenon generate`, freshness checks, `tenon check`, and
+`tenon describe query.sql`. For multiple databases, add named exports and select one with `--database`.
 See [shared configuration](docs/configuration.md) for the complete setup.
 
 ## Documentation

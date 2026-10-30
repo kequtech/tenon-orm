@@ -10,6 +10,7 @@ import type {
   QueryResult,
   SqlQuery,
   UnknownRow,
+  TenonConfig,
 } from '../src/index.js';
 import {
   CardinalityError,
@@ -50,6 +51,28 @@ async function checkingContracts(connection: string) {
   return ok;
 }
 void checkingContracts;
+
+function sharedConfigContracts() {
+  const config = {
+    connection: { connectionString: process.env.DATABASE_URL, codecs: defaultCodecs },
+    migrations: { directory: 'migrations' },
+    baseline: { connection: process.env.DATABASE_URL },
+  } satisfies TenonConfig;
+  const db: Database = createTenon(config);
+  const uri: TenonConfig = { connection: process.env.DATABASE_URL };
+  // @ts-expect-error pass the config directly, without a wrapper
+  createTenon({ config });
+  // @ts-expect-error a config declares its connection, even when the environment value is absent
+  createTenon({});
+  // @ts-expect-error the runtime accepts only a config object, not a filesystem path
+  createTenon('tenon.config.ts');
+  return {
+    db,
+    uri,
+    inspected: () => describeQuery({ connection: config.connection, query: 'SELECT 1' }),
+  };
+}
+void sharedConfigContracts;
 
 function conversionContracts() {
   const codec: Codec<number> = builtin.int4;

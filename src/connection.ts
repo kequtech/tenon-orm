@@ -12,7 +12,13 @@ import { plainObject } from './validation.js';
 export type ConnectionOptions = PoolOptions;
 /** Connection settings and executable credentials/codecs, without a live pool. */
 export type ConnectionConfig =
-  string | (ConnectionOptions & { readonly acquire?: never; readonly close?: never });
+  | string
+  | (Omit<ConnectionOptions, 'connectionString'> & {
+      /** May be absent during builds; operations reject an explicitly missing URI. */
+      readonly connectionString?: string | undefined;
+      readonly acquire?: never;
+      readonly close?: never;
+    });
 export type Connection = string | ConnectionOptions | Pool;
 export type QueryResult<Row extends object = UnknownRow> = DriverResult<Row>;
 export type QueryExecutor = <T>(
@@ -22,7 +28,7 @@ export type QueryExecutor = <T>(
   guarded: boolean,
 ) => Promise<T>;
 
-function isPool(connection: Connection): connection is Pool {
+export function isPool(connection: unknown): connection is Pool {
   return (
     connection !== null &&
     typeof connection === 'object' &&

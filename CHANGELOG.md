@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.5
+
+- Preserve generated enum and enum-domain label unions when unrelated codecs change, including
+  Date and bigint decoding. Custom enum decoders retain their declared output types; unidentified
+  decoders still warn and generate `unknown`. Enum write inputs retain catalog choices.
+- Require pgclear `^0.3.3` for per-type default-decoder metadata and dynamic notification
+  subscriptions. Native listeners can add and remove channels on one dedicated connection; see
+  [notifications](docs/connections.md#listen-for-notifications) for ownership and recovery.
+
 ## 0.4.4
 
 - Pass the shared `TenonConfig` directly to `createTenon`, including its connection, codecs, and

@@ -49,6 +49,11 @@ checks use the declared registry dependency. Before release, finalize the semver
 lockfile against a published pgclear release and restore a clean `npm ci` installation. Candidate
 checks do not establish registry availability. Keep local artifact paths out of release metadata.
 
+For a coordinated unpublished driver patch, a prepared registry lock entry may use the final
+candidate tarball's actual integrity. Until that driver is published, use the candidate override for
+consumer tests. Publish the driver first and verify its registry integrity matches the locked
+artifact before releasing Tenon; refresh the lockfile and rerun checks if the artifact differs.
+
 ### Regenerate the fixture
 
 First confirm that `tenon_fixture` is an unused scratch schema. Create a temporary `tenon.fixture.config.mjs` in the repository root:

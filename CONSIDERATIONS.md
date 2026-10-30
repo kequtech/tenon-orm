@@ -29,6 +29,10 @@ representation; `typescriptTypes()` exposes known expressions for downstream com
 text codecs can declare `text.typescript`. Scalar overrides affect derived built-in arrays; explicit
 array overrides win. A known unknown JSON representation differs from an unidentified decoder.
 
+`isDefaultDecoder(oid)` identifies whether that type still uses default text decoding. Generation
+uses it to preserve catalog enum unions after unrelated codec changes. A `string` representation
+alone cannot establish that a custom enum decoder preserves labels.
+
 Tenon consumes these expressions instead of maintaining another decoder registry. The source checker
 resolves them in the application's TypeScript project without executing modules. `readTypes` is a
 fallback only for unidentified decoder representations; it cannot replace known metadata.

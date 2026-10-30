@@ -131,22 +131,22 @@ well typed; PostgreSQL still enforces constraints.
 These are the default driver representations. SQL NULL is `null`; nullable generated columns add
 null to their type. Input encoding and output decoding are separate choices.
 
-| PostgreSQL value                                            | Default read                                           | Plain write input                                             |
-| ----------------------------------------------------------- | ------------------------------------------------------ | ------------------------------------------------------------- |
-| smallint, integer, serial, oid                              | `number`                                               | `number`                                                      |
-| bigint, bigserial, `count(*)`                               | Exact `string`                                         | Exact string or bigint                                        |
-| numeric/decimal                                             | `string`                                               | String or bigint                                              |
-| real, double precision                                      | `number`                                               | Finite number                                                 |
-| boolean                                                     | `boolean`                                              | Boolean                                                       |
-| text, UUID, other textual types                             | `string`                                               | String                                                        |
-| enum                                                        | Catalog label union in default-registry generated rows | Label union                                                   |
-| date, timestamp, timestamptz                                | `string`                                               | String, Date, or supported Temporal value                     |
-| time, interval                                              | `string`                                               | String or supported Temporal value                            |
-| timetz                                                      | `string`                                               | String                                                        |
-| json/jsonb                                                  | `unknown`                                              | Encoded JSON string; use `json(value)` for a parameter        |
-| bytea                                                       | `Uint8Array`                                           | Uint8Array                                                    |
-| Supported built-in arrays                                   | Recursive readonly `PgArray<T>`                        | Encoded PostgreSQL array text; use `param` for an array value |
-| Unrecognized types and dynamic enum/domain/extension arrays | Wire-text `string`                                     | Encoded string or explicit parameter                          |
+| PostgreSQL value                                            | Default read                                         | Plain write input                                             |
+| ----------------------------------------------------------- | ---------------------------------------------------- | ------------------------------------------------------------- |
+| smallint, integer, serial, oid                              | `number`                                             | `number`                                                      |
+| bigint, bigserial, `count(*)`                               | Exact `string`                                       | Exact string or bigint                                        |
+| numeric/decimal                                             | `string`                                             | String or bigint                                              |
+| real, double precision                                      | `number`                                             | Finite number                                                 |
+| boolean                                                     | `boolean`                                            | Boolean                                                       |
+| text, UUID, other textual types                             | `string`                                             | String                                                        |
+| enum                                                        | Catalog label union when its decoder remains default | Label union                                                   |
+| date, timestamp, timestamptz                                | `string`                                             | String, Date, or supported Temporal value                     |
+| time, interval                                              | `string`                                             | String or supported Temporal value                            |
+| timetz                                                      | `string`                                             | String                                                        |
+| json/jsonb                                                  | `unknown`                                            | Encoded JSON string; use `json(value)` for a parameter        |
+| bytea                                                       | `Uint8Array`                                         | Uint8Array                                                    |
+| Supported built-in arrays                                   | Recursive readonly `PgArray<T>`                      | Encoded PostgreSQL array text; use `param` for an array value |
+| Unrecognized types and dynamic enum/domain/extension arrays | Wire-text `string`                                   | Encoded string or explicit parameter                          |
 
 Generated inputs conservatively describe column-compatible representations; an explicit `Parameter`
 is accepted for every writable column. PostgreSQL checks ranges and text formats. Plain undefined,
@@ -200,8 +200,11 @@ configuration needs the corresponding Temporal library declarations.
 
 A custom text codec can declare `text.typescript` to describe its non-NULL output. Generation and
 checking consume the registry's metadata. An unidentified decoder warns and becomes `unknown`;
-a declared representation is trusted, not runtime validation. Under a custom registry, enum output
-may remain string because a decoder can transform labels; enum write inputs retain catalog choices.
+a declared representation is trusted, not runtime validation. Generated enum rows retain catalog label
+unions when that enum's decoder remains default, including when unrelated Date, bigint, or other
+codecs change. A custom enum decoder uses its own declared output type, or `unknown` with a warning
+when unidentified; declaring `string` does not establish that it preserves catalog labels. Enum write
+inputs retain catalog choices regardless of the output decoder.
 
 Place the registry in shared `connection.codecs` so runtime, CLI generation, inspection, and source
 checking use it consistently. Programmatic inspection/checking inherit `connection.codecs` too. Relative type-import

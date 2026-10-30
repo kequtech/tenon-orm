@@ -16,7 +16,7 @@ function columnTypes(
     read = 'unknown';
   }
   const choices = column.choices?.map((choice) => JSON.stringify(choice)).join(' | ') || 'never';
-  if (column.typeKind === 'e' && codecs === defaultCodecs && read === 'string') read = choices;
+  if (column.typeKind === 'e' && codecs.isDefaultDecoder(oid) && read === 'string') read = choices;
   let write = defaultCodecs.typescript(oid)!;
   if (column.typeKind === 'e') write = choices;
   if (write === 'unknown' || write.startsWith('PgArray<')) write = 'string';

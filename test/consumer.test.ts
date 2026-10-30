@@ -133,7 +133,7 @@ test('the packed package preserves API contracts and consumes generated .d.ts sc
     assert.equal(metadata.name, '@kequtech/tenon-orm');
     assert.equal(metadata.license, 'ISC');
     assert.deepEqual(metadata.dependencies, {
-      '@kequtech/pgclear': '^0.3.0',
+      '@kequtech/pgclear': '^0.3.3',
       typescript: '~6.0.2',
     });
     assert.equal(metadata.peerDependencies, undefined);
@@ -220,9 +220,11 @@ test('the packed package preserves API contracts and consumes generated .d.ts sc
     await assertTestDatabase(pool);
     await migrationProject(pool)(
       {
-        '0001_user.up.sql': `CREATE TABLE "User" (
+        '0001_user.up.sql': `CREATE TYPE "UserState" AS ENUM ('queued', 'done');
+        CREATE TABLE "User" (
         id integer PRIMARY KEY, email text NOT NULL, nickname text,
-        "createdAt" timestamptz NOT NULL, balance numeric NOT NULL, settings jsonb NOT NULL
+        "createdAt" timestamptz NOT NULL, balance numeric NOT NULL, settings jsonb NOT NULL,
+        state "UserState" NOT NULL DEFAULT 'queued'
       );`,
       },
       async (options) => {
@@ -236,10 +238,17 @@ test('the packed package preserves API contracts and consumes generated .d.ts sc
           ['migrate', '--directory', options.directory, '--namespace', options.namespace],
           commandOptions,
         );
-        await writeConfig(consumer, {
-          connection: testConnection,
-          generate: { namespace: options.namespace, out: 'generated-user.d.ts' },
-        });
+        await writeFile(
+          join(consumer, 'tenon.config.mjs'),
+          `import { builtin, defaultCodecs } from '@kequtech/tenon-orm';
+          export const main = {
+            connection: {
+              connectionString: ${JSON.stringify(testConnection)},
+              codecs: defaultCodecs.with(builtin.timestamptzDate),
+            },
+            generate: { namespace: ${JSON.stringify(options.namespace)}, out: 'generated-user.d.ts' },
+          };`,
+        );
         await run(cli, ['generate'], commandOptions);
         await run(cli, ['generate', '--check'], commandOptions);
         await access(join(consumer, 'generated-user.d.ts'));
@@ -259,7 +268,8 @@ test('the packed package preserves API contracts and consumes generated .d.ts sc
       type UserRow = Models['User']['row'];
       const indexed = sql<UserRow>\`SELECT * FROM "${options.namespace}"."User"\`;
       const nickname: string | null = user.nickname;
-      const created: string = user.createdAt;
+      const created: Date = user.createdAt;
+      const state: 'queued' | 'done' = user.state;
       const balance: string = user.balance;
       const input: Models['User']['insert'] = { id: 1, email: 'reader@example.test', createdAt: '2026-01-01T00:00:00Z',
         balance: '1.5', settings: JSON.stringify({ enabled: true }) };

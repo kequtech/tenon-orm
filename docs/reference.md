@@ -44,7 +44,7 @@ handling, timeout bounds, and lifecycle examples. Runtime `search_path` is indep
 
 ### Driver updates
 
-The dependency range is `@kequtech/pgclear: ^0.3.0`. Compatible patches may be updated independently;
+The dependency range is `@kequtech/pgclear: ^0.3.3`. Compatible patches may be updated independently;
 see [driver updates](connections.md#update-the-driver). Tenon re-exports `builtin`, `json`, `param`,
 `defaultCodecs`, and `createTemporalCodecs`, with the driver's `Codec`, `CodecRegistry`, `Parameter`,
 `PgArray`, `TemporalConstructors`, and `TemporalInput` types.

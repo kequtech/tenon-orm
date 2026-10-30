@@ -181,20 +181,26 @@ During application startup, pass a validated PostgreSQL URI (`connection` below)
 import { listen } from '@kequtech/pgclear';
 
 const listener = await listen(connection, {
-  channels: ['users_changed'],
+  channels: [],
   onNotification: ({ payload }) => console.log(payload),
   reconnect: true,
 });
+// Membership can change on this same connection. Await server registration:
+await listener.subscribe('users_changed');
+// When the channel is no longer needed:
+await listener.unsubscribe('users_changed');
 // At shutdown:
 await listener.close();
 ```
 
-A listener has a separate lifetime and is not closed by `db.close()`. Notifications are not replayed
-after a disconnection; the application owns its recovery policy.
+A listener has a separate lifetime and is not closed by `db.close()`. Subscription changes share its
+dedicated connection; reconnect restores the current channel membership. Applications own subscriber
+counts, authorization, and routing. Notifications are not replayed after a disconnection; use the
+listener's status/generation changes to detect a possible gap and reconcile persistent state.
 
 ## Update the driver
 
-Tenon depends on `@kequtech/pgclear: ^0.3.0`, which permits compatible 0.3.x patch updates. With npm:
+Tenon depends on `@kequtech/pgclear: ^0.3.3`, which permits compatible 0.3.x patch updates. With npm:
 
 ```sh
 npm update @kequtech/pgclear

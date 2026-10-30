@@ -323,7 +323,7 @@ import type { PgArray } from '@kequtech/pgclear';
         id: number; name: string; payload: unknown;
         duration: unknown; optional_duration: unknown;
         kinds: unknown; amount: number | null; details: unknown;
-        kind: string; integers: PgArray<number> | null;
+        kind: 'a' | 'b'; integers: PgArray<number> | null;
       };
       type Complete = Assert<Equal<Mixed, Expected>>;
       type Mapped = Assert<Equal<Schema['Mixed']['row'], Expected>>;
@@ -343,6 +343,12 @@ import type { PgArray } from '@kequtech/pgclear';
       const missing: Mixed = { id: 1, name: 'example', payload: null, kind: 'a', integers: [] };
       const nullable: Mixed['optional_duration'] = null;
     `,
+      );
+      // An override for the enum array OID leaves the scalar enum decoder unchanged.
+      assert.deepEqual(
+        (await selected.queryClassic(`SELECT 'a'::${qualified(options.namespace, 'Kind')} AS kind`))
+          .rows,
+        [{ kind: 'a' }],
       );
     },
   );

@@ -231,7 +231,74 @@ test('explicit array output overrides take precedence over a custom scalar repre
   );
 });
 
-test('custom string enum decoders do not inherit database label narrowing while writes retain choices', async () => {
+test('unrelated codec overrides preserve enum and enum-domain unions alongside Date output', async () => {
+  await project(
+    {
+      '0001_enum.up.sql': `CREATE TYPE "State" AS ENUM ('queued', 'done');
+        CREATE DOMAIN "DomainState" AS "State";
+        CREATE DOMAIN "NestedState" AS "DomainState";
+        CREATE TABLE "Entries" (
+          state "State" NOT NULL, optional "State", wrapped "NestedState" NOT NULL,
+          at timestamptz NOT NULL, total bigint NOT NULL
+        );`,
+    },
+    async (options) => {
+      await migrate(options);
+      for (const [codecs, total] of [
+        [defaultCodecs.with(builtin.timestamptzDate), '9007199254740993'],
+        [defaultCodecs.with(builtin.timestamptzDate).with(builtin.int8BigInt), 9007199254740993n],
+      ] as const) {
+        const configured = createPool({ connectionString: testConnection, codecs });
+        try {
+          const warnings: string[] = [];
+          await checkGeneratedTypes(
+            {
+              ...options,
+              connection: configured,
+              onWarning: (message) => {
+                warnings.push(message);
+              },
+            },
+            `
+            import type { Database } from './definitions.js';
+            import type { Parameter } from '@kequtech/pgclear';
+            ${typeAssertions}
+            type Row = Database['Entries']['row'];
+            type State = Assert<Equal<Row['state'], 'queued' | 'done'>>;
+            type Optional = Assert<Equal<Row['optional'], 'queued' | 'done' | null>>;
+            type Domain = Assert<Equal<Row['wrapped'], 'queued' | 'done'>>;
+            type DateOutput = Assert<Equal<Row['at'], Date>>;
+            type Total = Assert<Equal<Row['total'], ${typeof total === 'bigint' ? 'bigint' : 'string'}>>;
+            type Insert = Assert<Equal<Database['Entries']['insert']['state'], 'queued' | 'done' | Parameter>>;
+            type Update = Assert<Equal<Database['Entries']['update']['state'], 'queued' | 'done' | Parameter | undefined>>;
+            // @ts-expect-error unrelated codecs do not widen enum reads
+            const invalid: Row['state'] = 'other';
+            `,
+          );
+          assert.deepEqual(warnings, []);
+          const row = (
+            await configured.queryClassic(
+              `INSERT INTO ${qualified(options.namespace, 'Entries')}
+                VALUES ('queued', NULL, 'done', TIMESTAMPTZ '2026-10-30 12:34:56.123+00', 9007199254740993)
+                RETURNING *`,
+            )
+          ).rows[0]!;
+          assert.deepEqual(row, {
+            state: 'queued',
+            optional: null,
+            wrapped: 'done',
+            at: new Date('2026-10-30T12:34:56.123Z'),
+            total,
+          });
+        } finally {
+          await configured.close();
+        }
+      }
+    },
+  );
+});
+
+test('custom enum decoders retain their own read types while writes retain catalog choices', async () => {
   await project(
     {
       '0001_enum.up.sql': `CREATE TYPE "Kind" AS ENUM ('reader', 'writer');
@@ -245,49 +312,59 @@ test('custom string enum decoders do not inherit database label narrowing while 
           [options.namespace, 'Kind'],
         )
       ).rows[0]!.oid;
-      const configured = createPool({
-        connectionString: testConnection,
-        codecs: defaultCodecs.with({
-          oid,
-          text: {
-            encode: (value: string) => value.toLowerCase(),
-            decode: (value: string) => value.toUpperCase(),
-            typescript: 'string',
-          },
-        }),
-      });
-      try {
-        await checkGeneratedTypes(
-          options,
-          `
+      await checkGeneratedTypes(
+        options,
+        `
           import type { Database } from './definitions.js';
           ${typeAssertions}
           type DefaultEnum = Assert<Equal<Database['Entries']['row']['kind'], 'reader' | 'writer'>>;
           `,
-        );
-        await checkGeneratedTypes(
-          { ...options, connection: configured },
-          `
+      );
+      for (const typescript of ['string', "'READER' | 'WRITER'", undefined]) {
+        const configured = createPool({
+          connectionString: testConnection,
+          codecs: defaultCodecs.with(builtin.timestamptzDate).with({
+            oid,
+            text: {
+              encode: (value: string) => value.toLowerCase(),
+              decode: (value: string) => value.toUpperCase(),
+              ...(typescript === undefined ? {} : { typescript }),
+            },
+          }),
+        });
+        try {
+          const warnings: string[] = [];
+          await checkGeneratedTypes(
+            {
+              ...options,
+              connection: configured,
+              onWarning: (message) => {
+                warnings.push(message);
+              },
+            },
+            `
           import type { Database } from './definitions.js';
           import type { Parameter } from '@kequtech/pgclear';
           ${typeAssertions}
-          type CustomRead = Assert<Equal<Database['Entries']['row']['kind'], string>>;
+          type CustomRead = Assert<Equal<Database['Entries']['row']['kind'], ${typescript ?? 'unknown'}>>;
           type Writes = Assert<Equal<Database['Entries']['insert']['kind'], 'reader' | 'writer' | Parameter>>;
           // @ts-expect-error transformed output text is not a valid plain database label
           const invalid: Database['Entries']['insert'] = {kind: 'READER'};
           `,
-        );
-        assert.deepEqual(
-          (
-            await configured.queryClassic(
-              `INSERT INTO ${qualified(options.namespace, 'Entries')} VALUES ($1) RETURNING kind`,
-              ['reader'],
-            )
-          ).rows,
-          [{ kind: 'READER' }],
-        );
-      } finally {
-        await configured.close();
+          );
+          assert.equal(warnings.length, typescript === undefined ? 1 : 0);
+          assert.deepEqual(
+            (
+              await configured.queryClassic(
+                `INSERT INTO ${qualified(options.namespace, 'Entries')} VALUES ($1) RETURNING kind`,
+                ['reader'],
+              )
+            ).rows,
+            [{ kind: 'READER' }],
+          );
+        } finally {
+          await configured.close();
+        }
       }
     },
   );

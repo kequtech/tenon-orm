@@ -1,76 +1,79 @@
-# Pgclear considerations
+# Pgclear integration
 
-Tenon includes `@kequtech/pgclear` as a runtime dependency. The supported driver line is 0.3.x;
-applications can update its patch releases independently. Public contracts belong in the [reference](docs/reference.md);
-consumer changes belong in the [changelog](CHANGELOG.md). The shared
-[integration brief](notes/tenon-pgclear-integration-brief.md) records the responsibility boundary.
+Tenon includes `@kequtech/pgclear` as a runtime dependency, currently supporting 0.3.x. This document
+explains the library boundary for maintenance. Application contracts belong in the
+[reference](docs/reference.md), value mappings in [schema types](docs/schema-types.md), and
+consumer-visible changes in the [changelog](CHANGELOG.md). The
+[integration brief](notes/tenon-pgclear-integration-brief.md) records the original agreement.
 
-## Driver boundary
+## Execution and ownership
 
-Application queries use public `queryClassic` with finished SQL and bound values. Pgclear owns
-extended-protocol single-statement execution, encoding, decoding, session ownership, transaction
-outcomes, savepoint recovery, and bounded resource shutdown. Tenon owns SQL composition, result
-modes, query observations, and atomic affected-row guards. Whole guarded operations remain serialized
-inside Tenon transactions so another write cannot enter an operation's savepoint.
+Tenon sends finished SQL and bound values through public `queryClassic`. Pgclear owns
+extended-protocol execution, encoding/decoding, session ownership, transaction outcomes, savepoint
+recovery, and bounded shutdown. Tenon owns composition, result modes, query observations, and atomic
+affected-row guards.
 
-Constructed pools belong to Tenon; supplied pools retain application ownership and identity. Tenon
-close expires the wrapper and delegates owned shutdown. Pgclear expires its callback/lease handles;
-arbitrary application callbacks can continue. A lost transaction cannot resume on a fresh backend,
-and a lost COMMIT response can leave an unknown outcome. Tenon does not retry.
+Whole guarded operations are serialized inside callback transactions so another write cannot enter
+the operation's savepoint. A guard failure rolls back before rejection. This policy belongs above
+the driver rather than inside its protocol machinery.
 
-## Representations and application types
+Tenon owns constructed pools. Supplied pools retain application ownership and identity. Closing
+Tenon expires the wrapper and delegates owned resource shutdown; arbitrary JavaScript callbacks may
+continue. Pgclear expires its callback/lease handles. A lost transaction cannot resume on a fresh
+backend, and a lost COMMIT response may leave an unknown outcome. Tenon does not retry.
 
-The selected pgclear registry owns facts about decoder output. `typescript(oid)` reports its known
-non-NULL representation; `typescriptTypes()` exposes the known expressions for downstream compilation.
-Custom text codecs can declare `text.typescript`. Tenon resolves those expressions in the consuming
-TypeScript project without executing application modules. Scalar overrides affect derived built-in
-arrays, and explicit array overrides win. A known unknown JSON representation is distinct from an
-unidentified decoder.
+## Representations
 
-Codec metadata is a trusted declaration of conversion behavior, not a runtime validator. Application
-column meanings and JSON schemas remain application contracts. Wire OIDs determine execution's
-selected decoder; catalog domains or enum choices must not conceal a custom decoder. Source checking
-retains `readTypes` only for unidentified representations and rejects attempts to override known
-metadata. Describe does not establish result nullability, JSON members, or cardinality, and input
-acceptance is separate from read mapping.
+The selected registry owns decoder-output facts. `typescript(oid)` reports its known non-NULL
+representation; `typescriptTypes()` exposes known expressions for downstream compilation. Custom
+text codecs can declare `text.typescript`. Scalar overrides affect derived built-in arrays; explicit
+array overrides win. A known unknown JSON representation differs from an unidentified decoder.
 
-## Describe and generation
+Tenon consumes these expressions instead of maintaining another decoder registry. The source checker
+resolves them in the application's TypeScript project without executing modules. `readTypes` is a
+fallback only for unidentified decoder representations; it cannot replace known metadata.
 
-Inspection uses public `session.describe`, with no protocol dispatch hooks or driver internals.
-Catalog metadata and context are read on that same short-lived session with default codecs.
+Codec metadata is a trusted description of conversion behavior, not data validation. Application
+column meanings and JSON members remain application contracts. Wire OIDs select execution's decoder;
+catalog domain/enum interpretation must not conceal a custom decoder. Describe does not establish
+result nullability, JSON members, or cardinality. Input encoding is separate from output decoding.
 
-Tenon owns schema catalog queries, defaults/domain/identity interpretation, schema summaries, and
-`Database[table]['row' | 'insert' | 'update']` rendering. It obtains conversion representations from
-pgclear rather than maintaining a second decoder registry. Tenon also owns the migration advisory
-lock, history-table exclusion, generated-file policy, atomic output, and freshness checks.
-`db.generateTypes({ out, namespace?, check?, onWarning? })` uses the database instance's existing
-pool and codec registry. Application-owned scripts run generation and freshness checks; there is no
-standalone generation command. `generateDefinitions` remains available for source-string callers.
+Default int8 and `count(*)` outputs use exact strings; command counts use safe integer numbers.
+Numeric/temporal defaults use strings, bytes use Uint8Array, and arrays retain scalar representations
+and null elements. Plain bigint, Date, and supported native/polyfilled Temporal inputs use text with
+OID 0/server inference; Date uses UTC. Output conversions are explicit. JSON/array inputs keep explicit
+encoding, and JSON encoding still rejects bigint.
 
-Generation reads catalogs in a repeatable-read snapshot on its borrowed session. Public driver
-registry access and per-operation result-codec selection keep metadata decoding on default codecs
-while application row types follow the configured registry. This preserves role/session context and
-avoids opening another connection merely to bypass custom codecs. Pgclear does not resolve
-application imports or render database declarations. See [query checking](docs/query-checking.md)
-for the source-aware checker and its coverage limits.
+## Inspection and generation
 
-Per-operation decoder selection is internal to catalog queries. Application queries keep the
-database-wide registry, including within callback transactions; Tenon's query options do not expose
-codec overrides.
+Inspection uses public `session.describe`, without protocol hooks or driver internals. Its own catalog
+metadata and context use default codecs on that same short-lived session. Reported application read
+representations follow the selected registry.
 
-## Upgrade validation
+Tenon owns schema catalog queries, defaults/domains/identities, summaries, and
+`Database[table]['row' | 'insert' | 'update']` rendering. It also owns the migration advisory lock,
+history-table exclusion, file policy, atomic replacement, and freshness checking.
 
-Review the installed driver's release notes, configuration, and representation changes. Retain
-runtime, Describe, generated-type, Unicode, transaction recovery, shutdown, and packed-consumer
-regressions. Run `npm run check`, inspect the packed artifact, and verify PostgreSQL 16/18 CI.
-Generated-file freshness can change after a driver or generator update without schema drift.
-Generation inherits custom codecs from the database instance. Pass that same registry explicitly
-to inspection and source checking, and provide declarations for application types referenced by
-codec metadata.
+`db.generateTypes({ out, namespace?, check?, onWarning? })` uses the instance's pool/registry. An
+application-owned script runs generation and checks; there is no standalone generation command.
+`generateDefinitions` provides source text without file output.
 
-Default int8 values and SQL aggregates such as count(*) use exact strings; command counts use safe
-integer numbers. Plain bigint, Date, and supported native/polyfilled Temporal inputs encode as text
-with OID 0 and server inference. Date inputs use UTC. Date, bigint, and Temporal output codecs are
-opt-in; defaults do not change according to runtime availability. Numeric and temporal defaults use
-strings; bytes use Uint8Array. Arrays preserve exact scalar representations and null elements.
-JSON/array inputs retain explicit parameters or encoded text, and JSON encoding still rejects bigint.
+Generation reads catalogs in a repeatable-read snapshot on a borrowed session. Per-operation result
+codec selection keeps metadata decoding on defaults while declarations follow the configured
+registry. This preserves role/session context without a second connection merely to bypass custom
+codecs. Pgclear does not resolve application imports or render schema declarations.
+
+The decoder override on catalog queries is internal. Application queries, including callback
+transactions, retain database-wide codecs; Tenon exposes no per-query override.
+
+## Upgrade checks
+
+Review the installed driver's changelog, configuration, and representation changes. Retain runtime,
+Describe, generation, Unicode, recovery, shutdown, and packed-consumer regressions. Run
+`npm run check`, inspect the packed artifact, and verify PostgreSQL 16/18 CI. See
+[CONTRIBUTING.md](CONTRIBUTING.md#test-an-unpublished-driver-candidate) for candidate artifacts.
+
+After a registry or driver change, regenerate/review types and supply that registry to programmatic
+inspection/checking. Referenced application types must resolve in each compilation context. A
+freshness diff can reflect generator/driver changes without schema drift; generated text is not a
+version-stable schema fingerprint.

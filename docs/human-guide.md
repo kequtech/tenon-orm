@@ -1,26 +1,28 @@
-# Using Tenon: a human guide
+# Getting started
 
-Tenon lets you use PostgreSQL directly from TypeScript. You write SQL; Tenon binds its inputs and
-executes it through pgclear. This guide follows a small application from its first table to reusable
-queries, transactions, and result checking.
+This guide creates a table, inserts and reads a user, reuses a query in a transaction, and generates
+TypeScript types. You need an existing PostgreSQL database. If your application already has tables
+and a migration runner, keep them and start at [Write and read a row](#write-and-read-a-row).
 
-Use the [reference](reference.md) for exact contracts and [adoption](adoption-guide.md) when
-replacing an existing ORM. Code blocks build on the connection and table introduced below;
-query-function examples belong in their own module.
+## Install and connect
 
-## Connect to your database
-
-In an existing Node.js 24+ TypeScript project using ESM:
+Use Node.js 24+, PostgreSQL 16+, ESM, and TypeScript 6+ with Node.js development typings. In an
+existing TypeScript project:
 
 ```sh
 npm install @kequtech/tenon-orm
 ```
 
-Use PostgreSQL 16+ and TypeScript 6+. Keep your existing strict TypeScript configuration and Node
-typings. Tenon includes pgclear 0.3.x. Supply `DATABASE_URL` through your application's
-environment setup; Tenon does not load `.env` files. Import `sql`, `json`, `param`, and codec helpers
-from `@kequtech/tenon-orm` for application queries. See [driver updates](reference.md#driver-updates)
-when updating Pgclear independently.
+Keep the project's TypeScript configuration; a typical Node.js application uses `module: "NodeNext"`
+and `strict: true`. Tenon includes its PostgreSQL driver, pgclear.
+
+Supply `DATABASE_URL` through your environment setup. For a local example database:
+
+```sh
+export DATABASE_URL=postgresql://postgres:postgres@localhost:5432/your_database
+```
+
+Tenon does not create the database or load `.env` files. Create one shared database module:
 
 ```ts
 // src/db.ts
@@ -31,19 +33,18 @@ if (!connection) throw new Error('DATABASE_URL is required');
 export const db = createTenon({ connection });
 ```
 
-Reuse this instance across the application and call `await db.close()` at shutdown. You can also
-supply an existing pgclear `Pool`; your application then owns its shutdown.
+Reuse `db` across requests. Call `await db.close()` when a standalone script finishes or a server
+shuts down. See [connections](connections.md) for pool options and application-owned pools.
 
-## Create a table
+## Create and apply a migration
 
-If you already have a schema and migration runner, keep them. For a fresh example database, create a
-migration:
+In a fresh migrations directory:
 
 ```sh
 npx tenon new create_users
 ```
 
-Fill the generated files:
+This creates two empty files. Put the table definition in the up file:
 
 ```sql
 -- migrations/0001_create_users.up.sql
@@ -54,130 +55,74 @@ CREATE TABLE public.users (
 );
 ```
 
+Put the reverse operation in the down file:
+
 ```sql
 -- migrations/0001_create_users.down.sql
 DROP TABLE public.users;
 ```
 
-## Generate types
+Apply it to the database selected by `DATABASE_URL`:
 
-Generate through the configured database instance so declarations match runtime codecs, including
-Date, bigint, or Temporal outputs. Create an application-owned script:
+```sh
+npx tenon migrate
+npx tenon status
+```
+
+For later changes, create a new migration. Applied files are checked against recorded checksums and
+must stay unchanged. If a migration cannot be reversed, remove its down file before applying it.
+See [migrations](migrations.md) for rollback and deployment behavior.
+
+## Write and read a row
 
 ```ts
-// scripts/generate-types.ts (run directly with Node.js 24+)
-import { parseArgs } from 'node:util';
-import { db } from '../src/db.ts';
+// src/example.ts
+import { sql } from '@kequtech/tenon-orm';
+import { db } from './db.js';
 
-const { values } = parseArgs({ options: { check: { type: 'boolean', default: false } } });
 try {
-  await db.generateTypes({
-    out: 'src/generated-schema.d.ts',
-    check: values.check,
-  });
+  const email = 'reader@example.test';
+  const created = await db.query(
+    sql<{ id: number }>`INSERT INTO public.users (email) VALUES (${email}) RETURNING id`,
+    { returns: 'one' },
+  );
+
+  const user = await db.query(
+    sql<{ id: number; email: string; active: boolean }>`
+      SELECT id, email, active FROM public.users WHERE id = ${created.id}
+    `,
+    { returns: 'oneOrNone' },
+  );
+  console.log(user);
 } finally {
   await db.close();
 }
 ```
 
-Reuse the application's database configuration. To generate against a test database, supply its
-connection URL through the same configuration or database factory, retaining the runtime codecs.
-Keep the configuration module independent of generated runtime imports and application startup.
-The namespace defaults to `public`; pass `namespace` to `db.generateTypes` for a different schema.
-Generation runs outside callback transactions, after migrations have committed.
+This inserts a new email; rerunning it with the same email will fail the unique constraint. Run it
+through your project's TypeScript runner or compile it with your application. The `.js` imports
+follow NodeNext's convention for compiled TypeScript modules.
 
-For development, add scripts to `package.json`:
+The template binds `${email}` separately from the SQL. Do not put quotes around an interpolation.
+`sql<{ id: number }>` describes one returned row; `RETURNING id` asks PostgreSQL to return it.
+`returns: 'one'` requires exactly one row, while `oneOrNone` permits absence as `undefined`.
+Use `many` for an array or omit `returns` for the driver result with `.rows` and `.rowCount`.
 
-```json
-{
-  "scripts": {
-    "db:generate": "node scripts/generate-types.ts",
-    "db:check-types": "npm run db:generate -- --check",
-    "db:migrate": "tenon migrate && npm run db:generate"
-  }
-}
-```
+The annotation does not check SQL or validate the row at runtime. Without an annotation, field values
+are `unknown`. Bigint columns and SQL `count(*)` return strings by default; the integer ID in this
+example returns a number. See [value mappings](schema-types.md#value-mappings) for JSON, arrays,
+decimals, and dates.
 
-```sh
-npm run db:migrate
-```
+## Reuse a query
 
-In CI, apply migrations to the test database and check the committed declarations:
-
-```sh
-npx tenon migrate
-npm run db:check-types
-```
-
-Use the same database and namespace for migration and generation. The development `db:migrate`
-script above regenerates output; running it before a freshness check would hide stale declarations.
-
-Commit migrations and generated types together. In production, run only `npx tenon migrate`; deploy
-the already-built application. If you do not use generated table types, omit generation from the
-development script. For later schema changes, add a new migration instead of editing an applied one.
-If a change cannot be reversed, omit its down file. A down migration is not a backup.
-
-## Write a query
-
-Create a row, then read the fields you need:
+Put reusable queries in ordinary functions. Accept `QueryClient` when a caller may supply either
+`db` or a transaction's `tx`:
 
 ```ts
-import { sql } from '@kequtech/tenon-orm';
-import { db } from './db.js';
-
-const email = 'reader@example.test';
-await db.query(sql`INSERT INTO public.users (email) VALUES (${email})`);
-const user = await db.query(
-  sql<{ id: number; email: string }>`
-    SELECT id, email FROM public.users WHERE email = ${email}
-  `,
-  { returns: 'oneOrNone' },
-);
-```
-
-`${email}` becomes a bound parameter. Do not put quotes around it: the driver passes the value
-separately from the SQL text, even when the value contains SQL.
-
-The type describes one selected row. `returns: 'oneOrNone'` gives you that row or `undefined`; it
-throws if the query returns more than one row. Use `'one'` when absence should also be an error,
-`'many'` for an array, or omit `returns` for the native result object with `.rows`, `.rowCount`, and
-`.fields`. These options do not change your SQL.
-
-`rowCount` is a number or null when the command has no count. SQL `count(*)` and bigint/bigserial
-column values are exact strings, including values beyond JavaScript's safe integer range. Use
-strings, bigint, or pgclear `param(text, builtin.int8)` for int8 parameters. Plain Date and supported
-Temporal inputs also work; they do not change the default string outputs. Date inputs encode in UTC.
-Opt-in codecs can return Date, bigint, or Temporal values when the application needs them.
-
-Generated table types can help describe projections without repeating every field:
-
-```ts
-import type { Database } from './generated-schema.js';
-type UserSummary = Pick<Database['users']['row'], 'id' | 'email'>;
-```
-
-For frequently used types, define [application aliases](reference.md#application-aliases) such as
-`UserRow`, `UserInsert`, and `UserUpdate` in a handwritten module.
-
-You can then write `sql<UserSummary>`. A table type describes the full table; a join or aggregate
-needs a type for what that particular query selects. An annotation is a declaration, not proof that
-the SQL matches. Without one, result fields are `unknown`. Use the inspection and database-test
-workflow below to check the declared contract against the query's behavior.
-
-Keep storage types conservative and validate them when projecting domain values. The
-[persistence-to-domain example](reference.md#persistence-and-domain-values) shows validated JSON
-writes and reads, temporal strings, and an SQL predicate that rejects infinite session expiry.
-
-## Reuse a query with a function
-
-Use an ordinary function when several callers need the same query. An object input makes the
-supplied values easy to read:
-
-```ts
+// src/queries.ts
 import { sql, type QueryClient } from '@kequtech/tenon-orm';
-import type { Database } from './generated-schema.js';
 
-type UserSummary = Pick<Database['users']['row'], 'id' | 'email'>;
+type UserSummary = { id: number; email: string };
 
 export function userByEmail(client: QueryClient, { email }: { email: string }) {
   return client.query(sql<UserSummary>`SELECT id, email FROM public.users WHERE email = ${email}`, {
@@ -186,12 +131,15 @@ export function userByEmail(client: QueryClient, { email }: { email: string }) {
 }
 ```
 
-Call `userByEmail(db, { email: 'reader@example.test' })` at the call site, or pass a transaction's
-`tx`. Keep the SQL and execution options together in the function.
+Call `userByEmail(db, { email: 'reader@example.test' })`. Keep the SQL and result options together in
+the function. Joins and aggregates work the same way; see [writing queries](sql.md).
 
-## Change data in a transaction
+## Use a transaction and a write guard
+
+In code using the shared `db`:
 
 ```ts
+import { sql } from '@kequtech/tenon-orm';
 import { userByEmail } from './queries.js';
 
 await db.transaction(async (tx) => {
@@ -204,117 +152,86 @@ await db.transaction(async (tx) => {
 });
 ```
 
-Use `tx` for all work in the callback and await it. Tenon commits when the callback succeeds and
-rolls back when an error escapes.
+Run all participating queries through `tx` and await them. The callback commits on success and rolls
+back when an error escapes.
 
-`affectedRows: { exact: 1 }` requires exactly one affected row. `{ max: 1 }` permits zero or one.
-Tenon rolls back a write that violates the bound. You can also use these guards on `db.query`
-outside a callback transaction. The guard checks a count; you still need the correct `WHERE` clause
-and application authorization. Checking returned rows with `returns` alone does not undo an
-autocommitted write.
+The guard requires exactly one affected row and rolls back the update if the count differs. Use
+`{ max: 1 }` to allow zero or one. Guards also work with `db.query` outside a callback. Result modes
+such as `one` check returned rows; by themselves they do not undo an autocommitted write.
 
-## Write objects without building column lists by hand
+You still author the `WHERE` clause and application authorization. The
+[transaction reference](reference.md#transactions-guarded-writes-and-errors) covers caught errors,
+savepoints, and retry limits. For object-based inserts and patches, see [writing data](mutations.md).
 
-Use `sql.insertValues(rowOrRows)` inside an authored `INSERT` and `sql.assignments(patch)` after
-`SET`. Inserts use database defaults for missing/undefined fields; updates omit those fields.
-Explicit `null` stays null. Empty batches and updates throw. Heterogeneous insert rows remain
-aligned, with `DEFAULT` for missing cells.
+## Generate types
+
+Generation is optional. It reads the migrated database and writes table read/insert/update types.
+Run it through the configured instance so the types use the same value conversions as your queries:
+
+```ts
+// scripts/generate-types.ts
+import { parseArgs } from 'node:util';
+import { db } from '../src/db.ts';
+
+const { values } = parseArgs({ options: { check: { type: 'boolean', default: false } } });
+try {
+  await db.generateTypes({ out: 'src/generated-schema.d.ts', check: values.check });
+} finally {
+  await db.close();
+}
+```
+
+This script runs directly on Node.js 24+ using its TypeScript support. For this execution path,
+`src/db.ts` must be runnable without build-time transformations or extension rewriting. If your
+project compiles scripts, use its normal runner and import conventions instead. To typecheck `.ts`
+imports with `noEmit`, enable `allowImportingTsExtensions`; emitting projects can use
+`rewriteRelativeImportExtensions`.
+
+Add these scripts to your existing `package.json`:
+
+```json
+{
+  "scripts": {
+    "db:generate": "node scripts/generate-types.ts",
+    "db:check-types": "npm run db:generate -- --check",
+    "db:migrate": "tenon migrate && npm run db:generate"
+  }
+}
+```
+
+Run `npm run db:generate` now. The output exports a `Database` type:
 
 ```ts
 import type { Database } from './generated-schema.js';
 
-const input: Database['users']['insert'] = { email: 'another@example.test' };
-await db.query(sql`INSERT INTO public.users ${sql.insertValues(input, ['email'])}`);
-
-const patch: Pick<Database['users']['update'], 'active'> = { active: false };
-await db.query(sql`UPDATE public.users SET ${sql.assignments(patch, ['active'])}
-  WHERE email = ${input.email}`);
+type UserRow = Database['users']['row'];
+type UserSummary = Pick<UserRow, 'id' | 'email'>;
+type UserInsert = Database['users']['insert'];
+type UserUpdate = Database['users']['update'];
 ```
 
-Use `Pick` to limit editable fields. Keep expressions, predicates, conflict handling, and
-`RETURNING` in SQL. Selected columns choose fields; they do not validate the complete object. See
-[input types](reference.md#insert-and-update-inputs) for mappings and the
-[mutation cookbook](mutations.md) for defaults, batches, and upserts.
+Use `UserSummary` with `sql<UserSummary>` or `UserInsert` to type an insert input. These types
+follow table columns, defaults, nullability, and codec representations. They do not validate
+application inputs. Keep aliases in handwritten files and leave generated output unchanged.
+See [schema types](schema-types.md) for an output example and mapping details.
 
-## Check your SQL and result types
+## Keep schema and code in step
 
-The three database tools answer different questions: `tenon check` compares authored queries with
-their TypeScript contracts, `tenon describe` reports metadata for finished SQL, and
-`npm run db:check-types` checks whether saved database declarations are current. See
-[validation tools](reference.md#choosing-a-validation-tool) for their limits.
+During development, run `npm run db:migrate`, review the generated diff, and commit migrations and
+generated declarations together. Exclude the generated file from automatic formatting.
 
-After migrating a development/test database, run the optional source-aware checker:
+In CI, migrate a dedicated test database and check committed output without rewriting it:
 
 ```sh
-npx tenon check src/queries.ts
-npx tenon check src/queries.ts:23
+npx tenon migrate
+npm run db:check-types
+npx tsc --noEmit
 ```
 
-A line selects one complete query. Omit the file to check the TypeScript project. The checker reads
-source and types without importing the application or executing SQL. It reports definite
-contradictions and unsupported composition; nullability, JSON members, and other inconclusive
-contracts receive the benefit of the declared type and remain unproven. See
-[query checking](query-checking.md) for supported fragments and explicit object expansion shapes.
+Do not run the regenerating `db:migrate` script before the freshness check: it would replace the file
+you meant to verify. Production runs migrations and deploys the already-built application.
 
-Use describeQuery on finished SQL, or tenon describe query.sql, when you only need metadata and a
-conservative row declaration. Match runtime role/session settings. Retain TypeScript and database
-tests for actual rows, effects, permissions, and rollback. The checker does not replace those tests.
-Generated patch types contain optional fields and can therefore be unchecked even when execution is
-valid. Keep optional patches when needed; see [responding to findings](query-checking.md#responding-to-findings).
-For rejected values, result-count errors, and other common failures, see
-[troubleshooting](reference.md#troubleshooting).
-
-## Reuse or assemble parts of SQL when needed
-
-A fragment is a piece of SQL that carries its bound values with it. It is useful when multiple
-queries share a condition. For example, a search can use the same predicate for its result page and
-its count:
-
-```ts
-const pattern = '%example%';
-const limit = 20;
-const search = sql.fragment`active = ${true} AND email ILIKE ${pattern}`;
-const page = sql<UserSummary>`SELECT id, email FROM public.users
-  WHERE ${search} ORDER BY id LIMIT ${limit}`;
-const count = sql<{ count: string }>`SELECT count(*) AS count FROM public.users
-  WHERE ${search}`;
-```
-
-Execute each query with `db.query`. Validate application-supplied patterns and page sizes before
-building queries. The complete query supplies the result type.
-The SQL aggregate's `count` is a string; the native result's `rowCount` counts returned rows.
-
-Use `sql.join` when the number of fragments varies, such as one search condition per word or a set
-of optional filters. It combines fragments with `'AND'`, `'OR'`, or `','` and preserves their bound
-values:
-
-```ts
-const terms = ['reader', 'example'];
-const filters = [sql.fragment`active = ${true}`];
-for (const term of terms) {
-  filters.push(sql.fragment`email ILIKE ${'%' + term + '%'}`);
-}
-
-const query = sql<UserSummary>`SELECT id, email FROM public.users
-  WHERE ${sql.join(filters, 'AND')} ORDER BY id`;
-```
-
-This matches active users whose email contains every term. With no terms, the active condition still
-applies. For an entirely optional set of filters, omit the whole `WHERE` clause when the list is
-empty:
-
-```ts
-const optionalFilters = terms.map((term) => sql.fragment`email ILIKE ${'%' + term + '%'}`);
-const unfilteredOrMatching = optionalFilters.length
-  ? sql<UserSummary>`SELECT id, email FROM public.users WHERE ${sql.join(optionalFilters, 'AND')} ORDER BY id`
-  : sql<UserSummary>`SELECT id, email FROM public.users ORDER BY id`;
-```
-
-`sql.join` and fragments require nonempty input. Keep mandatory authorization predicates in the
-initial list when applicable; an empty optional-filter list must not remove them. Use parentheses
-when mixing `AND` and `OR`. See the [composition reference](reference.md#sql-fragments-and-joins).
-
-Use fixed SQL when composition is unnecessary. See the [reference](reference.md) for arrays,
-identifiers, value mappings, CLI options, and error behavior.
-Runtime loops and dynamic fragment lists work during execution but remain unchecked by `tenon check`;
-use database tests for those queries.
+Optionally run `npx tenon check src/queries.ts` against the migrated database to compare source query
+types with PostgreSQL metadata. Keep database tests for rows, permissions, and rollback. See
+[choosing a validation tool](reference.md#choosing-a-validation-tool) and
+[troubleshooting](reference.md#troubleshooting) as needed.

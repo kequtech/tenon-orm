@@ -1,8 +1,8 @@
-# Inspect and test queries
+# Inspecting and testing queries
 
-`describeQuery` asks PostgreSQL for a completed statement's parameter/result metadata without
-binding its values or executing it. Inspection is included with Tenon and opens a separate,
-short-lived connection. It works with SQL assembled from fragments and mutation helpers.
+`describeQuery` asks PostgreSQL for a finished statement's parameter and result metadata. It does
+not bind values or execute the statement. Use it to inspect SQL and to support database tests. To
+compare TypeScript source annotations instead, use [query checking](query-checking.md).
 
 ## Inspect completed SQL
 
@@ -18,15 +18,18 @@ const query = sql<{ id: number; total: string }>`
 const description = await describeQuery({ connection, query });
 ```
 
-`query` accepts SQL text or an object with `text`, including `SqlQuery`. Pass the same completed
-query to inspection and execution. Strings use PostgreSQL `$1` placeholders; templates use
-`${value}`. Cast standalone parameters so PostgreSQL can infer their types without runtime values.
-Inspection does not read `sql<Row>`, check `query.values`, or compare an annotation with SQL.
-For SQL with ambiguous parameters, pass `{ text, parameterTypes: [oid, ...] }`; these public
-pgclear Describe hints require no values. Describe still performs server parsing/analysis and may
-take locks.
+Pass the same completed query to inspection and execution. `query` accepts SQL text or an object
+with `text`, including a Tenon `SqlQuery`. Raw SQL uses `$1` placeholders; templates use `${value}`.
+Inspection checks neither `query.values` nor its `sql<Row>` annotation.
+
+Cast standalone parameters so PostgreSQL can infer their types without values. Alternatively pass
+`query: { text, parameterTypes: [oid, ...] }` for explicit Describe hints. PostgreSQL still parses
+and analyzes the statement, which can take locks.
 
 ## Session and timeouts
+
+Inspection opens and closes its own short-lived session. `connection` must be a PostgreSQL URI;
+it does not inherit a runtime pool or transaction:
 
 ```ts
 const description = await describeQuery({
@@ -37,48 +40,50 @@ const description = await describeQuery({
 });
 ```
 
-Reuse the runtime URI and session settings. Optional `session.role` uses SET ROLE when permitted; it
-does not load that role's login defaults. Omitted settings use the inspection connection's defaults.
-Explicit undefined behaves like omission. Unknown keys and invalid settings fail.
+Match runtime settings. Optional `session.role` uses SET ROLE when permitted; it does not load that
+role's login defaults. Omitted settings use the inspection connection's defaults. Explicit undefined
+behaves like omission. Unknown keys and invalid settings reject.
 
 `context` reports login/effective roles, configured/resolved search paths, timezone, database, and
-effective statement/lock timeouts. Its mode is `separate-session` and read mapping profile is `pgclear`. Read types use
-`codecs.typescript(oid)` from the registry passed as `codecs`, or `defaultCodecs` when omitted. Temporary
-tables, uncommitted changes, and transaction-local settings are not inherited. pgclear uses explicit connection configuration; it does not read PG environment variables, pgpass,
-or service files. Use explicit URI/session settings for reproducibility.
+effective statement/lock timeouts. Mode is `separate-session`, read mapping profile `pgclear`.
+Temporary tables, uncommitted changes, and transaction-local state are not inherited. PG environment
+variables, pgpass, service files, and `.env` are not loaded.
 
-Defaults are a 3-second connection/authentication timeout, a 5-second limit per server statement,
-and a 1-second lock wait. Overrides are positive integer milliseconds, at most 2,147,483,647. URI
-settings cannot disable the statement/lock bounds. pg-specific `query_timeout` and `options`
-URI parameters are unsupported; use the documented timeout and session options. The owned client closes after inspection. These are operation limits, not a
-single overall deadline.
+| Timeout       | Default  | Scope                         |
+| ------------- | -------- | ----------------------------- |
+| `connectMs`   | 3,000 ms | Connection and authentication |
+| `statementMs` | 5,000 ms | Each server statement         |
+| `lockMs`      | 1,000 ms | Lock wait                     |
 
-## Result fields
+Overrides are positive integer milliseconds up to 2,147,483,647. These are operation bounds, not a
+single overall deadline. URI settings cannot disable statement/lock bounds. pg-specific
+`query_timeout` and `options` URI parameters are unsupported; use the options above.
 
-| Field                   | Meaning                                                                                    |
-| ----------------------- | ------------------------------------------------------------------------------------------ |
-| `parameters`            | OIDs, qualified PostgreSQL names, and read representations; not JavaScript input contracts |
-| `columns`               | Ordered names, PostgreSQL types, read representations, and source metadata where available |
-| `columns[].nullability` | Always `"unknown"`; source `notNull` is informational                                      |
-| `rowType`               | Conservative `DescribedRow` declaration, or null for no columns/duplicate names            |
-| `issues`                | Findings with stable `code` fields and descriptive messages                                |
-| `context`               | Effective inspection-session settings                                                      |
+## Read the report
 
-Known read types in `rowType` include null; unknown types already include it. Source constraints
-cannot establish result nullability through joins, expressions, or grouping. JSON structure stays
-unknown. Handle findings by code:
+| Field                   | Meaning                                                                                   |
+| ----------------------- | ----------------------------------------------------------------------------------------- |
+| `parameters`            | OIDs, qualified PostgreSQL names, and read representations; these are not input contracts |
+| `columns`               | Ordered names, PostgreSQL types, read representations, and available source metadata      |
+| `columns[].nullability` | Always `"unknown"`; source `notNull` is informational                                     |
+| `rowType`               | Conservative `DescribedRow` declaration, or null for no columns/duplicate names           |
+| `issues`                | Findings with stable `code` and descriptive messages                                      |
+| `context`               | Effective inspection-session settings                                                     |
 
-| Code                  | Meaning                                                               |
-| --------------------- | --------------------------------------------------------------------- |
-| `nullability-unknown` | Result nullability is unresolved                                      |
-| `shape-unknown`       | Listed output columns have unknown shapes/read types                  |
-| `unmapped-type`       | The selected registry cannot identify a custom decoder representation |
-| `duplicate-column`    | Repeated result names reject during object-row execution              |
+Known read types in `rowType` include null; unknown already includes it. A source column's NOT NULL
+constraint cannot prove result nullability through outer joins, expressions, or grouping. JSON
+members remain unknown.
+
+| Finding code          | Meaning                                               |
+| --------------------- | ----------------------------------------------------- |
+| `nullability-unknown` | Result nullability is unresolved                      |
+| `shape-unknown`       | Listed columns have unknown shapes/read types         |
+| `unmapped-type`       | A custom decoder has no known representation          |
+| `duplicate-column`    | Repeated result names would fail object-row execution |
 
 ## Custom codecs
 
-Pass the runtime registry explicitly. Inspection decodes only its own catalog/context queries with
-default codecs; the selected registry determines the reported application read representations.
+Pass the runtime registry as `codecs` to report its read representations; omission uses defaults:
 
 ```ts
 import { builtin, defaultCodecs } from '@kequtech/tenon-orm';
@@ -87,21 +92,21 @@ const codecs = defaultCodecs.with(builtin.jsonbText);
 const description = await describeQuery({ connection, query, codecs });
 ```
 
-A raw JSON decoder reports string instead of unknown. Scalar overrides affect derived built-in
-arrays; explicit array overrides win. A custom decoder can declare `text.typescript` to expose its
-actual output expression, including an application type import. Describe includes that expression
-in its conservative row declaration; generation and source checking consume the same metadata.
-Without a known representation, an unfamiliar decoder reports `unknown` with an `unmapped-type`
-issue, even when its catalog type is a known scalar, enum, or domain. Supply an application
-representation when comparing such results with authored types. Catalog base types do
-not replace the wire OID's selected decoder contract. Parameter read representations are not input
-compatibility rules: text can be a valid int8 input while int8 results decode as exact strings.
+That registry reports JSONB output as string. Scalar overrides affect derived built-in arrays;
+explicit array overrides win. Custom `text.typescript` expressions appear in the conservative row
+declaration and are shared with generation/source checking. Without known metadata, a custom
+decoder remains unknown even for a familiar scalar/enum/domain OID. Catalog base types do not
+replace the wire OID's decoder contract.
+
+Inspection's own catalog/context queries use default decoding. Reported parameter read types are
+not encoding rules: exact text can be a valid int8 input while its output also uses text by default.
+See [schema mappings and codecs](schema-types.md#custom-codecs).
 
 ## Test the same statement
 
-For the `public.users` table from the [human guide](human-guide.md), assume a dedicated test fixture
-has rows `{ id: 1, email: 'ada@example.test', active: true }` and
-`{ id: 2, email: 'lin@example.test', active: false }`, and `db` is its runtime connection:
+Use a dedicated test database. For `public.users` from [Getting started](human-guide.md), assume a
+fixture contains `{ id: 1, email: 'ada@example.test', active: true }` and
+`{ id: 2, email: 'lin@example.test', active: false }`. Here `db` and `connection` select that database:
 
 ```ts
 import assert from 'node:assert/strict';
@@ -133,15 +138,15 @@ for (const activeOnly of [false, true]) {
 }
 ```
 
-Description and execution establish different facts. Describe can succeed for invalid bound values,
-a write that violates constraints, or an operation the runtime role cannot execute. Check actual
-rows/effects, JSON, permissions, and rollback in database tests, and run TypeScript. Inspect
-meaningful query variants; one instance does not cover unexercised branches. Expect only reviewed
-findings and keep unexpected ones visible.
+Describe establishes metadata; execution tests establish behavior. Describe may succeed even when
+bound values are invalid, constraints would reject a write, or the role lacks execution permission.
+Test actual rows, write effects, authorization, JSON validation, and rollback. Exercise meaningful
+composition variants and keep unexpected findings visible. Do not test query behavior by matching
+words in documentation or SQL strings.
 
 ## CLI
 
-Save SQL with PostgreSQL placeholders in `query.sql`:
+Save raw SQL in `query.sql`:
 
 ```sql
 SELECT $1::integer AS id, count(*) AS total FROM pg_catalog.pg_class;
@@ -152,12 +157,11 @@ npx tenon describe query.sql
 npx tenon describe query.sql --search-path app,public --time-zone UTC
 ```
 
-The CLI uses `DATABASE_URL` and prints JSON. Session flags are `--role`, `--search-path`, and
-`--time-zone`. Timeout flags are `--connect-timeout-ms`, `--statement-timeout-ms`, and
-`--lock-timeout-ms`. Unrelated flags such as `--namespace` and the removed `--check` flag are rejected.
+The CLI reads `DATABASE_URL` and prints JSON using default codecs. Session flags are `--role`,
+`--search-path`, and `--time-zone`; timeout flags are `--connect-timeout-ms`,
+`--statement-timeout-ms`, and `--lock-timeout-ms`. Unsupported flags, including `--namespace` and
+`--check`, reject.
 
-Exit 0 means description succeeded, including reports with unresolved findings. Exit 1 means input,
-connection, timeout, or PostgreSQL analysis failed. The inspected statement is never executed.
-
-See [source-aware checking](query-checking.md) for the separate TypeScript/SQL contract
-checking command. `db.generateTypes({ out, check: true })` only checks generated-file freshness.
+Exit 0 means inspection succeeded, even with unresolved findings. Input, connection, timeout, or
+PostgreSQL analysis failures exit 1. The inspected statement is never executed. Generated-file
+freshness uses `db.generateTypes({ out, check: true })`, a separate operation.

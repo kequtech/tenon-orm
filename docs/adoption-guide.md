@@ -1,122 +1,47 @@
 # Adopting Tenon
 
-Replace application queries independently of migration ownership. Tenon can query an existing schema
-and generate types while the current migration runner stays in place. For a Tenon version upgrade,
-read the [Changelog](../CHANGELOG.md).
-
-## Upgrade from Tenon 0.4.0
-
-Replace `tenon generate` scripts with `db.generateTypes({ out, namespace?, check? })` on your
-configured database instance. Run checks with `check: true` and close the instance when the script
-finishes. See the [generation script example](human-guide.md#generate-types). The source-string
-`generateDefinitions` API remains available. Query codecs remain database-wide.
-
-## Upgrade from Tenon 0.3.x
-
-Tenon 0.4 uses pgclear 0.3.x in place of pg. Keep the existing database, credentials,
-migration history, and application query functions. Pgclear is included as a runtime dependency.
-With npm, update Tenon:
-
-```sh
-npm install @kequtech/tenon-orm@^0.4.1
-```
-
-Use the project's existing package manager and then review these boundaries:
-
-1. Translate pg `PoolConfig` fields to pgclear `PoolOptions`, or replace a borrowed pg Pool with a
-   pgclear Pool. A URI remains supported. Supply connection credentials explicitly; the driver does
-   not read PG environment variables, pgpass, service files, or pg-specific URI options.
-2. Keep Tenon `sql`, `QueryClient`, result modes, and callback transactions. Update native calls to
-   pgclear APIs: use `queryClassic(text, values?)` for finished SQL, release acquired sessions, and
-   close dedicated listeners separately. Import `sql`, `json`, `param`, and codec helpers from
-   `@kequtech/tenon-orm`. If native driver code also uses Pgclear's tag, alias it as `pgSql`; its query
-   objects belong in native `query`, while Tenon's query objects belong in `db.query`.
-3. Review temporal strings, readonly result arrays, Uint8Array bytes, exact string integer/numeric
-   arrays, and JSON/array inputs. Use `json(value)`, `param(value, codec)`, or encoded text for JSON
-   and arrays. Plain Date, bigint, and supported Temporal inputs are accepted with server inference;
-   Date encodes in UTC. They do not change output types. Command rowCount remains a number or null.
-   See [value mappings](reference.md#generated-types-and-checking).
-4. Regenerate database declarations against the intended development/test schema. Replace former
-   `Rows['users']`, `Rows.Insert['users']`, and `Rows.Update['users']` accesses with
-   `Database['users']['row']`, `Database['users']['insert']`, and `Database['users']['update']`.
-   Generate with `db.generateTypes({ out, namespace })` to inherit the configured driver's codec
-   representations. If code needs source text from `generateDefinitions`, import it from Tenon
-   instead of pgclear and supply the application's configured connection. Review
-   the generated diff and exclude exact generator output from formatting. Generated helper types
-   now import from Tenon; applications do not need a separate Pgclear dependency for them.
-5. Run the project's typecheck and database tests for queries, transactions, JSON/arrays, and native
-   integrations. Add optional source checking where composition is recoverable; optional patches
-   and runtime-dependent SQL may remain unchecked. See [validation tools](reference.md#choosing-a-validation-tool).
-
-If other code still uses pg directly, retain it until those callers are migrated. Updating Tenon
-does not require transferring migration ownership or adopting a new baseline.
+You can replace application queries without changing migration ownership. Tenon queries and type
+generation work with an existing schema and any migration runner. For a Tenon upgrade, read the
+[shipped changelog](../CHANGELOG.md) from your resolved version through the target version.
 
 ## Preserve connections and behavior
 
-Keep the existing database URI, credentials, TLS requirements, schema, and data. Tenon can add
-driver settings through pgclear configuration:
+Reuse the existing database URI, credentials, schema, TLS requirements, and data. Pool configuration
+uses pgclear options; timeout names include `Ms`. Configure runtime names with
+`startupParameters: { search_path: 'app,public' }`, or qualify tables in SQL. Tooling `namespace`
+does not configure runtime queries.
 
-```ts
-import { createTenon } from '@kequtech/tenon-orm';
-
-const db = createTenon({
-  connection: {
-    connectionString: existingUri,
-    connectTimeoutMs: 5000,
-  },
-});
-```
-
-Translate old driver configuration into pgclear `PoolOptions`. Pool timeouts use milliseconds.
-Set `startupParameters: { search_path: 'app,public' }` for runtime names. pgclear does not read
-PG environment variables, pgpass, or service files; supply connection settings explicitly. Preserve
-credentials and verified TLS requirements. CLI `--namespace` does not change runtime queries. See
-[connection options](reference.md#installation-and-connection).
-
-Before conversion, identify behavior supplied by the old ORM: IDs/defaults, timestamps, validation,
-hooks, serialization, relationships, and transaction boundaries. Preserve it explicitly in
-application code or SQL where required.
+Before replacing an ORM, identify behavior it currently supplies: IDs/defaults, timestamps,
+validation, hooks, serialization, relationship loading, and transaction boundaries. Preserve needed
+behavior in application code, constraints, or SQL. Tenon has no model lifecycle or implicit loading.
 
 ## Replace queries
 
-1. Optionally generate persistence types from the existing schema:
+1. Optionally generate persistence types with
+   `await db.generateTypes({ out: 'src/generated-schema.d.ts', namespace: 'public' })`.
+   Use the application's schema and codec registry; no Tenon migration history is required.
+2. Replace one workflow at a time with parameterized SQL in ordinary functions. Accept
+   `QueryClient` when callers may use either `db` or `tx`. Preserve selected columns, ordering,
+   null handling, authorization predicates, and transaction boundaries.
+3. Review input/output mappings and validate domain values at the persistence boundary. Generated
+   types do not validate JSON members or application constraints.
+4. Test actual rows, writes, permissions, and rollback. Use source checking and inspection where
+   useful. See [choosing a validation tool](reference.md#choosing-a-validation-tool).
+5. Remove unused dependencies/generated code once all their callers are gone.
 
-   ```ts
-   await db.generateTypes({ namespace: 'public', out: 'src/generated-schema.d.ts' });
-   ```
+When replacing a first-row accessor, decide whether multiple matches should be an error.
+`oneOrNone` rejects multiple rows and `one` also rejects absence. To choose one match deliberately,
+author deterministic `ORDER BY ... LIMIT 1`; result modes do not add a limit.
 
-   This needs no Tenon migration history. Use the application's namespace and commit exact output.
-
-2. Replace queries with parameterized SQL in ordinary functions accepting `QueryClient` where
-   callers may supply `db` or `tx`. Retain projections, ordering, null handling, and authorization.
-3. Review value conversions against [Tenon's mappings](reference.md#generated-types-and-checking).
-   Pgclear defaults read int8/bigserial and SQL count(*) as exact strings; command rowCount is a
-   number. Bigint, Date, and supported Temporal inputs use server inference. Numeric values,
-   dates, arrays, and JSON serialization may also differ from the previous driver. Regenerate
-   declarations when mappings change; they do not replace domain validation.
-4. Run the optional [source-aware checker](query-checking.md) for recoverable queries, inspect
-   meaningful completed query variants, and run database assertions for actual rows, permissions,
-   write effects, and rollback. See [query inspection](query-inspection.md).
-5. Remove unused runtime dependencies and generated code after their callers are gone. Dependencies
-   retained by other application code or installed transitively may still be needed.
-
-Check cardinality when replacing a first-row accessor. `oneOrNone` rejects multiple rows and `one`
-also rejects zero rows. Use deterministic `ORDER BY` plus `LIMIT 1` when choosing one of several
-matches is intended; modes do not add a limit.
-
-Use `sql.insertValues` and `sql.assignments` to replace object-to-SQL utilities, checking omission,
-default, null, and empty-input semantics. Generated `Database[table]['insert']`/`Database[table]['update']` types can replace
-handwritten persistence inputs. See the [mutation cookbook](mutations.md).
-
-Use `tx.query` for work that must commit together. Native pool calls do not join Tenon transactions.
-For driver features, preserve resource ownership and recovery policy under the
-[native access contract](reference.md#native-driver-access).
+For object-to-SQL utilities, review omission, defaults, null, and empty patches against
+[the write guide](mutations.md). Use `tx.query` for every operation that must commit together;
+native pool calls do not join Tenon transactions.
 
 ## Transfer migration ownership
 
-Choose one final checkpoint for the old runner. Bring existing databases to it and disable that
-runner before handover; the runners do not share locks. Capture from a trusted reference database,
-preferably a disposable replay of the legacy migrations.
+Choose the old runner's final schema checkpoint. Bring every existing database to it and disable
+that runner before handover; the runners do not share locks. Capture one baseline from a trusted
+reference database, preferably a disposable replay of the old migrations.
 
 ### Capture a baseline
 
@@ -127,72 +52,74 @@ npx tenon baseline capture --directory migrations --namespace app --schema app
 ```
 
 The directory must contain no SQL files. Capture uses native
-`pg_dump --schema-only --no-owner --no-privileges` and writes `0001_baseline.up.sql` with no down
-file. Install compatible PostgreSQL client tools on PATH; prefer the server's major version.
+`pg_dump --schema-only --no-owner --no-privileges` and writes `0001_baseline.up.sql` without a down
+file. Install compatible PostgreSQL client tools on PATH, preferably matching the server's major
+version. Capture does not modify source data or history and does not preserve sequence positions.
 
-| Option                | Scope                                                                                |
-| --------------------- | ------------------------------------------------------------------------------------ |
-| `--namespace app`     | Tenon history table to exclude from capture; history/runner scope for later commands |
-| `--schema app`        | Objects selected by native `pg_dump`; repeat to select additional schemas            |
-| Runtime `search_path` | Configured independently on the application connection                               |
+| Setting               | What it selects                                                         |
+| --------------------- | ----------------------------------------------------------------------- |
+| `--namespace app`     | Tenon history table to exclude; history/runner scope for later commands |
+| `--schema app`        | Schema objects included by pg_dump; repeat for more schemas             |
+| Runtime `search_path` | Application name resolution, configured separately                      |
 
-Omitting `--schema` captures the whole database schema, even with a custom namespace. Capture does
-not modify source data/history or preserve sequence positions. It excludes Tenon's selected history
-table but can retain the old runner's metadata tables. Review and commit the SQL. Preserve the
-capture header, which opts this reviewed dump into native baseline parsing; do not add it to
-handwritten migrations.
+Omitting `--schema` captures the whole database schema, even with a custom namespace. The selected
+Tenon history table is excluded; old-runner metadata tables may remain. Review and commit the SQL.
+Preserve the capture header: it opts this reviewed dump into native baseline parsing. Do not add
+that header to handwritten migrations.
 
-A scoped dump can refer to objects it does not include. Provision external schemas, functions,
-extensions, and referenced roles before they are needed. A fresh replay must execute representative
-operations, not just reproduce generated relation types. Tenon requires no particular extension.
+A scoped dump may depend on objects outside its scope. Provision required external schemas,
+extensions, functions, and roles. Fresh replay must exercise representative application operations,
+not merely reproduce table types. Tenon itself requires no particular extension.
 
 ### Check and adopt an existing database
 
-Verify the final legacy checkpoint before adoption. If using schema comparisons, freeze separate
-reference definitions rather than comparing against types regenerated after later migrations.
-`generateDefinitions` covers relation metadata, not functions or privileges; include reviewed
-catalog checks for other objects the application needs. Tenon does not perform these comparisons.
-
-Generated declaration text is not a version-stable schema fingerprint: driver mappings and generator
-changes can alter it without schema drift. The schema-summary comments expose SQL definitions, but
-their formatting and PostgreSQL's rendering of those definitions are not a stable comparison format
-either. If an existing adoption guard hashes generated text, preserve its original reference and
-freeze a separate reference for each supported generator version from a disposable replay of the
-immutable checkpoint. Compare the replay's metadata with the reviewed checkpoint before accepting
-the new reference; never derive a replacement from whichever live database is configured. Keep
-independent function and privilege checks, and test both matching adoption and refusal after drift.
-This application guard is separate from Tenon's migration checksums; keep applied SQL unchanged.
+Confirm that each existing database matches the reviewed final checkpoint. Tenon does not compare
+the live schema with the baseline. Adoption records its checksum without executing its SQL:
 
 ```sh
 npx tenon baseline adopt --directory migrations --namespace app
 npx tenon migrate --directory migrations --namespace app
 ```
 
-Adoption records the baseline checksum without executing its SQL. The namespace must already exist.
-Repeating matching adoption is harmless, including after later migrations; history conflicts fail.
-Once Tenon owns history, add forward migrations rather than editing the baseline.
+The namespace must already exist. Repeating adoption with matching history is harmless, including
+after later migrations; conflicting history fails. Once adopted, leave the baseline unchanged and
+add forward migrations.
+
+For an application-owned schema guard, keep a frozen checkpoint reference. Generated relation types
+do not cover functions or privileges; check required objects separately. Neither generated text nor
+schema-summary formatting is a version-stable fingerprint. If a guard hashes that text, preserve
+its original reference and freeze a separate reviewed reference for each generator version, taken
+from a disposable replay of the immutable checkpoint. Verify that replay against the checkpoint
+before accepting the reference; do not derive it from whichever live database is configured.
+Test both matching adoption and refusal after drift. This is separate from migration checksums.
 
 ### Replay a fresh database
 
-Run `tenon migrate --directory migrations --namespace app`, without adoption. It executes the same
-committed baseline and subsequent migrations. Apply the deployment's required roles, ownership, and
-grants before application access.
+```sh
+npx tenon migrate --directory migrations --namespace app
+```
 
-The portable baseline omits ownership, grants/revokes, and default privileges. Objects are recreated
-under the migration role. For `SECURITY DEFINER` functions, that owner controls execution authority,
-and new functions ordinarily permit `PUBLIC` execution. Keep fixed policy such as revoking public
-execution in reviewed baseline SQL before first adoption or in a forward migration. Deployment
-provisioning supplies named roles, owners, and grants. Verify permitted and denied operations on
-both adopted and fresh environments. See the
-[pg_dump contract](https://www.postgresql.org/docs/16/app-pgdump.html).
+Do not adopt a fresh database. Migration executes the committed baseline and subsequent files.
+The dump omits ownership, grants/revokes, and default privileges; objects are recreated under the
+migration role. Deployment provisioning must supply required roles, owners, and grants.
 
-For development, generate types after migrating; production runs migrations and consumes committed
-types. Test existing-row preservation, repeatable adoption, subsequent migrations, and fresh replay.
-A schema-only baseline and down migration are not backups. The missing down file prevents rollback
-across the baseline; use the application's backup/recovery procedure for that boundary.
+For `SECURITY DEFINER` functions, the recreated owner controls authority. PostgreSQL ordinarily grants
+`PUBLIC` execution on new functions. Put fixed policy such as revoking public execution in reviewed
+baseline SQL before first adoption, or in a forward migration. Supply deployment-specific role names
+and grants during provisioning. Verify permitted and denied operations on adopted and fresh databases.
 
-Programmatic capture is
-`captureBaseline({ connection, directory?, namespace?, schemas?, onWarning? })` and returns
-`{ id, upPath }`. It requires a native libpq connection string; an explicitly empty `schemas` list
-fails. `adoptBaseline({ connection, directory?, namespace? })` accepts Tenon's runtime connection
-forms and returns newly recorded IDs.
+Test preserved existing rows, repeatable adoption, later migrations, and fresh replay. A schema-only
+baseline is not a backup; the missing down file prevents rollback across it. Use the application's
+backup/recovery procedure for that boundary.
+
+### Baseline API
+
+- `captureBaseline({ connection, directory?, namespace?, schemas?, onWarning? })` returns
+  `{ id, upPath }`. Connection is a native libpq connection string passed to pg_dump. Omitting
+  `schemas` captures the whole database schema; an empty list rejects. Warnings default to
+  `console.warn`.
+- `adoptBaseline({ connection, directory?, namespace? })` accepts Tenon's runtime connection forms
+  and returns newly recorded IDs. It requires `0001_baseline.up.sql` with no down file.
+
+Defaults are directory `migrations` and namespace `public`. See [migrations](migrations.md) for
+history validation, per-file transactions, and locking.

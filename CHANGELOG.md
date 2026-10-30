@@ -1,9 +1,17 @@
 # Changelog
 
+## 0.4.2
+
+- Rewrite the README and consumer guides around a complete getting-started workflow and task-based navigation.
+- Add guides for SQL queries, schema types and values, connections, and migrations, including joins, pagination, codec configuration, rollback, and migration recovery.
+- Clarify query result modes, write guards, generated types, source checking, and their validation limits. This release changes documentation only; no application migration is required.
+
 ## 0.4.1
 
 - Add `db.generateTypes({ out, namespace?, check?, onWarning? })`, using the instance's configured codecs.
 - Remove `tenon generate`; run generation and freshness checks from an application script.
+  Use the configured database instance, set `check: true` for freshness checks, and close it when
+  the script finishes. See the [generation script example](docs/human-guide.md#generate-types).
 
 ## 0.4.0
 
@@ -14,7 +22,7 @@
   Connections accept a PostgreSQL URI, pgclear `PoolOptions`, or a pgclear `Pool`; translate former
   pg configuration and supply deployment settings explicitly.
   PG environment defaults, pgpass/service files, and pg-specific URI options are not read. See
-  [upgrading from 0.3.x](docs/adoption-guide.md#upgrade-from-tenon-03x).
+  [connection configuration](docs/connections.md#configure-a-database-instance).
 - `db.native` is now a pgclear `Pool`. Use `queryClassic(text, values?)` for finished SQL and
   acquire/withSession for held sessions; native `query` accepts pgclear's own sql tag only. Prepared
   statements, streams, and COPY use the public session APIs. Use pgclear `listen` for dedicated
@@ -26,7 +34,9 @@
   output conversions are opt-in. Undefined, plain objects, and arrays reject; mutation-helper
   undefined still omits. JSON encoding still rejects bigint values.
 - Tenon owns schema generation and exports `Database[table]['row' | 'insert' | 'update']`.
-  Regenerate committed definitions, replace former Rows imports, and review write representations.
+  Regenerate committed definitions and review write representations. Replace `Rows[table]`,
+  `Rows.Insert[table]`, and `Rows.Update[table]` with `Database[table]['row']`,
+  `Database[table]['insert']`, and `Database[table]['update']`.
   Catalog queries, schema summaries, defaults/domains/identities, and TypeScript rendering live in
   Tenon; decoder representations come from pgclear. Import generation from Tenon instead of pgclear.
   Tenon retains migration coordination, atomic file output, and `generate --check` freshness checks.

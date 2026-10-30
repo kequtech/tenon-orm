@@ -54,8 +54,8 @@ Tenon owns schema catalog queries, defaults/domains/identities, summaries, and
 `Database[table]['row' | 'insert' | 'update']` rendering. It also owns the migration advisory lock,
 history-table exclusion, file policy, atomic replacement, and freshness checking.
 
-`db.generateTypes({ out, namespace?, check?, onWarning? })` uses the instance's pool/registry. An
-application-owned script runs generation and checks; there is no standalone generation command.
+The CLI owns generation output/freshness checks and loads shared `tenon.config.ts` connection values for generation, inspection, checking, and
+migrations. Configuration modules export values without opening pools.
 `generateDefinitions` provides source text without file output.
 
 Generation reads catalogs in a repeatable-read snapshot on a borrowed session. Per-operation result
@@ -73,7 +73,7 @@ Describe, generation, Unicode, recovery, shutdown, and packed-consumer regressio
 `npm run check`, inspect the packed artifact, and verify PostgreSQL 16/18 CI. See
 [CONTRIBUTING.md](CONTRIBUTING.md#test-an-unpublished-driver-candidate) for candidate artifacts.
 
-After a registry or driver change, regenerate/review types and supply that registry to programmatic
-inspection/checking. Referenced application types must resolve in each compilation context. A
+After a registry or driver change, regenerate/review types. CLI tools share the configured registry;
+programmatic inspection/checking inherit `connection.codecs` or accept an explicit registry. Referenced application types must resolve in each compilation context. A
 freshness diff can reflect generator/driver changes without schema drift; generated text is not a
 version-stable schema fingerprint.

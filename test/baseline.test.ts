@@ -11,7 +11,6 @@ import { createPool, type Pool } from '@kequtech/pgclear';
 import {
   adoptBaseline,
   captureBaseline,
-  createTenon,
   generateDefinitions,
   migrate,
   migrationStatus,
@@ -21,6 +20,7 @@ import {
 import { qualified, quote } from '../src/sql.js';
 
 import { assertTestDatabase, testConnection as connection } from './helpers/database.js';
+import { writeConfig } from './helpers/config.js';
 const pool = createPool({ connectionString: connection, maxConnections: 1 });
 const cli = fileURLToPath(new URL('../src/cli.js', import.meta.url));
 const run = promisify(execFile);
@@ -272,17 +272,12 @@ test('baseline CLI captures and adopts without replaying live data or exposing c
       [...(await pool.queryClassic(`SELECT * FROM ${table}`, [])).rows],
       [...original],
     );
-    const db = createTenon({ connection: pool });
-    try {
-      const generation = {
-        namespace: options.namespace,
-        out: join(options.directory, 'definitions.ts'),
-      };
-      await db.generateTypes(generation);
-      await db.generateTypes({ ...generation, check: true });
-    } finally {
-      await db.close();
-    }
+    const configPath = await writeConfig(options.directory, {
+      connection,
+      generate: { namespace: options.namespace, out: join(options.directory, 'definitions.ts') },
+    });
+    await run(process.execPath, [cli, 'generate', '--config', configPath], { env });
+    await run(process.execPath, [cli, 'generate', '--config', configPath, '--check'], { env });
     await rm(join(options.directory, '0001_baseline.up.sql'));
     await assert.rejects(
       run(process.execPath, [cli, 'baseline', 'capture', ...args, '--schema', options.namespace], {

@@ -24,7 +24,10 @@ export async function describeQuery(options: DescribeOptions): Promise<QueryDesc
       ? { parameterTypes: [...options.query.parameterTypes] }
       : {}),
   };
-  const codecs = options.codecs ?? defaultCodecs;
+  const codecs =
+    options.codecs ??
+    (typeof options.connection === 'object' ? options.connection?.codecs : undefined) ??
+    defaultCodecs;
   return withInspectionConnection(options, async (client, context) =>
     queryDescription(await readStatementMetadata(client, query), context, codecs),
   );

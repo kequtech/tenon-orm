@@ -2,7 +2,6 @@ import type { Pool } from '@kequtech/pgclear';
 import type { QueryResult } from './connection.js';
 import type { QueryOptions, QueryOutput, QueryReturnMode } from './query-options.js';
 import type { SqlQuery } from './query.js';
-import type { GenerateTypesOptions } from './generate.js';
 
 export interface QueryClient {
   query<Row extends object>(
@@ -26,8 +25,6 @@ export interface CloseOptions {
 export type Database = Transaction & {
   /** The underlying pool-level driver client; native calls bypass Tenon's query and transaction guards. */
   readonly native: Pool;
-  /** Write or check schema declarations using this instance's configured codecs. */
-  generateTypes(options: GenerateTypesOptions): Promise<void>;
   /** Await all work inside the callback. Commit on success; rollback on an escaping error. */
   transaction<T>(callback: (tx: Transaction) => Promise<T>): Promise<T>;
   close(options?: CloseOptions): Promise<void>;

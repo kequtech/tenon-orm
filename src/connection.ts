@@ -10,6 +10,9 @@ import type { UnknownRow } from './query.js';
 import { plainObject } from './validation.js';
 
 export type ConnectionOptions = PoolOptions;
+/** Connection settings and executable credentials/codecs, without a live pool. */
+export type ConnectionConfig =
+  string | (ConnectionOptions & { readonly acquire?: never; readonly close?: never });
 export type Connection = string | ConnectionOptions | Pool;
 export type QueryResult<Row extends object = UnknownRow> = DriverResult<Row>;
 export type QueryExecutor = <T>(

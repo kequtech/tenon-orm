@@ -8,6 +8,7 @@ import { promisify } from 'node:util';
 import { createPool } from '@kequtech/pgclear';
 
 import { assertTestDatabase, migrationProject, testConnection } from './helpers/database.js';
+import { writeConfig } from './helpers/config.js';
 
 const run = promisify(execFile);
 // Exercise an unpublished driver candidate explicitly without replacing registry dependencies.
@@ -50,6 +51,7 @@ test('the packed package preserves API contracts and consumes generated .d.ts sc
       'dist/check/project.js',
       'dist/inspection/catalog.js',
       'dist/inspection/connection.js',
+      'docs/configuration.md',
       'docs/agent-guide.md',
       'docs/adoption-guide.md',
       'docs/human-guide.md',
@@ -168,8 +170,15 @@ test('the packed package preserves API contracts and consumes generated .d.ts sc
     await writeFile(
       join(consumer, 'copies.ts'),
       `
-      import { sql, type Database, type QueryClient } from '@kequtech/tenon-orm';
+      import { sql, type Database, type QueryClient, type TenonConfig } from '@kequtech/tenon-orm';
       import * as second from './second-tenon/index.js';
+      const configuration: TenonConfig = {
+        connection: {connectionString: 'postgresql://unused', codecs: second.defaultCodecs},
+        generate: {out: 'schema.d.ts'}, migrations: {directory: 'migrations', namespace: 'app'},
+        check: {project: 'tsconfig.json'}, timeouts: {statementMs: 1000},
+      };
+      // @ts-expect-error shared configuration holds connection values, not an open pool
+      const poolConfiguration: TenonConfig = {connection: {} as second.Database['native']};
       declare const db: Database;
       declare const other: second.Database;
       type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
@@ -185,15 +194,8 @@ test('the packed package preserves API contracts and consumes generated .d.ts sc
         const reverse = second.sql.join([sql.fragment\`TRUE\`], 'AND');
         const types: [Assert<Equal<typeof a, { id: number }>>, Assert<Equal<typeof b, { id: number }>>,
           Assert<Equal<typeof c, readonly { id: number }[]>>, Assert<Equal<typeof d, { id: number } | undefined>>] = [true, true, true, true];
-        const generation: Promise<void> = db.generateTypes({ out: 'schema.d.ts', check: true });
-        // @ts-expect-error generation needs an explicit output path
-        await db.generateTypes({ check: true });
-        // @ts-expect-error generation always uses the database instance's codecs
-        await db.generateTypes({ out: 'schema.d.ts', codecs: second.defaultCodecs });
-        await db.transaction(async (tx) => {
-          // @ts-expect-error generation belongs to the database, not a callback transaction
-          await tx.generateTypes({ out: 'schema.d.ts' });
-        });
+        // @ts-expect-error generation is a CLI tool, not a database-instance operation
+        await db.generateTypes({ out: 'schema.d.ts' });
         // @ts-expect-error crossing package copies preserves the input contract
         await fromSecond(db, { id: 'wrong' });
       }
@@ -235,28 +237,12 @@ test('the packed package preserves API contracts and consumes generated .d.ts sc
           ['migrate', '--directory', options.directory, '--namespace', options.namespace],
           commandOptions,
         );
-        const generateUser = () =>
-          run(
-            process.execPath,
-            [
-              '--input-type=module',
-              '-e',
-              `
-              import { createTenon } from '@kequtech/tenon-orm';
-              const db = createTenon({ connection: process.env.DATABASE_URL });
-              try {
-                await db.generateTypes({ namespace: ${JSON.stringify(options.namespace)}, out: 'generated-user.d.ts' });
-                await db.generateTypes({ namespace: ${JSON.stringify(options.namespace)}, out: 'generated-user.d.ts', check: true });
-              } finally {
-                await db.close();
-              }
-            `,
-            ],
-            commandOptions,
-          );
-        const generated = await generateUser();
-        assert.equal(generated.stdout, '');
-        assert.equal(generated.stderr, '');
+        await writeConfig(consumer, {
+          connection: testConnection,
+          generate: { namespace: options.namespace, out: 'generated-user.d.ts' },
+        });
+        await run(cli, ['generate'], commandOptions);
+        await run(cli, ['generate', '--check'], commandOptions);
         await access(join(consumer, 'generated-user.d.ts'));
         await assert.rejects(access(join(consumer, 'generated-user.js')), { code: 'ENOENT' });
         await writeFile(
@@ -378,6 +364,7 @@ ${result.stderr ?? ''}`);
         files: ['queries.ts'],
       }),
     );
+    await writeConfig(production, { connection: testConnection });
     const checked = await run(
       join(production, 'node_modules/.bin/tenon'),
       ['check', 'queries.ts:2', '--json'],

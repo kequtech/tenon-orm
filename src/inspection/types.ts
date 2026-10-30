@@ -1,4 +1,5 @@
 import type { CodecRegistry, DescribeStatement } from '@kequtech/pgclear';
+import type { ConnectionConfig } from '../connection.js';
 
 export interface InspectionSession {
   readonly role?: string | undefined;
@@ -27,8 +28,8 @@ export interface InspectionContext {
 }
 
 export interface DescribeOptions {
-  /** PostgreSQL connection URI. Inspection owns a separate, short-lived connection. */
-  readonly connection: string;
+  /** URI or pool configuration values. Inspection owns a separate, short-lived connection. */
+  readonly connection: ConnectionConfig;
   /** Finished SQL; query values are neither bound nor executed. */
   readonly query: string | DescribeStatement;
   /** Use the same registry as execution; custom decoder types can remain unresolved. */

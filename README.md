@@ -74,7 +74,7 @@ version. For work in an existing project, start with the [agent guide](docs/agen
 - **SQL defines the operation.** Use PostgreSQL joins, aggregates, constraints, and upserts directly.
   Reuse queries with ordinary functions; use fragments when parts of the SQL need to vary.
 - **TypeScript describes the values.** Declare query projections with `sql<Row>`. Optionally generate
-  table read/insert/update types with `db.generateTypes({ out: 'src/generated-schema.d.ts' })`.
+  table read/insert/update types with `tenon generate`.
 - **Transactions define what commits together.** Use `db.transaction(async (tx) => { ... })` and run
   every participating query through `tx`.
 - **Write guards check affected rows.** `{ affectedRows: { exact: 1 } }` rolls back a write unless
@@ -95,6 +95,14 @@ temporal values also default to strings, and JSON/array inputs use explicit enco
 `rowCount` is a number or null. See [value mappings](docs/schema-types.md#value-mappings) before
 choosing application types.
 
+## Share configuration with the CLI
+
+Run `tenon init` to create `tenon.config.ts`, put connection settings and codecs there, and use its
+`connection` in `createTenon`.
+Then run `tenon generate`, `tenon generate --check`, `tenon check`, and `tenon describe query.sql`
+without custom scripts. Migration commands also use the shared connection and migration defaults.
+See [shared configuration](docs/configuration.md) for the complete setup.
+
 ## Documentation
 
 Start with [Getting started](docs/human-guide.md) for a complete table-to-query example. Then choose
@@ -102,6 +110,7 @@ the guide for your task:
 
 | Guide                                                      | What it covers                                                               |
 | ---------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| [Shared configuration](docs/configuration.md)              | Runtime/CLI connection settings, codecs, command defaults, and overrides     |
 | [Writing queries](docs/sql.md)                             | Parameters, reusable functions, joins, aggregates, pagination, and fragments |
 | [Writing data](docs/mutations.md)                          | Inserts, patches, defaults, upserts, JSON, arrays, and batches               |
 | [Schema types and values](docs/schema-types.md)            | Generation, read/write types, codecs, and domain validation                  |

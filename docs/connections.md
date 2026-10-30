@@ -18,7 +18,7 @@ export const db = createTenon({
     connectTimeoutMs: 5000,
     acquireTimeoutMs: 5000,
     idleTimeoutMs: 30_000,
-    startupParameters: { search_path: 'app,public', TimeZone: 'UTC' },
+    startupParameters: { search_path: 'app,public' },
   },
 });
 ```
@@ -27,8 +27,9 @@ export const db = createTenon({
 `ConnectionOptions` is Tenon's alias for `PoolOptions`. Object fields override URI settings.
 Reuse an instance for each database configuration.
 
-The driver does not load environment variables, `.env`, pgpass, or service files. Tenon CLI commands
-read `DATABASE_URL`; application code passes its configuration explicitly. An empty options object
+The driver does not load environment variables, `.env`, pgpass, or service files.
+[Shared configuration](configuration.md) supplies connection values to the CLI and application.
+Migration commands retain `DATABASE_URL` fallback when no config exists. An empty options object
 uses localhost:5432, the current OS user and a database with that user's name.
 
 Use `tls: {}` for TLS with certificate and hostname verification using system trust. Supply the
@@ -97,8 +98,9 @@ These choices apply across the database instance, including callback transaction
 options have no per-query codec override. Input encoders remain separate: a `param(value, codec)`
 carries its own encoder, and passing a Date does not select a Date output decoder.
 
-Use `db.generateTypes` with this instance to inherit its read mappings. Pass the same registry
-explicitly to `describeQuery` and `checkQueries`; their CLI forms use default codecs. See
+Place the registry in shared `connection.codecs` for runtime queries and CLI generation, inspection,
+and checking. Programmatic
+`describeQuery` and `checkQueries` inherit codecs from connection-option values too. See
 [schema types and values](schema-types.md#custom-codecs) for custom representations and Temporal.
 
 ## Observe completed queries

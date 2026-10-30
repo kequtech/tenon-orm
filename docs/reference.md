@@ -23,7 +23,6 @@ The returned `Database` provides:
 | ------------------------ | ---------------------------------------------------------------------------------------- |
 | `query(query, options?)` | Execute a Tenon `SqlQuery` and apply result/count options                                |
 | `transaction(callback)`  | Commit on callback success, roll back on an escaping error; return the callback's result |
-| `generateTypes(options)` | Write or check schema declarations using this instance's pool/codecs                     |
 | `native`                 | The underlying pgclear pool                                                              |
 | `close({ timeoutMs? }?)` | Disable the wrapper and close an owned pool; default grace 5,000 ms                      |
 
@@ -206,16 +205,17 @@ Use codes and structured fields rather than matching message text. Retain unexpe
 
 ## Generated types and checking
 
-```text
-db.generateTypes({ out, namespace?, check?, onWarning? }): Promise<void>
-generateDefinitions({ connection, namespace?, onWarning? }): Promise<string>
+```sh
+tenon generate
+tenon generate --check
 ```
 
-`out` is required for file generation. Namespace defaults to `public`; `check` defaults to false.
-Generation inherits the database registry. Missing/stale output rejects under `check: true` without
-writing. See [schema types and values](schema-types.md) for file guarantees, generated shapes,
-value mappings, codecs, and domain validation. The standalone `tenon generate` command was removed;
-use an application script.
+Generation uses [shared configuration](configuration.md) for its connection/codecs, output path,
+and namespace. Missing/stale output rejects under `--check` without writing. See
+[schema types and values](schema-types.md) for file guarantees, generated shapes, and value mappings.
+`generateDefinitions({ connection, namespace?, onWarning? }): Promise<string>` returns source text
+without file handling for custom tooling. Database instances expose query execution and lifecycle
+methods; generation is a CLI tool.
 
 ### Application aliases
 
@@ -234,15 +234,16 @@ Generated types account for defaults, identity/computed columns, domains, and nu
 
 ## Choosing a validation tool
 
-Use the intended development/test schema and role. TypeScript itself needs no connection.
+Use the intended development/test schema and role through shared configuration. TypeScript itself
+needs no connection.
 
-| Tool                                     | Question answered                                                              | Main limit                                                      |
-| ---------------------------------------- | ------------------------------------------------------------------------------ | --------------------------------------------------------------- |
-| `tsc --noEmit`                           | Does application code satisfy TypeScript contracts?                            | Does not inspect SQL/schema                                     |
-| `tenon check [file.ts[:line]]`           | Does recoverable SQL contradict declared input/result types?                   | Unsupported sites fail; inconclusive properties remain unproven |
-| `tenon describe query.sql`               | What metadata does PostgreSQL report for finished SQL?                         | Does not compare annotations or bind values                     |
-| `db.generateTypes({ out, check: true })` | Does committed output match generation now?                                    | Does not check queries or replace migration status              |
-| Database tests                           | Do exercised queries produce correct rows, effects, permissions, and rollback? | Cover only tested inputs and paths                              |
+| Tool                           | Question answered                                                              | Main limit                                                      |
+| ------------------------------ | ------------------------------------------------------------------------------ | --------------------------------------------------------------- |
+| `tsc --noEmit`                 | Does application code satisfy TypeScript contracts?                            | Does not inspect SQL/schema                                     |
+| `tenon check [file.ts[:line]]` | Does recoverable SQL contradict declared input/result types?                   | Unsupported sites fail; inconclusive properties remain unproven |
+| `tenon describe query.sql`     | What metadata does PostgreSQL report for finished SQL?                         | Does not compare annotations or bind values                     |
+| `tenon generate --check`       | Does committed output match generation now?                                    | Does not check queries or replace migration status              |
+| Database tests                 | Do exercised queries produce correct rows, effects, permissions, and rollback? | Cover only tested inputs and paths                              |
 
 After schema changes, migrate the test database, regenerate/review declarations, and run typechecks,
 applicable source checks, and database tests. In CI, check generated output without replacing it.
@@ -255,7 +256,7 @@ take locks. Neither proves actual bound values or write effects.
 The bundled TypeScript compiler loads only through that path or the check command.
 
 Options are `{ connection, target?, project?, session?, timeouts?, codecs?, readTypes? }`.
-Connection is a URI. The report contains `ok`, `project`, `queries`, `diagnostics`, and available
+Connection is a URI or pool-option values; connection codecs are inherited unless `codecs` is explicit. The report contains `ok`, `project`, `queries`, `diagnostics`, and available
 inspection `context`. Mismatches, unchecked sites, and no sites fail; unproven findings alone do not.
 See [query checking](query-checking.md) for selection, supported composition, and custom decoders.
 
@@ -265,7 +266,7 @@ See [query checking](query-checking.md) for selection, supported composition, an
 describeQuery({ connection, query, session?, timeouts?, codecs? }): Promise<QueryDescription>
 ```
 
-Connection is a URI; query is finished SQL text or `{ text, parameterTypes? }`. A `SqlQuery` fits
+Connection is a URI or pool-option values; query is finished SQL text or `{ text, parameterTypes? }`. A `SqlQuery` fits
 because it has `text`; values and its row annotation are not checked. The report includes
 `parameters`, `columns`, `rowType`, `issues`, and `context`. It uses a separate session with bounded
 timeouts. See [query inspection](query-inspection.md) for fields and finding codes.
@@ -281,7 +282,8 @@ prepared statements, and dedicated notification listeners.
 
 | Symptom                                      | Response                                                                                                                                                     |
 | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `DATABASE_URL is required`                   | Supply the variable to CLI commands. No `.env` files are loaded automatically. Application configuration is explicit.                                        |
+| Missing shared configuration                 | Run `tenon init` or select an existing config with `--config`. Generation, checking, and inspection require it.                                              |
+| `DATABASE_URL is required`                   | Supply the variable for migration commands without config, or from your shared config module. No `.env` files are loaded automatically.                      |
 | `PGCLEAR_ENCODE`                             | Check inputs: objects/arrays need `json`/`param`; direct undefined, unsafe integers, nonfinite numbers, and invalid Dates reject. JSON still rejects bigint. |
 | `CardinalityError`                           | Check the expected row count and predicate. To choose one of several rows, author deterministic `ORDER BY ... LIMIT 1`.                                      |
 | `TENON_AFFECTED_ROWS_MISMATCH`               | The guarded operation rolled back. Inspect `actual` and the predicate; retain the intended bound.                                                            |
@@ -300,15 +302,23 @@ happened; review the transaction contract before adding retries.
 
 ## Command reference
 
-All database commands read `DATABASE_URL`. `new` and `--help` work offline. No environment files
-are loaded. Paths resolve from the working directory; unsupported command flags reject.
+All commands accept `--config path`. `generate`, `check`, and `describe` require
+[shared configuration](configuration.md) and use its connection/codecs. Migration and baseline
+commands use config when present and fall back to `DATABASE_URL` only when no config is found.
+`init` creates config without importing application code; `new` uses the configured migration
+directory without opening a database; `--help` loads no config.
+Config modules may read environment variables, but Tenon loads no `.env` files automatically.
+Configured paths resolve from the config file; CLI path flags resolve from the working directory.
+Unsupported command flags reject.
 
 ```text
+tenon init [--config path]
 tenon new <name> [--directory migrations]
+tenon generate [--out path] [--namespace schema] [--check]
 tenon migrate [--directory migrations] [--namespace public]
 tenon status [--directory migrations] [--namespace public]
 tenon rollback [--directory migrations] [--namespace public] [--steps 1]
-tenon baseline capture [--directory migrations] [--namespace public] [--schema name ...]
+tenon baseline capture [--directory migrations] [--namespace public] [--schema name ...] [--connection native-uri]
 tenon baseline adopt [--directory migrations] [--namespace public]
 tenon check [file.ts[:line]] [--project tsconfig.json] [--json]
   [--role name] [--search-path value] [--time-zone value]
@@ -317,15 +327,17 @@ tenon describe <query.sql> [--role name] [--search-path value] [--time-zone valu
   [--connect-timeout-ms 3000] [--statement-timeout-ms 5000] [--lock-timeout-ms 1000]
 ```
 
-| Command                | Output and behavior                                               |
-| ---------------------- | ----------------------------------------------------------------- |
-| `new`                  | Paths of the new empty up/down pair; fill before applying         |
-| `migrate` / `rollback` | Completed IDs or “nothing to do”; each file commits independently |
-| `status`               | JSON `{ applied, pending }`; validates history                    |
-| `baseline capture`     | Writes a reviewed schema-only baseline using native `pg_dump`     |
-| `baseline adopt`       | Records baseline history without executing its SQL                |
-| `check`                | Diagnostics/counts, or a structured report with `--json`          |
-| `describe`             | JSON metadata, including unresolved findings                      |
+| Command                | Output and behavior                                                                     |
+| ---------------------- | --------------------------------------------------------------------------------------- |
+| `init`                 | Creates a minimal TypeScript or JavaScript config, refusing to overwrite existing files |
+| `new`                  | Paths of the new empty up/down pair; fill before applying                               |
+| `migrate` / `rollback` | Completed IDs or “nothing to do”; each file commits independently                       |
+| `status`               | JSON `{ applied, pending }`; validates history                                          |
+| `baseline capture`     | Writes a reviewed schema-only baseline using native `pg_dump`                           |
+| `baseline adopt`       | Records baseline history without executing its SQL                                      |
+| `generate`             | Writes output atomically; `--check` rejects missing/stale output without writing        |
+| `check`                | Diagnostics/counts, or a structured report with `--json`                                |
+| `describe`             | JSON metadata, including unresolved findings                                            |
 
 Successful commands exit 0. Invalid input or a failed operation exits 1. `check` also exits 1 for
 mismatches, unchecked sites, or no sites; unproven findings alone do not fail. `describe` can exit 0

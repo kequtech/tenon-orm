@@ -5,8 +5,8 @@ Use this as a short workflow for changing an existing Tenon application. For fir
 
 ## Read the project first
 
-Inspect the database module, nearby query functions, migration runner, generated types, and check
-commands. Reuse the application's package manager, connection configuration, namespace, and
+Inspect `tenon.config.ts` (or its JavaScript equivalent), the database module, nearby query
+functions, migration runner, generated types, and check commands. Reuse the application's package manager, connection configuration, namespace, and
 conventions. Read the docs shipped with the installed Tenon version.
 
 For an upgrade, find the previous resolved version in the lockfile and read the
@@ -52,8 +52,9 @@ Plain bigint, valid Date, and supported Temporal inputs are accepted; inputs do 
 decoders. Plain arrays/objects require `json`, `param`, or encoded text. Direct undefined rejects.
 JSON encoding still rejects bigint. Import parameter/codec helpers from Tenon.
 
-Use the application's registry for queries and generation, and pass it explicitly to programmatic
-inspection/checking. Retain application validation, authorization, domain conversion, and retry
+Keep the registry in shared `connection.codecs` so queries and CLI tools agree. Programmatic
+inspection/checking inherit codecs from connection-option values; pass the registry explicitly
+when using a URI. Retain application validation, authorization, domain conversion, and retry
 policy. See [schema types and values](schema-types.md).
 
 ## Change data deliberately
@@ -83,16 +84,11 @@ files or omit an irreversible down file, and apply it. Never change applied SQL;
 both directions. Each file commits separately. Use direct or session pooling for tooling advisory
 locks. See [migrations](migrations.md).
 
-Generate with the configured database instance, after migrations commit:
-
-```ts
-await db.generateTypes({ out: 'src/generated-schema.d.ts', namespace: 'public' });
-```
-
-Use the project's [generation script](human-guide.md#generate-types), review the diff, and commit
-migrations with exact generated output. Keep handwritten aliases separate and generated files out
-of formatting. In CI, migrate the test database and use `check: true` without first regenerating.
-Production consumes committed declarations.
+After migrations commit, run `tenon generate` with the project's
+[shared configuration](configuration.md). Review the diff and commit migrations with exact
+generated output. Keep handwritten aliases separate and generated files out of formatting. In CI,
+migrate the test database and run `tenon generate --check` without first regenerating. Production
+consumes committed declarations.
 
 ## Verify the changed workflow
 
@@ -107,7 +103,9 @@ intentional omission behavior and test it. Narrow to required fields only when a
 establishes that contract; do not cast merely to silence a diagnostic. See
 [responding to findings](query-checking.md#responding-to-findings).
 
-Match the runtime role, search path, timezone, and codecs. Describe uses a separate session and
+Share runtime connection/codecs through `tenon.config.ts`; CLI generation, checking, inspection,
+and migrations read it. Use `--config` for another role/deployment. Match runtime role, search path,
+timezone, and codecs. Describe uses a separate session and
 cannot establish result nullability, JSON members, cardinality, or execution permissions. Native
 calls bypass Tenon's guards/observations and need explicit resource ownership; see
 [connections and driver access](connections.md). For common failures, use

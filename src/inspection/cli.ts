@@ -1,6 +1,3 @@
-import { readFile } from 'node:fs/promises';
-import { describeQuery } from '../describe.js';
-
 export const describeFlags = {
   role: { type: 'string' },
   'search-path': { type: 'string' },
@@ -16,9 +13,9 @@ export function inspectionSettings(
 ) {
   return {
     session: {
-      role: values.role,
-      searchPath: values['search-path'],
-      timeZone: values['time-zone'],
+      ...(values.role !== undefined && { role: values.role }),
+      ...(values['search-path'] !== undefined && { searchPath: values['search-path'] }),
+      ...(values['time-zone'] !== undefined && { timeZone: values['time-zone'] }),
     },
     timeouts: {
       ...(values['connect-timeout-ms'] !== undefined
@@ -32,17 +29,4 @@ export function inspectionSettings(
         : {}),
     },
   };
-}
-
-export async function runDescribe(
-  filename: string,
-  connection: string,
-  values: Partial<Record<keyof typeof describeFlags, string | undefined>>,
-): Promise<void> {
-  const result = await describeQuery({
-    connection,
-    query: await readFile(filename, 'utf8'),
-    ...inspectionSettings(values),
-  });
-  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 }

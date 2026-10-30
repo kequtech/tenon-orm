@@ -6,33 +6,35 @@ the selected columns, joins, and expressions.
 
 ## Generate and check a file
 
-Use the application's configured database instance, after migrations have committed:
+Configure `generate.out` in [shared configuration](configuration.md), then run after migrations
+have committed:
 
-```ts
-await db.generateTypes({ out: 'src/generated-schema.d.ts' });
-await db.generateTypes({ out: 'src/generated-schema.d.ts', check: true });
+```sh
+npx tenon generate
+npx tenon generate --check
 ```
 
-The first call writes declarations. The second rejects if they are missing or stale, without
-rewriting them. Use it in CI to verify committed output. The
-[getting-started script](human-guide.md#generate-types) provides a complete command-line wrapper.
+The first command writes declarations. The second rejects missing or stale output without rewriting
+it. Both use the configured connection and codecs. Relative configured paths resolve from the config
+file; `--out` paths resolve from the working directory. The generation namespace comes from
+`generate.namespace`, then `migrations.namespace`, then `public`; `--namespace` overrides it. It is
+independent of runtime `search_path`.
 
-`namespace` defaults to `public`, independently of runtime `search_path`. Pass it explicitly for a
-different schema. Paths resolve from the working directory. Keep exact output unchanged and exclude
-it from automatic formatting.
+Keep exact output unchanged and exclude it from automatic formatting. See
+[getting started](human-guide.md#generate-types) for npm commands.
 
-Generation uses the instance's pool and codecs. It is available on `db`, outside callback
-transactions. It uses a repeatable-read catalog snapshot and shares the migration advisory lock;
-use a direct or session-pooled connection. It needs no migration files or Tenon history.
+Generation runs outside callback transactions. It uses a repeatable-read catalog snapshot and
+shares the migration advisory lock; use a direct or session-pooled connection. It needs no migration
+files or Tenon history.
 
-Tenon creates parent directories and replaces the entire output file atomically. With `check: true`,
-it creates no directories, writes no files, and includes a bounded diff for stale output. An optional
-`onWarning(message)` can be synchronous or asynchronous; the default is `console.warn`. Warning
-handler failures reject generation before output changes. Other filesystem errors propagate.
+Tenon creates parent directories and replaces the entire output file atomically. With `--check`,
+it creates no directories, writes no files, and includes a bounded diff for stale output. The CLI
+prints warnings to stderr. Generation failures preserve the existing file; filesystem errors propagate.
 
 For source text without file handling, use
 `generateDefinitions({ connection, namespace?, onWarning? }): Promise<string>`. Pass the configured
-pool or connection options to retain runtime read mappings.
+pool or connection options to retain runtime read mappings. Its optional `onWarning` callback may
+be synchronous or asynchronous and defaults to `console.warn`; callback failures reject generation.
 
 ## Read the generated types
 
@@ -196,10 +198,11 @@ checking consume the registry's metadata. An unidentified decoder warns and beco
 a declared representation is trusted, not runtime validation. Under a custom registry, enum output
 may remain string because a decoder can transform labels; enum write inputs retain catalog choices.
 
-Use the same registry for execution, generation, inspection, and source checking. Relative type-import
+Place the registry in shared `connection.codecs` so runtime, CLI generation, inspection, and source
+checking use it consistently. Programmatic inspection/checking inherit `connection.codecs` too. Relative type-import
 expressions resolve from the generated file for saved declarations and from the tsconfig directory
-for checking. Prefer a package or configured alias that resolves in both places. Tenon does not
-execute referenced modules. See [custom-codec checking](query-checking.md#programmatic-use-and-custom-codecs).
+for checking. Prefer a package or configured alias that resolves in both places. Resolving these
+type expressions does not execute their referenced modules. See [custom-codec checking](query-checking.md#programmatic-use-and-custom-codecs).
 
 Catalog queries use default result decoding on the same borrowed session, so application codecs do
 not alter Tenon's metadata inputs. Output codec choices do not select input encoders.
@@ -256,7 +259,7 @@ application's authentication and authorization checks.
 
 ## What freshness checks establish
 
-`check: true` compares the exact generated file with output from this database and codec registry.
+`tenon generate --check` compares the exact generated file with output from this database and codec registry.
 It does not check query annotations, pending migrations, functions, privileges, or every database
 object. A driver or generator update can change output without schema drift. Review generated diffs
 after upgrades. Generated text and schema-summary formatting are not version-stable schema

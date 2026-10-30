@@ -19,12 +19,12 @@ export async function writeDefinitions(
         throw error;
       }
       throw new Error(
-        `Generated definitions file is missing: ${output}\nRun db.generateTypes with the same options and check: false, then commit the result.`,
+        `Generated definitions file is missing: ${output}\nRun tenon generate with the same options, omitting --check, then commit the result.`,
       );
     }
     if (existing !== source) {
       throw new Error(
-        `Generated definitions differ: ${output}\n${definitionDiff(existing, source)}\nRun db.generateTypes with the same options and check: false, then commit the result.`,
+        `Generated definitions differ: ${output}\n${definitionDiff(existing, source)}\nRun tenon generate with the same options, omitting --check, then commit the result.`,
       );
     }
     return;

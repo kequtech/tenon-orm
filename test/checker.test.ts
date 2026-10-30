@@ -10,6 +10,7 @@ import { checkQueries, type CheckOptions, type CheckReport } from '../src/check.
 import { migrate } from '../src/index.js';
 import { qualified, quote } from '../src/sql.js';
 import { assertTestDatabase, migrationProject, testConnection } from './helpers/database.js';
+import { writeConfig } from './helpers/config.js';
 
 const pool = createPool(testConnection);
 before(() => assertTestDatabase(pool));
@@ -798,19 +799,24 @@ test('check CLI supports whole-file and line targeting, JSON reports, exit statu
     },
     async (options, directory) => {
       const cli = resolve('dist/cli.js');
+      await writeConfig(directory, { connection: testConnection });
       const env = { ...process.env, DATABASE_URL: testConnection };
       const good = await run(
         process.execPath,
         [cli, 'check', join(directory, 'queries.ts:2'), '--project', options.project!, '--json'],
-        { env },
+        { env, cwd: directory },
       );
       assert.equal((JSON.parse(good.stdout) as CheckReport).ok, true);
       const text = await run(process.execPath, [cli, 'check', join(directory, 'queries.ts:2')], {
         env,
+        cwd: directory,
       });
       assert.match(text.stdout, /1 queries, 1 analysed, 0 unchecked/);
       await assert.rejects(
-        run(process.execPath, [cli, 'check', '--project', options.project!, '--json'], { env }),
+        run(process.execPath, [cli, 'check', '--project', options.project!, '--json'], {
+          env,
+          cwd: directory,
+        }),
         (error: unknown) => {
           const failed = error as { code: number; stdout: string };
           assert.equal(failed.code, 1);
@@ -819,7 +825,7 @@ test('check CLI supports whole-file and line targeting, JSON reports, exit statu
         },
       );
       await assert.rejects(
-        run(process.execPath, [cli, 'check', '--namespace', 'public'], { env }),
+        run(process.execPath, [cli, 'check', '--namespace', 'public'], { env, cwd: directory }),
         (error: unknown) => {
           assert.match((error as { stderr: string }).stderr, /not supported by check/);
           return true;

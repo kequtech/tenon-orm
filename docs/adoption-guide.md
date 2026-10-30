@@ -15,10 +15,12 @@ Before replacing an ORM, identify behavior it currently supplies: IDs/defaults, 
 validation, hooks, serialization, relationship loading, and transaction boundaries. Preserve needed
 behavior in application code, constraints, or SQL. Tenon has no model lifecycle or implicit loading.
 
+Use [shared configuration](configuration.md) to reuse connection settings and codecs across runtime,
+generation, checking, inspection, and migrations. Keep credentials supplied by the deployment.
+
 ## Replace queries
 
-1. Optionally generate persistence types with
-   `await db.generateTypes({ out: 'src/generated-schema.d.ts', namespace: 'public' })`.
+1. Optionally run `tenon generate` with the application's shared configuration.
    Use the application's schema and codec registry; no Tenon migration history is required.
 2. Replace one workflow at a time with parameterized SQL in ordinary functions. Accept
    `QueryClient` when callers may use either `db` or `tx`. Preserve selected columns, ordering,
@@ -48,8 +50,12 @@ reference database, preferably a disposable replay of the old migrations.
 For an application owning `app` in a shared database:
 
 ```sh
-npx tenon baseline capture --directory migrations --namespace app --schema app
+npx tenon baseline capture --directory migrations --namespace app --schema app --connection "$DATABASE_URL"
 ```
+
+This example supplies the native libpq URI for the same database through `DATABASE_URL`.
+The native connection can instead be stored in `baseline.connection`, and the captured schemas in
+`baseline.schemas`. A string main connection can be used directly. Preserve required native authentication and TLS settings.
 
 The directory must contain no SQL files. Capture uses native
 `pg_dump --schema-only --no-owner --no-privileges` and writes `0001_baseline.up.sql` without a down

@@ -22,16 +22,40 @@ Supply `DATABASE_URL` through your environment setup. For a local example databa
 export DATABASE_URL=postgresql://postgres:postgres@localhost:5432/your_database
 ```
 
-Tenon does not create the database or load `.env` files. Create one shared database module:
+Tenon does not create the database or load `.env` files. Create shared configuration:
+
+```sh
+npx tenon init
+```
+
+The command writes `tenon.config.ts` without opening a database or overwriting existing config:
+
+```ts
+// tenon.config.ts
+import type { TenonConfig } from '@kequtech/tenon-orm';
+
+const connectionString = process.env.DATABASE_URL;
+if (!connectionString) throw new Error('DATABASE_URL is required');
+export default {
+  connection: { connectionString },
+  migrations: { directory: 'migrations', namespace: 'public' },
+  generate: { out: 'src/generated-schema.d.ts' },
+  check: { project: 'tsconfig.json' },
+} satisfies TenonConfig;
+```
+
+Use it in the application too:
 
 ```ts
 // src/db.ts
 import { createTenon } from '@kequtech/tenon-orm';
+import config from '../tenon.config.ts';
 
-const connection = process.env.DATABASE_URL;
-if (!connection) throw new Error('DATABASE_URL is required');
-export const db = createTenon({ connection });
+export const db = createTenon({ connection: config.connection });
 ```
+
+These `.ts` imports use Node.js 24+ TypeScript support. See
+[shared configuration](configuration.md) for import conventions, custom codecs, discovery, and overrides.
 
 Reuse `db` across requests. Call `await db.close()` when a standalone script finishes or a server
 shuts down. See [connections](connections.md) for pool options and application-owned pools.
@@ -166,35 +190,26 @@ savepoints, and retry limits. For object-based inserts and patches, see [writing
 ## Generate types
 
 Generation is optional. It reads the migrated database and writes table read/insert/update types.
-Run it through the configured instance so the types use the same value conversions as your queries:
+The CLI uses the shared connection and codecs from `tenon.config.ts`:
 
-```ts
-// scripts/generate-types.ts
-import { parseArgs } from 'node:util';
-import { db } from '../src/db.ts';
-
-const { values } = parseArgs({ options: { check: { type: 'boolean', default: false } } });
-try {
-  await db.generateTypes({ out: 'src/generated-schema.d.ts', check: values.check });
-} finally {
-  await db.close();
-}
+```sh
+npx tenon generate
+npx tenon generate --check
 ```
 
-This script runs directly on Node.js 24+ using its TypeScript support. For this execution path,
-`src/db.ts` must be runnable without build-time transformations or extension rewriting. If your
-project compiles scripts, use its normal runner and import conventions instead. To typecheck `.ts`
-imports with `noEmit`, enable `allowImportingTsExtensions`; emitting projects can use
-`rewriteRelativeImportExtensions`.
+The second command checks committed output without rewriting it. The namespace comes from
+`generate.namespace`, then `migrations.namespace`, then `public`, independently of runtime
+`search_path`. Generate after migrations have committed.
 
-Add these scripts to your existing `package.json`:
+Add these commands to your existing `package.json`:
 
 ```json
 {
   "scripts": {
-    "db:generate": "node scripts/generate-types.ts",
-    "db:check-types": "npm run db:generate -- --check",
-    "db:migrate": "tenon migrate && npm run db:generate"
+    "db:generate": "tenon generate",
+    "db:check-types": "tenon generate --check",
+    "db:check": "tenon check",
+    "db:migrate": "tenon migrate && tenon generate"
   }
 }
 ```

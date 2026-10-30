@@ -19,19 +19,27 @@ after(() => pool.close());
 const run = promisify(execFile);
 const cli = fileURLToPath(new URL('../src/cli.js', import.meta.url));
 
-test('standalone generation is removed and directs callers to their configured database', async () => {
-  await assert.rejects(run(process.execPath, [cli, 'generate']), (error) => {
-    assert.ok(error instanceof Error && 'stderr' in error);
-    assert.ok('code' in error && error.code === 1);
-    assert.match(String(error.stderr), /Use db.generateTypes/);
-    return true;
+test('generation, checking and inspection require configuration even when DATABASE_URL is set', async () => {
+  await project({}, async (options) => {
+    for (const command of [
+      ['generate', '--out', 'schema.ts'],
+      ['check'],
+      ['describe', 'query.sql'],
+    ]) {
+      await assert.rejects(
+        run(process.execPath, [cli, ...command], {
+          cwd: options.directory,
+          env: { ...process.env, DATABASE_URL: connection },
+        }),
+        (error) => {
+          assert.ok(error instanceof Error && 'stderr' in error);
+          assert.match(String(error.stderr), /configuration is required/);
+          return true;
+        },
+      );
+    }
+    await assert.rejects(readFile(join(options.directory, 'schema.ts')), { code: 'ENOENT' });
   });
-  for (const args of [
-    ['generate', '--out', 'schema.ts'],
-    ['generate', '--check'],
-  ]) {
-    await assert.rejects(run(process.execPath, [cli, ...args]));
-  }
 });
 
 test('flags for other commands reject before changing files or the database', async () => {

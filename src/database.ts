@@ -4,7 +4,6 @@ import { createConnection, executeSql } from './connection.js';
 import { withTransaction } from './transaction.js';
 import type { CloseOptions, Database, QueryEvent } from './types.js';
 import { plainObject } from './validation.js';
-import { generateTypes } from './generate.js';
 
 export interface TenonOptions {
   readonly connection: Connection;
@@ -56,10 +55,6 @@ export function createTenon(options: TenonOptions): Database {
   return {
     ...createClient(query, options.onQuery),
     native: pool,
-    async generateTypes(options) {
-      checkOpen();
-      await generateTypes(pool, options);
-    },
     async transaction(callback) {
       checkOpen();
       return withTransaction(pool, (query) => callback(createClient(query, options.onQuery)));

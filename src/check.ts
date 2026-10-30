@@ -33,7 +33,11 @@ export async function checkQueries(options: CheckOptions): Promise<CheckReport> 
     )
       throw new Error(`Unknown check option: ${name}`);
   }
-  const project = loadProject(options);
+  const codecs =
+    options.codecs ??
+    (typeof options.connection === 'object' ? options.connection?.codecs : undefined) ??
+    defaultCodecs;
+  const project = loadProject({ ...options, codecs });
   const libraries = librarySymbols(project);
   const diagnostics = [...project.diagnostics];
   const queries = project.selected.flatMap((source) =>
@@ -72,7 +76,6 @@ export async function checkQueries(options: CheckOptions): Promise<CheckReport> 
     return { query, variants, diagnostics: analysis.issues };
   });
   const reports: CheckedQuery[] = [];
-  const codecs = options.codecs ?? defaultCodecs;
   const readTypes = { ...options.readTypes };
   for (const oid of Object.keys(readTypes)) {
     if (codecs.typescript(Number(oid)) !== undefined)

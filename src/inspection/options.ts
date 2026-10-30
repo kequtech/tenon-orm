@@ -1,15 +1,12 @@
 import { plainObject } from '../validation.js';
-import type { DescribeOptions } from './types.js';
+import type { DescribeOptions, InspectionSession, InspectionTimeouts } from './types.js';
+import type { ConnectionOptions } from '../connection.js';
 
-/** Validate and capture caller-owned settings before opening a connection. */
-export function inspectionOptions(
-  options: Pick<DescribeOptions, 'connection' | 'session' | 'timeouts'>,
-) {
-  if (typeof options.connection !== 'string' || !options.connection.trim()) {
-    throw new Error('Describe requires an explicit nonempty connection string.');
-  }
-  plainObject(options.session ?? {}, 'Inspection session');
-  const session = { ...options.session };
+const defaults = { connectMs: 3000, statementMs: 5000, lockMs: 1000 };
+
+export function sessionOptions(value: unknown): InspectionSession {
+  const input = plainObject(value, 'Inspection session');
+  const session = { ...input };
   for (const [key, value] of Object.entries(session)) {
     if (!['role', 'searchPath', 'timeZone'].includes(key)) {
       throw new Error(`Unknown inspection session option: ${key}`);
@@ -19,9 +16,12 @@ export function inspectionOptions(
       throw new Error(`Inspection session ${key} requires a nonempty string without NUL.`);
     }
   }
-  plainObject(options.timeouts ?? {}, 'Inspection timeouts');
-  const timeouts = { ...options.timeouts };
-  const defaults = { connectMs: 3000, statementMs: 5000, lockMs: 1000 };
+  return session as InspectionSession;
+}
+
+export function timeoutOptions(value: unknown): InspectionTimeouts {
+  const input = plainObject(value, 'Inspection timeouts');
+  const timeouts = { ...input };
   for (const [key, value] of Object.entries(timeouts)) {
     if (!Object.hasOwn(defaults, key)) throw new Error(`Unknown inspection timeout: ${key}`);
     if (value === undefined) continue;
@@ -29,6 +29,30 @@ export function inspectionOptions(
       throw new Error(`Inspection timeout ${key} must be a positive integer in milliseconds.`);
     }
   }
+  return timeouts as InspectionTimeouts;
+}
+
+/** Validate and capture caller-owned settings before opening a connection. */
+export function inspectionOptions(
+  options: Pick<DescribeOptions, 'connection' | 'session' | 'timeouts'>,
+) {
+  let connection: ConnectionOptions;
+  if (typeof options.connection === 'string') {
+    if (!options.connection.trim())
+      throw new Error('Describe requires an explicit nonempty connection string.');
+    connection = { connectionString: options.connection };
+  } else {
+    plainObject(options.connection, 'Inspection connection');
+    if ('acquire' in options.connection || 'close' in options.connection) {
+      throw new Error('Inspection requires connection options, not an open pool.');
+    }
+    connection = { ...options.connection };
+  }
+  if (connection.startupParameters !== undefined) {
+    plainObject(connection.startupParameters, 'Startup parameters');
+  }
+  const session = sessionOptions(options.session ?? {});
+  const timeouts = timeoutOptions(options.timeouts ?? {});
   const limits = {
     connectMs: timeouts.connectMs ?? defaults.connectMs,
     statementMs: timeouts.statementMs ?? defaults.statementMs,
@@ -36,17 +60,22 @@ export function inspectionOptions(
   };
 
   // URL startup options must not disable the inspection's server-side bounds.
-  let url: URL;
-  try {
-    url = new URL(options.connection);
-  } catch {
-    throw new Error('Describe requires a PostgreSQL connection URI.');
+  if (connection.connectionString !== undefined) {
+    let url: URL;
+    try {
+      url = new URL(connection.connectionString);
+    } catch {
+      throw new Error('Describe requires a PostgreSQL connection URI.');
+    }
+    if (!['postgres:', 'postgresql:'].includes(url.protocol)) {
+      throw new Error('Describe requires a PostgreSQL connection URI.');
+    }
+    if (!url.searchParams.has('application_name') && connection.applicationName === undefined) {
+      url.searchParams.set('application_name', 'tenon-describe');
+    }
+    connection = { ...connection, connectionString: url.toString() };
+  } else if (connection.applicationName === undefined) {
+    connection = { ...connection, applicationName: 'tenon-describe' };
   }
-  if (!['postgres:', 'postgresql:'].includes(url.protocol)) {
-    throw new Error('Describe requires a PostgreSQL connection URI.');
-  }
-  if (!url.searchParams.has('application_name')) {
-    url.searchParams.set('application_name', 'tenon-describe');
-  }
-  return { url, limits, session };
+  return { connection, limits, session };
 }

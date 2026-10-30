@@ -3,7 +3,7 @@ import { writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import type { GenerateOptions } from '../../src/index.js';
-import { createTenon } from '../../src/index.js';
+import { generateDefinitions } from '../../src/index.js';
 
 const run = promisify(execFile);
 
@@ -13,16 +13,8 @@ export async function checkGeneratedTypes(
 ): Promise<void> {
   // Compile a real consumer of newly generated types, not a textual snapshot of
   // declaration syntax. No package build or live connection is needed by the TypeScript consumer.
-  const db = createTenon({ connection: options.connection });
-  try {
-    await db.generateTypes({
-      out: join(options.directory, 'definitions.ts'),
-      ...(options.namespace !== undefined && { namespace: options.namespace }),
-      ...(options.onWarning !== undefined && { onWarning: options.onWarning }),
-    });
-  } finally {
-    await db.close();
-  }
+  const source = await generateDefinitions(options);
+  await writeFile(join(options.directory, 'definitions.ts'), source);
   await writeFile(join(options.directory, 'package.json'), '{"type":"module"}');
   const filename = join(options.directory, 'consumer.ts');
   await writeFile(filename, consumer);

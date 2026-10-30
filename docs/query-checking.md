@@ -4,13 +4,13 @@
 metadata. It can catch a missing result property, an int8 result declared as number, or an unsupported
 bound input. It is optional; normal execution still trusts `sql<Row>` annotations.
 
-The checker reads source without importing the application, evaluating input expressions, binding
-values, or executing application SQL. PostgreSQL still parses/analyzes each recovered statement,
+The CLI imports the selected configuration module; the checker then reads query source without
+importing those modules, evaluating input expressions, binding values, or executing application SQL. PostgreSQL still parses/analyzes each recovered statement,
 which can take locks. Use a representative migrated development/test database.
 
 ## Run a check
 
-Set `DATABASE_URL`, then select a project, file, or one query:
+Create [shared configuration](configuration.md), then select a project, file, or one query:
 
 ```sh
 npx tenon check
@@ -23,15 +23,16 @@ A one-based line selects the complete query containing it, including multiline t
 variable declaration line. A line with no query or multiple queries fails. A fragment alone is not
 a complete query target.
 
-The checker discovers `tsconfig.json` from the target's directory or current working directory.
-Use `--project` for another config or project directory; targets must belong to that project.
+The CLI uses `check.project`, defaulting to `tsconfig.json` beside the shared config. Use `--project`
+for another TypeScript config or project directory; targets must belong to that project. Configured
+paths resolve from the shared config; CLI targets and path flags resolve from the working directory.
 It uses the bundled TypeScript 6 compiler and the project's imports, aliases, indexed access,
 `Pick`, unions, and path mappings. `strictNullChecks` is required. Invalid configuration and compiler
 errors in selected files fail the report.
 
 Match runtime role, search path, timezone, and codecs. Session/timeout flags are the same as
-[Describe](query-inspection.md#cli). CLI checks use default codecs; use the programmatic API for
-a custom registry.
+[Describe](query-inspection.md#cli). CLI checks inherit the shared connection
+and codec registry. Inspection-only session settings and flags override runtime startup settings.
 
 ## What gets checked
 
@@ -166,7 +167,9 @@ if (!report.ok) process.exitCode = 1;
 ```
 
 The report has `ok`, `project`, `queries`, `diagnostics`, and available inspection `context`. Options
-also accept `session`, `timeouts`, `codecs`, and `readTypes`. `connection` is a URI.
+also accept `session`, `timeouts`, `codecs`, and `readTypes`. `connection` is a URI or pool-option
+values; its `codecs` are inherited unless the explicit inspection `codecs` argument is supplied.
+The programmatic API does not discover shared configuration.
 
 For a custom codec, pass the same registry as runtime queries. A text codec may declare its output:
 
@@ -193,7 +196,7 @@ registry representation. It cannot replace known metadata or claim JSON members 
 decoding. Expressions resolve from the tsconfig directory. A codec declaration is trusted output
 metadata, not data validation.
 
-Custom configuration belongs in an application-owned checking script; the checker does not load
-application configuration automatically. Generated-file freshness remains a separate
-`db.generateTypes({ out, check: true })` operation. For behavior tests, see
+The CLI loads the shared configuration for custom codecs; no checking script is required. An
+application-owned script may still call the programmatic API with explicit options. Generated-file
+freshness remains a separate `tenon generate --check` operation. For behavior tests, see
 [query inspection and testing](query-inspection.md).

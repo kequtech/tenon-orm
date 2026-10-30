@@ -5,7 +5,8 @@ import { join, resolve } from 'node:path';
 import { after, before, test } from 'node:test';
 import { promisify } from 'node:util';
 import { builtin, createPool, defaultCodecs } from '@kequtech/pgclear';
-import { createTenon, migrate } from '../src/index.js';
+import { generateDefinitions, migrate } from '../src/index.js';
+import { writeDefinitions } from '../src/generation/output.js';
 import { qualified } from '../src/sql.js';
 import { assertTestDatabase, migrationProject, testConnection } from './helpers/database.js';
 import { checkGeneratedTypes, typeAssertions } from './helpers/generation.js';
@@ -345,23 +346,21 @@ test('generation restores borrowed session settings and temporary state and keep
         const failure = new Error('application warning handler failed');
         const out = join(options.directory, 'definitions.ts');
         const saved = await readFile(out, 'utf8');
-        const db = createTenon({ connection: configured });
-        try {
-          await assert.rejects(
-            db.generateTypes({
+        await assert.rejects(
+          async () => {
+            const source = await generateDefinitions({
+              connection: configured,
               namespace: options.namespace,
-              out,
               onWarning: async () => {
                 await Promise.resolve();
                 throw failure;
               },
-            }),
-            (error) => error === failure,
-          );
-          assert.equal(await readFile(out, 'utf8'), saved);
-        } finally {
-          await db.close();
-        }
+            });
+            await writeDefinitions(source, out, false);
+          },
+          (error) => error === failure,
+        );
+        assert.equal(await readFile(out, 'utf8'), saved);
         // Tooling discards a failed checkout, but the borrowed pool remains application-owned.
         const after = (await configured.queryClassic(state)).rows[0]!;
         assert.deepEqual(

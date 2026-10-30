@@ -162,6 +162,36 @@ test('connection URL session options are preserved while timeout overrides canno
   assert.equal(result.context.lockTimeoutMs, 200);
 });
 
+test('inspection enforces its timeout bounds across startup parameter casing', async () => {
+  const startupParameters = {
+    statement_timeout: '0',
+    Statement_Timeout: '0',
+    lock_timeout: '0',
+    LOCK_TIMEOUT: '0',
+  };
+  const result = await describeQuery({
+    connection: { connectionString: testConnection, startupParameters },
+    query: 'SELECT 1 AS value',
+    timeouts: { statementMs: 400, lockMs: 200 },
+  });
+  assert.equal(result.context.statementTimeoutMs, 400);
+  assert.equal(result.context.lockTimeoutMs, 200);
+  assert.equal(startupParameters.Statement_Timeout, '0');
+  for (const startupParameters of [null, []]) {
+    await assert.rejects(
+      describeQuery({
+        connection: {
+          connectionString: testConnection,
+          // @ts-expect-error simulate untyped configuration
+          startupParameters,
+        },
+        query: 'SELECT 1',
+      }),
+      /Startup parameters must be a plain object/,
+    );
+  }
+});
+
 test('Describe lock and statement timeouts terminate blocked parsing and release the backend', async () => {
   await project(
     { '0001_fixture.up.sql': 'CREATE TABLE blocked (id integer);' },

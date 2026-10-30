@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.3
+
+- Add shared runtime/CLI configuration and offline `tenon init`. Restore `tenon generate`, share migration defaults, and require config for generation/checking/inspection.
+- Remove `db.generateTypes()`. Add native baseline connection/schema defaults and fix inspection timeout overrides and migration-history lookup under custom search paths.
+
 ## 0.4.2
 
 - Rewrite the README and consumer guides around a complete getting-started workflow and task-based navigation.

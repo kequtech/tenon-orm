@@ -13,6 +13,7 @@ import {
   rollback,
   sql,
 } from '../src/index.js';
+import { writeDefinitions } from '../src/generation/output.js';
 import { qualified, quote } from '../src/sql.js';
 import { recordMigrations } from './fixtures/record-migrations.js';
 import {
@@ -438,12 +439,7 @@ test('foreign tables use authored types without affecting ordinary table generat
           source,
         );
         assert.deepEqual(warnings, []);
-        const db = createTenon({ connection: pool });
-        try {
-          await db.generateTypes({ namespace: options.namespace, out: output, check: true });
-        } finally {
-          await db.close();
-        }
+        await writeDefinitions(await generateDefinitions(options), output, true);
         assert.equal(await readFile(output, 'utf8'), source);
         await checkGeneratedTypes(
           options,

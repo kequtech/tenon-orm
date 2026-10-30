@@ -51,30 +51,28 @@ checks do not establish registry availability. Keep local artifact paths out of 
 
 ### Regenerate the fixture
 
-First confirm that `tenon_fixture` is an unused scratch schema:
+First confirm that `tenon_fixture` is an unused scratch schema. Create a temporary `tenon.fixture.config.mjs` in the repository root:
+
+```js
+export default {
+  connection:
+    process.env.TENON_TEST_DATABASE_URL ??
+    'postgresql://postgres:postgres@localhost:5432/tenon_orm_test',
+  migrations: { directory: 'test/fixtures/migrations', namespace: 'tenon_fixture' },
+  generate: { out: 'test/fixtures/generated-schema.ts' },
+};
+```
 
 ```sh
 npm run build
-export DATABASE_URL=postgresql://postgres:postgres@localhost:5432/tenon_orm_test
-node dist/cli.js migrate --directory test/fixtures/migrations --namespace tenon_fixture
-node --input-type=module <<'JS'
-import { createTenon } from './dist/index.js';
-
-const db = createTenon({ connection: process.env.DATABASE_URL });
-try {
-  await db.generateTypes({
-    namespace: 'tenon_fixture',
-    out: 'test/fixtures/generated-schema.ts',
-  });
-} finally {
-  await db.close();
-}
-JS
+node dist/cli.js migrate --config tenon.fixture.config.mjs
+node dist/cli.js generate --config tenon.fixture.config.mjs
+node dist/cli.js generate --config tenon.fixture.config.mjs --check
 ```
 
-Generation uses the instance's pool/codecs; `check: true` verifies without rewriting. Remove the
-scratch schema afterward. Replay changed fixture migrations into a fresh schema. Application
-migration history remains immutable.
+Generation uses the configured connection/codecs. Remove the scratch schema and temporary config
+afterward. Replay changed fixture migrations into a fresh schema. Application migration history
+remains immutable.
 
 ## Source layout
 
@@ -88,6 +86,7 @@ migration history remains immutable.
 | Migration files, history, locks, baselines              | `src/migrations.ts`, `src/migrations/`, `src/baseline.ts`       |
 | Describe sessions, metadata, reports                    | `src/describe.ts`, `src/inspection/`                            |
 | Source discovery, composition recovery, type comparison | `src/check/`                                                    |
+| Config values, discovery, initialization                | `src/config.ts`, `src/config/`                                  |
 | CLI dispatch                                            | `src/cli.ts`                                                    |
 
 Pgclear owns execution, Describe, conversion, and recovery. Tenon owns SQL composition, database

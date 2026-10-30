@@ -12,6 +12,7 @@ import { createTenon, describeQuery, identifier, migrate, sql, unsafeSql } from 
 import type { SqlQuery, UnknownRow } from '../src/index.js';
 import { qualified, quote } from '../src/sql.js';
 import { assertTestDatabase, migrationProject, testConnection } from './helpers/database.js';
+import { writeConfig } from './helpers/config.js';
 
 const pool = createPool({ connectionString: testConnection });
 const project = migrationProject(pool);
@@ -623,6 +624,7 @@ test('CLI describes a parameterized SQL file and reports failures as a nonzero e
   const cli = resolve('.test-dist/src/cli.js');
   const env = { ...process.env, DATABASE_URL: testConnection };
   try {
+    await writeConfig(directory, { connection: testConnection });
     await writeFile(file, 'SELECT $1::integer AS id, count(*) AS total FROM pg_catalog.pg_class');
     const result = await run(
       process.execPath,
@@ -639,7 +641,7 @@ test('CLI describes a parameterized SQL file and reports failures as a nonzero e
         '--lock-timeout-ms',
         '100',
       ],
-      { env },
+      { env, cwd: directory },
     );
     const output = JSON.parse(result.stdout) as {
       columns: { name: string; readType: string }[];
@@ -664,22 +666,35 @@ test('CLI describes a parameterized SQL file and reports failures as a nonzero e
     assert.equal(output.context.statementTimeoutMs, 800);
     assert.equal(output.context.lockTimeoutMs, 100);
     for (const flags of [['--namespace', 'public'], ['--directory', directory], ['--check']]) {
-      await assert.rejects(run(process.execPath, [cli, 'describe', file, ...flags], { env }), {
-        code: 1,
-      });
+      await assert.rejects(
+        run(process.execPath, [cli, 'describe', file, ...flags], { env, cwd: directory }),
+        {
+          code: 1,
+        },
+      );
     }
-    await assert.rejects(run(process.execPath, [cli, 'describe'], { env }), { code: 1 });
-    await assert.rejects(run(process.execPath, [cli, 'describe', file, file], { env }), {
+    await assert.rejects(run(process.execPath, [cli, 'describe'], { env, cwd: directory }), {
       code: 1,
     });
     await assert.rejects(
-      run(process.execPath, [cli, 'describe', file, '--connect-timeout-ms', '0'], { env }),
+      run(process.execPath, [cli, 'describe', file, file], { env, cwd: directory }),
+      {
+        code: 1,
+      },
+    );
+    await assert.rejects(
+      run(process.execPath, [cli, 'describe', file, '--connect-timeout-ms', '0'], {
+        env,
+        cwd: directory,
+      }),
       {
         code: 1,
       },
     );
     await writeFile(file, 'SELECT no_such_column FROM pg_catalog.pg_class');
-    await assert.rejects(run(process.execPath, [cli, 'describe', file], { env }), { code: 1 });
+    await assert.rejects(run(process.execPath, [cli, 'describe', file], { env, cwd: directory }), {
+      code: 1,
+    });
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

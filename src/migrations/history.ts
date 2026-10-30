@@ -1,4 +1,4 @@
-import type { Session } from '@kequtech/pgclear';
+import { defaultCodecs, type Session } from '@kequtech/pgclear';
 import { qualified } from '../sql.js';
 import type { SqlMigration } from './files.js';
 
@@ -15,8 +15,9 @@ export async function migrationState(
   migrations: readonly SqlMigration[],
 ): Promise<readonly AppliedMigration[]> {
   const exists = await client.queryClassic<{ name: string | null }>(
-    'SELECT to_regclass($1)::text AS name',
+    'SELECT pg_catalog.to_regclass($1)::text AS name',
     [qualified(namespace, migrationTable)],
+    { codecs: defaultCodecs },
   );
   if (exists.rows[0]!.name === null) {
     return [];
@@ -24,6 +25,7 @@ export async function migrationState(
   const { rows: applied } = await client.queryClassic<AppliedMigration>(
     `SELECT id, name, checksum FROM ${qualified(namespace, migrationTable)} ORDER BY id::numeric`,
     [],
+    { codecs: defaultCodecs },
   );
   for (const [i, record] of applied.entries()) {
     const file = migrations[i];

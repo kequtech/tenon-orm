@@ -10,8 +10,10 @@ you intend to [transfer migration ownership](adoption-guide.md#transfer-migratio
 npx tenon new add_user_display_name
 ```
 
-`new` works offline. It creates the next numeric pair in `migrations/`, starting at `0001` in an empty
-directory. For a directory whose latest migration is `0001`:
+`new` opens no database connection. It creates the next numeric pair in the configured migration
+directory, defaulting to `migrations/`, and starts at `0001` in an empty directory. As with other
+commands, importing your config may require its environment values. For a directory whose latest
+migration is `0001`:
 
 ```sql
 -- migrations/0002_add_user_display_name.up.sql
@@ -23,7 +25,8 @@ ALTER TABLE public.users ADD COLUMN display_name text;
 ALTER TABLE public.users DROP COLUMN display_name;
 ```
 
-Set `DATABASE_URL` through your environment, then run:
+Configure `connection` and migration directory/namespace in [shared configuration](configuration.md).
+Without config, migration commands retain the `DATABASE_URL` workflow. Then run:
 
 ```sh
 npx tenon status
@@ -82,8 +85,12 @@ may not be recoverable. Use the application's backup and recovery procedure when
 
 ## Directory, schema, and locking
 
-Defaults are `--directory migrations` and `--namespace public`. For a custom schema, use the same
-options consistently:
+Set `migrations: { directory: 'db/migrations', namespace: 'app' }` in shared configuration to use
+the same defaults for creation, status, migration, and rollback. Generation inherits that namespace
+unless `generate.namespace` is set. Without configured values, defaults are directory `migrations`
+and namespace `public`.
+
+CLI flags override the config for an individual command:
 
 ```sh
 npx tenon new add_setting --directory db/migrations
@@ -95,7 +102,7 @@ npx tenon rollback --directory db/migrations --namespace app --steps 1
 The namespace selects history location, migration search path, and lock scope. During a file,
 `search_path` is `<namespace>, pg_catalog`; qualify cross-schema names explicitly. The runner creates
 the namespace when applying pending migrations. It does not configure runtime application queries.
-Pass the matching namespace to type generation when generating that schema.
+Keep generation on the same namespace, through the shared default or an explicit override.
 
 Migration and adoption operations use an exclusive session advisory lock for this database and
 namespace. Status and generation use a shared lock. Different namespaces have independent lock

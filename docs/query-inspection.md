@@ -7,10 +7,11 @@ compare TypeScript source annotations instead, use [query checking](query-checki
 ## Inspect completed SQL
 
 ```ts
+// scripts/inspect-query.ts
 import { describeQuery, sql } from '@kequtech/tenon-orm';
+import config from '../tenon.config.ts';
 
-const connection = process.env.DATABASE_URL;
-if (!connection) throw new Error('DATABASE_URL is required');
+const connection = config.connection;
 
 const query = sql<{ id: number; total: string }>`
   SELECT ${42}::integer AS id, count(*) AS total FROM pg_catalog.pg_class
@@ -28,8 +29,8 @@ and analyzes the statement, which can take locks.
 
 ## Session and timeouts
 
-Inspection opens and closes its own short-lived session. `connection` must be a PostgreSQL URI;
-it does not inherit a runtime pool or transaction:
+Inspection opens and closes its own short-lived session. `connection` accepts a PostgreSQL URI or pgclear pool-option values;
+it does not reuse a runtime pool or transaction:
 
 ```ts
 const description = await describeQuery({
@@ -83,7 +84,8 @@ members remain unknown.
 
 ## Custom codecs
 
-Pass the runtime registry as `codecs` to report its read representations; omission uses defaults:
+Programmatic inspection inherits `connection.codecs` when connection-option values are supplied.
+With a URI, pass the runtime registry as `codecs`; omission uses defaults:
 
 ```ts
 import { builtin, defaultCodecs } from '@kequtech/tenon-orm';
@@ -157,11 +159,12 @@ npx tenon describe query.sql
 npx tenon describe query.sql --search-path app,public --time-zone UTC
 ```
 
-The CLI reads `DATABASE_URL` and prints JSON using default codecs. Session flags are `--role`,
+The CLI requires [shared configuration](configuration.md) and prints JSON using its connection
+and codec registry. Pass `--config path` to select a specific module. Session flags are `--role`,
 `--search-path`, and `--time-zone`; timeout flags are `--connect-timeout-ms`,
 `--statement-timeout-ms`, and `--lock-timeout-ms`. Unsupported flags, including `--namespace` and
 `--check`, reject.
 
 Exit 0 means inspection succeeded, even with unresolved findings. Input, connection, timeout, or
 PostgreSQL analysis failures exit 1. The inspected statement is never executed. Generated-file
-freshness uses `db.generateTypes({ out, check: true })`, a separate operation.
+freshness uses `tenon generate --check`, a separate operation.

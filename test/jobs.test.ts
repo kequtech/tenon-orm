@@ -12,7 +12,14 @@ test('definitions and facade access are inert without configuration or Jobs stor
   assert.equal(db.jobs, db.jobs);
   const controller = new AbortController();
   controller.abort();
-  await db.jobs.run([definition], { signal: controller.signal });
+  let ready = false;
+  await db.jobs.run([definition], {
+    signal: controller.signal,
+    onReady() {
+      ready = true;
+    },
+  });
+  assert.equal(ready, false);
   await db.close();
   await assert.rejects(db.jobs.run([definition], { signal: controller.signal }), /closed/);
   await assert.rejects(db.jobs.sendMany(definition, []), /closed/);

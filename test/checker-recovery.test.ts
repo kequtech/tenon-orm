@@ -331,3 +331,59 @@ test('factory expansion retains variant/depth limits and runtime rejection of em
     },
   );
 });
+
+test('branch-dependent inserts expose an unsupported shape and explicit branches restore checking', async () => {
+  await project(
+    {
+      '0001_assets.up.sql':
+        'CREATE TABLE scenarios (id integer PRIMARY KEY, image jsonb); CREATE TABLE characters (id integer PRIMARY KEY, profile jsonb, likeness jsonb);',
+    },
+    async (database) => {
+      await migrate(database);
+      await sourceProject(
+        {
+          'queries.ts': [
+            imports,
+            "import { json, type Parameter } from '@kequtech/tenon-orm';",
+            'throw new Error("Application source must not execute");',
+            'declare const client: QueryClient;',
+            'export function conditional(kind: "scenario" | "character") {',
+            'const table = kind === "scenario" ? "scenarios" : "characters";',
+            `return client.query(sql\`INSERT INTO \${identifier(${JSON.stringify(database.namespace)}, table)} \${sql.insertValues({id: 1, ...(kind === "scenario" ? {image: json({})} : {profile: json({}), likeness: json({})})})}\`, {label: 'asset.conditional'});`,
+            '}',
+            'type ScenarioInput = {id: number; image: Parameter};',
+            'type CharacterInput = {id: number; profile: Parameter; likeness: Parameter};',
+            'export function explicit(kind: "scenario" | "character") {',
+            'if (kind === "scenario") {',
+            `return client.query(sql\`INSERT INTO \${identifier(${JSON.stringify(database.namespace)}, 'scenarios')} \${sql.insertValues<ScenarioInput>({id: 1, image: json({})}, ['id', 'image'])}\`, {label: 'asset.scenario'});`,
+            '}',
+            `return client.query(sql\`INSERT INTO \${identifier(${JSON.stringify(database.namespace)}, 'characters')} \${sql.insertValues<CharacterInput>({id: 1, profile: json({}), likeness: json({})}, ['id', 'profile', 'likeness'])}\`, {label: 'asset.character'});`,
+            '}',
+          ].join('\n'),
+        },
+        async (options, directory) => {
+          const report = await checkQueries(options);
+          assert.deepEqual(report.coverage, { total: 3, analysed: 2, unchecked: 1 });
+          const unsupported = report.queries.find((query) => query.label === 'asset.conditional')!;
+          assert.equal(unsupported.status, 'unchecked');
+          assert.equal(unsupported.diagnostics[0]!.code, 'expansion-type-required');
+          assert.equal(errors(report).length, 1);
+          for (const query of report.queries.filter((query) => query.status === 'analysed')) {
+            const isolated = await checkQueries({
+              ...options,
+              target: `${join(directory, 'queries.ts')}:${query.line}`,
+            });
+            assert.equal(isolated.ok, true, JSON.stringify(errors(isolated)));
+          }
+          for (const table of ['scenarios', 'characters']) {
+            assert.equal(
+              (await pool.queryClassic(`SELECT * FROM "${database.namespace}"."${table}"`)).rows
+                .length,
+              0,
+            );
+          }
+        },
+      );
+    },
+  );
+});

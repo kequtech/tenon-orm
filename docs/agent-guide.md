@@ -98,8 +98,8 @@ See [validation tools](reference.md#choosing-a-validation-tool).
 
 The checker fails on definite mismatches and unchecked sites; unproven properties remain notes.
 Fixed composition is supported within bounded variants. Object expansion needs an explicit finite
-shape with required, defined selected fields; optional generated patches may be unchecked. Keep
-intentional omission behavior and test it. Narrow to required fields only when application validation
+shape; optional fields produce bounded variants. Open shapes and queries exceeding the variant
+budget remain unchecked. Keep intentional omission behavior and test it. Narrow to required fields only when application validation
 establishes that contract; do not cast merely to silence a diagnostic. See
 [responding to findings](query-checking.md#responding-to-findings).
 

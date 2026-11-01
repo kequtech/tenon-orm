@@ -73,7 +73,14 @@ try {
   assert.deepEqual(await db.jobs.find(child), []);
   const cancelled = await db.jobs.send(refresh, { id: 1 }, { delayMs: 60000 });
   await db.jobs.cancel(cancelled.id);
-  running = db.jobs.run([refresh], { signal: stop.signal, pollIntervalMs: 10 });
+  let ready = false;
+  running = db.jobs.run([refresh], {
+    signal: stop.signal,
+    pollIntervalMs: 10,
+    onReady() {
+      ready = true;
+    },
+  });
   void running.catch(() => {});
   const end = performance.now() + 8000;
   while ((await db.jobs.get(job.id)).state !== 'completed') {
@@ -82,6 +89,7 @@ try {
   }
   stop.abort();
   await running;
+  assert.equal(ready, true);
   assert.equal(attempts, 2);
   assert.deepEqual(await db.query(sql`SELECT * FROM project`, { returns: 'many' }), [
     { id: 1, revision: 1 },

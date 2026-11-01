@@ -118,6 +118,7 @@ the guide for your task:
 | [Writing queries](docs/sql.md)                             | Parameters, reusable functions, joins, aggregates, pagination, and fragments |
 | [Writing data](docs/mutations.md)                          | Inserts, patches, defaults, upserts, JSON, arrays, and batches               |
 | [Schema types and values](docs/schema-types.md)            | Generation, read/write types, codecs, and domain validation                  |
+| [Reliable job workflows](docs/job-workflows.md)            | Atomic follow-ups, application results, external effects, and concurrency    |
 | [Durable jobs](docs/jobs.md)                               | Typed definitions, atomic submissions, worker lifecycle, and storage setup   |
 | [Migrations](docs/migrations.md)                           | Creating, applying, inspecting, and rolling back SQL migrations              |
 | [Connections and driver access](docs/connections.md)       | Pool configuration, shutdown, custom codecs, and native features             |

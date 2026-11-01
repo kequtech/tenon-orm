@@ -153,7 +153,8 @@ const result = await db.native.queryClassic('SELECT $1::integer AS value', [42])
 ```
 
 Native calls bypass Tenon's result modes, affected-row guards, SQL boundary checks, and `onQuery`.
-They do not join a Tenon callback transaction. A callback's `tx` exposes only `query`.
+They do not join a Tenon callback transaction. Use `tx.query` and `tx.jobs` for operations that
+participate in that transaction.
 
 Use the public driver session APIs and release held leases. For example:
 

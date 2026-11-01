@@ -7,7 +7,8 @@ For a complete first setup, follow [Getting started](human-guide.md). Task guide
 ## Installation and connection
 
 Requires Node.js 24+, PostgreSQL 16+, and ESM. TypeScript consumers need TypeScript 6+ and Node.js
-development typings. Install `@kequtech/tenon-orm`; pgclear and pgclear-jobs are included as runtime dependencies.
+development typings. Install `@kequtech/tenon-orm`; pgclear and pgclear-jobs are included as runtime
+dependencies.
 
 ```text
 createTenon(config: TenonConfig): Database
@@ -179,10 +180,15 @@ Use `tx` for every participating query and await all work. The callback commits 
 back on an escaping error, and its client expires when the callback finishes. Transactions belong
 to one database instance. Calling the root `db` uses the pool, not the callback session.
 
-Tenon owns BEGIN/COMMIT/ROLLBACK; direct boundary statements are rejected. `tx` provides no nested
-transaction method. Manual savepoints are supported on the callback session. To choose isolation,
-issue `SET TRANSACTION ISOLATION LEVEL SERIALIZABLE` before data queries; use
-`SET LOCAL statement_timeout = '5s'` to bound statements in that transaction.
+Use `db.transaction(callback, options?)` to manage transaction boundaries; direct BEGIN/COMMIT/ROLLBACK
+statements are rejected. `tx` provides no nested transaction method. Manual savepoints are supported
+on the callback session.
+
+The optional pgclear `TransactionOptions` are `signal`, `timeoutMs`, `isolation`, `readOnly` and
+`deferrable`. Tenon forwards them through acquisition, execution and commit and preserves original
+driver/aggregate errors. For example, pass `{ isolation: 'serializable', timeoutMs: 5000 }` as the
+second argument. Use `SET LOCAL statement_timeout` when a separate server-side statement limit is
+needed.
 
 A write guard is exactly one of `{ exact: n }` or `{ max: n }`, with a nonnegative safe integer.
 It checks the final INSERT/UPDATE/DELETE/MERGE count, independently of `RETURNING`:
@@ -197,8 +203,9 @@ transaction aborted; let it escape so the callback rolls back. Tenon serializes 
 operations within a transaction, including savepoint handling.
 
 Counts exclude extra trigger/cascade and CTE effects and cannot identify the wrong single row.
-Sequence advances and external effects may survive rollback. There are no automatic retries. A lost
-COMMIT acknowledgment can leave the outcome unknown; the application owns retry/idempotency policy.
+Sequence advances and external effects may survive rollback. Tenon does not retry query or
+transaction callbacks. A lost COMMIT acknowledgment can leave the outcome unknown; the application
+owns reconciliation and retry/idempotency policy.
 
 | Error                               | Code and fields                                                                                                                 |
 | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
@@ -320,15 +327,15 @@ to select its export. A file with one config is selected automatically; multiple
 explicit selection. `generate`, `check`, and `describe` require
 [shared configuration](configuration.md) and use its connection/codecs. Migration and baseline
 commands use config when present and fall back to `DATABASE_URL` only when no config is found.
-`init` creates config without importing application code; `new` uses the configured migration
-directory without opening a database; `--help` loads no config. Config modules may read environment variables, but Tenon loads no `.env`
-files automatically.
-Configured paths resolve from the config file; CLI path flags resolve from the working directory.
-Unsupported command flags reject.
+`init` creates config without importing application code; `new` and `jobs setup` use the configured
+migration directory without opening a database; `--help` loads no config. Config modules may read
+environment variables, but Tenon loads no `.env` files automatically. Configured paths resolve from
+the config file; CLI path flags resolve from the working directory. Unsupported command flags reject.
 
 ```text
 tenon init [--config path]
 tenon new <name> [--directory migrations]
+tenon jobs setup [--directory migrations]
 tenon schema [--namespace schema]
 tenon generate [--out path] [--namespace schema] [--check]
 tenon migrate [--directory migrations] [--namespace public]
@@ -347,6 +354,7 @@ tenon describe <query.sql> [--role name] [--search-path value] [--time-zone valu
 | ---------------------- | --------------------------------------------------------------------------------------- |
 | `init`                 | Creates a minimal TypeScript or JavaScript config, refusing to overwrite existing files |
 | `new`                  | Paths of the new empty up/down pair; fill before applying                               |
+| `jobs setup`           | Paths of concrete Jobs migration files; preserves an existing generated pair            |
 | `migrate` / `rollback` | Completed IDs or “nothing to do”; each file commits independently                       |
 | `status`               | JSON `{ applied, pending }`; validates history                                          |
 | `schema`               | Emits a versioned catalog snapshot and fingerprint; requires shared configuration       |
@@ -365,9 +373,10 @@ Baseline APIs and prerequisites are in [adoption](adoption-guide.md#baseline-api
 
 ## Jobs
 
-Set `jobs: true` in `TenonConfig` to enable the stable `db.jobs`/`tx.jobs` facades; default false.
-`db.jobs.run(definitions, options?)` forwards worker lifecycle to pgclear-jobs. Transactions expose
-only record operations. `defineJob` and transaction-bearing definition/context types use the ORM
+Set `jobs: true` in `TenonConfig` to enable `db.jobs`/`tx.jobs` operations; default false.
+`db.jobs.run(definitions, options?)` forwards worker lifecycle to pgclear-jobs, including the
+`onReady` startup callback. Its returned promise represents the full worker lifetime. The `tx.jobs`
+facade exposes only record operations. `defineJob` and transaction-bearing definition/context types use the ORM
 transaction. See [durable jobs](jobs.md) for the complete contract and setup.
 
 `tenon jobs setup [--directory migrations] [--config path] [--database export]` writes a concrete
@@ -375,5 +384,5 @@ numbered migration pair without a database connection. Programmatic
 `createJobsMigration({ directory? })` returns `{ id, upPath, downPath, created }`. Repeated setup
 preserves existing files. Schema changes require an application-authored migration.
 
-`db.transaction(callback, options?)` forwards pgclear `TransactionOptions`: `signal`, `timeoutMs`,
-`isolation`, `readOnly`, and `deferrable`. Original driver/aggregate errors propagate.
+For business operation identity, atomic follow-ups, external-effect compensation, keyed work and
+shared database ownership, see [reliable application job workflows](job-workflows.md).

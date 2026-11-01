@@ -279,6 +279,65 @@ test('handler writes, child submissions and completion are atomic across retries
   }
 });
 
+test('distinct jobs for one business request retain one durable result and follow-up after pruning', async (t) => {
+  const requests = identifier(namespace, `requests_${name().replaceAll('-', '')}`);
+  const notes = identifier(namespace, `notes_${name().replaceAll('-', '')}`);
+  await db.query(sql`CREATE TABLE ${requests} (id uuid PRIMARY KEY, note_id uuid)`);
+  await db.query(sql`CREATE TABLE ${notes} (id uuid PRIMARY KEY, body text NOT NULL)`);
+  const requestId = randomUUID();
+  await db.query(sql`INSERT INTO ${requests} (id) VALUES (${requestId})`);
+  const analysis = defineJob({ name: name(), handler(_payload: { requestId: string }) {} });
+  const finalize = defineJob({
+    name: name(),
+    transactional: true,
+    async handler(payload: { requestId: string; noteId: string; text: string }, { tx }) {
+      const request = await tx.query(
+        sql<{ note_id: string | null }>`
+        SELECT note_id FROM ${requests} WHERE id = ${payload.requestId} FOR UPDATE`,
+        { returns: 'one' },
+      );
+      if (request.note_id !== null) return;
+      await tx.query(sql`INSERT INTO ${notes} VALUES (${payload.noteId}, ${payload.text})`);
+      await tx.query(
+        sql`UPDATE ${requests} SET note_id = ${payload.noteId} WHERE id = ${payload.requestId}`,
+        { affectedRows: { exact: 1 } },
+      );
+      await tx.jobs.request(analysis, { requestId: payload.requestId }, { key: payload.requestId });
+    },
+  });
+  const parents = await Promise.all(
+    [1, 2].map(() =>
+      db.jobs.send(finalize, { requestId, noteId: randomUUID(), text: 'prepared result' }),
+    ),
+  );
+  assert.notEqual(parents[0]!.id, parents[1]!.id);
+  const { stop, running } = start(t, finalize, { concurrency: 2 });
+  await until(async () => (await db.jobs.stats(finalize)).completed === 2);
+  stop.abort();
+  await running;
+  const results = await db.query(sql<{ id: string; body: string }>`SELECT * FROM ${notes}`, {
+    returns: 'many',
+  });
+  assert.equal(results.length, 1);
+  const stored = await db.query(
+    sql<{ note_id: string }>`SELECT note_id FROM ${requests} WHERE id = ${requestId}`,
+    { returns: 'one' },
+  );
+  assert.equal(stored.note_id, results[0]!.id);
+  assert.equal((await db.jobs.find(analysis)).length, 1);
+  assert.equal(
+    await db.jobs.prune(finalize, { before: new Date(Date.now() + 1000), states: ['completed'] }),
+    2,
+  );
+  assert.equal((await db.jobs.find(finalize)).length, 0);
+  assert.equal((await db.query(sql`SELECT * FROM ${notes}`, { returns: 'many' })).length, 1);
+  assert.equal(
+    (await db.query(sql<{ note_id: string }>`SELECT note_id FROM ${requests}`, { returns: 'one' }))
+      .note_id,
+    stored.note_id,
+  );
+});
+
 for (const reason of ['deadline', 'shutdown', 'ownership'] as const) {
   test(`${reason} rolls back writes and expires a transaction while its handler ignores cancellation`, async (t) => {
     const app = await table();
@@ -352,6 +411,52 @@ test('graceful shutdown lets accepted work finish and leaves the application poo
   } finally {
     release.resolve();
   }
+});
+
+test('runner readiness is forwarded before dispatch and preserves startup callback errors', async (t) => {
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  let calls = 0;
+  let readyCalls = 0;
+  const def = defineJob({
+    name: name(),
+    handler(_payload: number) {
+      calls++;
+    },
+  });
+  const job = await db.jobs.send(def, 1);
+  const { stop, running } = start(t, def, {
+    async onReady() {
+      readyCalls++;
+      entered.resolve();
+      await release.promise;
+    },
+  });
+  try {
+    await entered.promise;
+    assert.equal(calls, 0);
+    assert.equal((await db.jobs.get(job.id))?.state, 'pending');
+    release.resolve();
+    await until(async () => (await db.jobs.get(job.id))?.state === 'completed');
+    stop.abort();
+    await running;
+    assert.equal(calls, 1);
+    assert.equal(readyCalls, 1);
+  } finally {
+    release.resolve();
+    stop.abort();
+    await running;
+  }
+  const failure = new Error('application startup failed');
+  await assert.rejects(
+    db.jobs.run([def], {
+      onReady() {
+        throw failure;
+      },
+    }),
+    (error) => error === failure,
+  );
+  assert.equal((await pool.queryClassic('SELECT 1')).rows.length, 1);
 });
 
 test('permanent errors roll back writes and retain Jobs error semantics', async (t) => {

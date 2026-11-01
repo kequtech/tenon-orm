@@ -36,38 +36,19 @@ Test observable workflows, function behavior, and compiler contracts. Add focuse
 bugs. Avoid tests coupled to prose wording or matching strings in SQL when a database assertion can
 establish the behavior.
 
-### Test an unpublished driver candidate
+### Test local dependency candidates
 
-Install a fresh pgclear tarball without changing the lockfile, and pass the same artifact to
+Install locally packed dependencies without saving their paths, then select the same artifacts for
 packed-consumer tests:
-
-```sh
-npm install --no-save --package-lock=false --ignore-scripts /absolute/path/pgclear-candidate.tgz
-TENON_TEST_PGCLEAR_TARBALL=/absolute/path/pgclear-candidate.tgz npm run check
-```
-
-The consumer harness overrides Tenon's transitive dependency for this candidate. Ordinary checks
-use the declared registry dependency. A coordinated unpublished patch may prepare a registry lock
-entry using the final candidate's actual integrity; keep local paths out of committed dependencies.
-Candidate checks do not establish registry availability. Before releasing Tenon, publish pgclear
-first, verify its registry integrity against the lockfile, then run `npm ci` and ordinary checks.
-Refresh the lockfile and rerun checks if the published artifact differs.
-
-### Test unpublished Jobs and driver candidates
-
-Pack both repositories locally, then install both artifacts together without saving local paths:
 
 ```sh
 npm install --no-save --package-lock=false --ignore-scripts /absolute/path/pgclear.tgz /absolute/path/pgclear-jobs.tgz
 TENON_TEST_PGCLEAR_TARBALL=/absolute/path/pgclear.tgz TENON_TEST_JOBS_TARBALL=/absolute/path/pgclear-jobs.tgz npm run check
 ```
 
-The packed-consumer harness installs both selected artifacts and overrides transitive resolution
-so Jobs and Tenon use the selected driver. Omitting either variable uses that dependency's registry
-version. Candidate checks do not publish packages or establish registry availability. The initial
-Jobs lock entry records the local release candidate's actual integrity at its intended registry URL;
-before release, verify the published artifact, refresh the lock if needed, and run ordinary `npm ci`
-and checks without overrides. Application pilots remain separate from library integration tests.
+Either candidate can be selected independently. The harness overrides transitive resolution to use
+that artifact; omitted variables use registry dependencies. Before release, verify the published
+dependencies and lockfile, run `npm ci`, and validate without candidate overrides.
 
 ### Regenerate the fixture
 
@@ -147,9 +128,34 @@ consumer guides, and changelog. Packed-consumer tests check relative documentati
 Before an explicitly requested publish, start from `npm ci` and run `npm publish --dry-run` against
 the dedicated test database. This exercises `prepublishOnly` (full checks) and `prepack` (clean
 build) without publishing. The final build removes `.test-dist/`; that is expected. Verify matching
-manifest/lockfile versions and a published registry driver, without a candidate override.
+manifest/lockfile versions and published registry dependencies, without candidate overrides.
 
 Publishing requires an explicit request. The package is `@kequtech/tenon-orm`.
 
 `npm run benchmark` measures sequential queries, whole transactions, guarded writes, and batching on
 a warm single-connection pool. Local timings do not establish production throughput.
+
+## Consumer experiments and package identity
+
+Install local Tenon, Jobs and pgclear artifacts in an isolated consumer copy with its existing
+package manager. Preserve unrelated resolutions and keep local paths out of committed manifests.
+Direct tarball dependencies alone do not guarantee that transitive dependencies select those same
+artifacts, particularly when a registry package has the same version number.
+
+With pnpm, use temporary workspace overrides for all three selected packages, merging with existing
+overrides rather than replacing them. For workspaces using `pnpm-workspace.yaml`, the shape is:
+
+```yaml
+overrides:
+  '@kequtech/tenon-orm': file:/absolute/path/tenon.tgz
+  '@kequtech/pgclear-jobs': file:/absolute/path/pgclear-jobs.tgz
+  '@kequtech/pgclear': file:/absolute/path/pgclear.tgz
+```
+
+Reinstall in the disposable copy and inspect actual resolution from the application's, Tenon's and
+Jobs' entry points. Compare real module paths and the original driver error classes, not just version
+strings or package-manager summaries. A duplicate driver can break identity-based error handling.
+The npm packed-consumer harness applies the equivalent transitive overrides for selected candidates.
+
+Keep the reviewed artifact immutable. Put a changed candidate in a new directory and record its
+hash; a matching version string is not proof that two local tarballs contain the same build.

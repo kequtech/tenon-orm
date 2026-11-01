@@ -275,3 +275,13 @@ The CLI loads the shared configuration for custom codecs; no checking script is 
 application-owned script may still call the programmatic API with explicit options. Generated-file
 freshness remains a separate `tenon generate --check` operation. For behavior tests, see
 [query inspection and testing](query-inspection.md).
+
+## Upgrades
+
+Compare checker versions against the same migrated schema. Broader source recovery can analyse
+previously unchecked queries or expose a later unsupported expression. Review newly analysed sites,
+remove stale application exceptions and reassess changed diagnostics; runtime SQL may be unchanged.
+
+For conditional tables and mutation field sets, keep each INSERT in a separate branch with its
+matching explicit shape and columns. The checker cannot infer a correlated union from an untyped
+object spread. See [object expansion](#object-expansion), and retain database tests for both branches.

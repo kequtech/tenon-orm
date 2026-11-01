@@ -420,11 +420,16 @@ export class SourceAnalysis {
           `Column ${name} is absent from the expansion shape.`,
         );
       const type = this.project.checker.getTypeOfSymbolAtLocation(property, shapeNode);
+      // Presence follows the same constrained value type used to derive bind hints.
+      const valueType = this.project.checker.getBaseConstraintOfType(type) ?? type;
+      const members = valueType.isUnion() ? valueType.types : [valueType];
       return {
         name,
         type,
-        optional: !!(property.flags & ts.SymbolFlags.Optional) || this.containsUndefined(type),
-        defined: (type.isUnion() ? type.types : [type]).some(
+        optional:
+          !!(property.flags & ts.SymbolFlags.Optional) ||
+          members.some((member) => !!(member.flags & ts.TypeFlags.Undefined)),
+        defined: members.some(
           (member) => !(member.flags & (ts.TypeFlags.Undefined | ts.TypeFlags.Never)),
         ),
       };
@@ -463,12 +468,10 @@ export class SourceAnalysis {
     let rejected = false;
     for (const variant of variants) {
       const selected = node.arguments[1]
-        ? columns
+        ? columns.map((_, index) => index)
         : [
             ...new Set(
-              variant.flatMap((row) =>
-                row.flatMap((cell, index) => (cell ? [columns[index]!] : [])),
-              ),
+              variant.flatMap((row) => row.flatMap((cell, index) => (cell ? [index] : []))),
             ),
           ];
       const parts: Part[] = [];
@@ -489,13 +492,13 @@ export class SourceAnalysis {
         }
         parts.push('DEFAULT VALUES');
       } else {
-        parts.push(`(${selected.map(quote).join(', ')}) VALUES `);
+        parts.push(`(${selected.map((index) => quote(columns[index]!)).join(', ')}) VALUES `);
         for (const [index, row] of variant.entries()) {
           if (index) parts.push(', ');
           parts.push('(');
-          for (const [position, name] of selected.entries()) {
+          for (const [position, column] of selected.entries()) {
             if (position) parts.push(', ');
-            parts.push(row[columns.indexOf(name)] ?? 'DEFAULT');
+            parts.push(row[column] ?? 'DEFAULT');
           }
           parts.push(')');
         }
@@ -517,13 +520,6 @@ export class SourceAnalysis {
           'The runtime helper rejects empty assignments or default-only batches before SQL is sent. Only SQL-producing variants are analysed; validate inputs if rejection is not intended.',
       });
     return result;
-  }
-
-  private containsUndefined(type: ts.Type): boolean {
-    return (
-      !!(type.flags & ts.TypeFlags.Undefined) ||
-      (!!type.isUnion() && type.types.some((part) => this.containsUndefined(part)))
-    );
   }
 
   private expression(input: ts.Expression, depth: number): Expansion[] {

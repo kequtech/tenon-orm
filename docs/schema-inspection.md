@@ -58,7 +58,9 @@ remain separate checks.
 
 Version 1 excludes functions and their bodies, privileges/owners, row-security settings and
 policies, triggers, rules, views/materialized views, foreign tables, extension/composite/range type
-definitions, collation definitions, physical storage settings and external object definitions.
+definitions, collation definitions, table storage settings and external object definitions.
+Index storage clauses emitted by PostgreSQL's index definition (such as `WITH (fillfactor=...)`)
+are included in that definition and therefore affect the fingerprint.
 References to external objects remain qualified in PostgreSQL definitions. Verify excluded
 application contracts independently; this fingerprint is not proof of complete schema equivalence.
 

@@ -9,6 +9,8 @@
 - Check bounded optional insert/update mutation shapes, including omission, DEFAULT and nullable
   values. Empty runtime-rejected combinations remain explicit notes; unresolved SQL and queries
   beyond the 16-variant budget still fail. Reports include recognized-site coverage counts.
+  Constrained generic fields retain their undefined/DEFAULT branches; zero-variant sites remain
+  unchecked and fail the report.
 - Inspect default-decoded enum outputs as catalog label unions, including with unrelated codec
   overrides. Source checking proves matching enum output unions while retaining narrower/custom
   refinements and unknown nullability as unproven.

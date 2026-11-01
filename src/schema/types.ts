@@ -1,6 +1,6 @@
 import type { DatabaseToolOptions } from '../migrations/connection.js';
 
-export interface SchemaOptions extends Pick<DatabaseToolOptions, 'connection' | 'namespace'> {}
+export type SchemaOptions = Pick<DatabaseToolOptions, 'connection' | 'namespace'>;
 
 export interface SchemaDefinition {
   readonly name: string;

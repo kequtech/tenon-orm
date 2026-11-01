@@ -271,3 +271,91 @@ test('coverage retains unchecked and partially recovered sites independently of 
     },
   );
 });
+
+test('constrained generic fields retain DEFAULT variants while empty and unconstrained mutations fail closed', async () => {
+  await project(
+    {
+      '0001_records.up.sql':
+        "CREATE TABLE records (value text DEFAULT 'default', required integer NOT NULL);",
+    },
+    async (database) => {
+      await migrate(database);
+      const table = `const table = identifier(${JSON.stringify(database.namespace)}, 'records');`;
+      await sourceProject(
+        {
+          'optional.ts': [
+            tag,
+            table,
+            'export function insert<T extends string | undefined>(input: {value: T; required: number}) {',
+            'return sql`INSERT INTO ${table} ${sql.insertValues<{value: T; required: number}>(input, ["value", "required"])}`;',
+            '}',
+          ].join('\n'),
+          'undefined.ts': [
+            tag,
+            table,
+            'export function insert<T extends undefined>(input: {value: T; required: number}) {',
+            'return sql`INSERT INTO ${table} ${sql.insertValues<{value: T; required: number}>(input, ["value", "required"])}`;',
+            '}',
+          ].join('\n'),
+          'empty.ts': [
+            tag,
+            table,
+            'export function update<T extends undefined>(input: {value: T}) {',
+            'return sql`UPDATE ${table} SET ${sql.assignments<{value: T}>(input, ["value"])}`;',
+            '}',
+          ].join('\n'),
+          'unconstrained.ts': [
+            tag,
+            table,
+            'export function insert<T>(input: {value: T; required: number}) {',
+            'return sql`INSERT INTO ${table} ${sql.insertValues<{value: T; required: number}>(input, ["value", "required"])}`;',
+            '}',
+          ].join('\n'),
+        },
+        async (options, directory) => {
+          for (const [target, variants] of [
+            ['optional.ts', 2],
+            ['undefined.ts', 1],
+          ] as const) {
+            const report = await checkQueries({ ...options, target: join(directory, target) });
+            assert.equal(report.ok, true, JSON.stringify(errors(report)));
+            assert.deepEqual(report.coverage, { total: 1, analysed: 1, unchecked: 0 });
+            assert.equal(report.queries[0]!.variants, variants);
+          }
+          for (const [target, code] of [
+            ['empty.ts', 'empty-expansion'],
+            ['unconstrained.ts', 'parameter-type-unresolved'],
+          ] as const) {
+            const report = await checkQueries({
+              ...options,
+              connection: 'postgresql://unused',
+              target: join(directory, target),
+            });
+            assert.equal(report.ok, false);
+            assert.deepEqual(report.coverage, { total: 1, analysed: 0, unchecked: 1 });
+            assert.ok(
+              report.diagnostics.some(
+                (diagnostic) => diagnostic.kind === 'unchecked' && diagnostic.code === code,
+              ),
+            );
+          }
+          const db = createTenon({ connection: pool });
+          try {
+            async function insert<T extends string | undefined>(value: T, required: number) {
+              return db.query(
+                sql`INSERT INTO ${identifier(database.namespace, 'records')}
+                ${sql.insertValues<{ value: T; required: number }>({ value, required }, ['value', 'required'])}
+                RETURNING value, required`,
+                { returns: 'one' },
+              );
+            }
+            assert.deepEqual(await insert(undefined, 1), { value: 'default', required: 1 });
+            assert.deepEqual(await insert('chosen', 2), { value: 'chosen', required: 2 });
+          } finally {
+            await db.close();
+          }
+        },
+      );
+    },
+  );
+});

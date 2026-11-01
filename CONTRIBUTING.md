@@ -85,6 +85,7 @@ remains immutable.
 | Query options, results, observations, guards            | `src/client.ts`, `src/query-options.ts`, `src/affected-rows.ts` |
 | Pool lifetime and callback transactions                 | `src/connection.ts`, `src/database.ts`, `src/transaction.ts`    |
 | Catalog reads, schema summaries, declarations, output   | `src/generate.ts`, `src/generation/`                            |
+| Versioned schema snapshots and fingerprints             | `src/schema.ts`, `src/schema/`                                  |
 | Migration files, history, locks, baselines              | `src/migrations.ts`, `src/migrations/`, `src/baseline.ts`       |
 | Describe sessions, metadata, reports                    | `src/describe.ts`, `src/inspection/`                            |
 | Source discovery, composition recovery, type comparison | `src/check/`                                                    |

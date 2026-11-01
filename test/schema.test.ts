@@ -60,6 +60,11 @@ test('schema snapshots are independent of codecs, data, sequence position and ge
       `INSERT INTO ${qualified(options.namespace, 'entries')} (value) VALUES (1)`,
     );
     assert.deepEqual(await inspectSchema(request), original);
+    // Table storage is outside v1; clauses in index definitions are covered separately below.
+    await pool.queryClassic(
+      `ALTER TABLE ${qualified(options.namespace, 'entries')} SET (fillfactor = 80)`,
+    );
+    assert.deepEqual(await inspectSchema(request), original);
     // Function bodies and security policy remain independently verified application contracts.
     await pool.queryClassic(`CREATE OR REPLACE FUNCTION ${qualified(options.namespace, 'flag')}()
       RETURNS boolean LANGUAGE sql AS 'SELECT false'`);
@@ -139,6 +144,7 @@ test('declared relation, type, sequence and partition changes alter the versione
       `ALTER TABLE ${entries} ALTER COLUMN at SET NOT NULL`,
       `ALTER TABLE ${entries} ADD CONSTRAINT positive_id CHECK (id > 0) NOT VALID`,
       `CREATE INDEX entries_value ON ${entries} (value)`,
+      `ALTER INDEX ${qualified(options.namespace, 'entries_state')} SET (fillfactor = 70)`,
       `ALTER TYPE ${qualified(options.namespace, 'state')} ADD VALUE 'cancelled'`,
       `ALTER DOMAIN ${qualified(options.namespace, 'positive')} ADD CONSTRAINT small CHECK (VALUE < 100)`,
       `ALTER SEQUENCE ${qualified(options.namespace, 'entries_id_seq')} INCREMENT BY 2`,

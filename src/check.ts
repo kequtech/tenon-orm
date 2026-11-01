@@ -80,6 +80,14 @@ export async function checkQueries(options: CheckOptions): Promise<CheckReport> 
   const recovered = selected.map((query) => {
     const analysis = new SourceAnalysis(project, libraries);
     const variants = analysis.recover(query);
+    if (!variants.length && !analysis.issues.some((issue) => issue.kind === 'unchecked')) {
+      analysis.issues.push({
+        ...location(query),
+        kind: 'unchecked',
+        code: 'no-query-variants',
+        message: 'No complete SQL variant could be recovered for this query.',
+      });
+    }
     return { query, variants, diagnostics: analysis.issues };
   });
   const reports: CheckedQuery[] = [];
@@ -95,7 +103,10 @@ export async function checkQueries(options: CheckOptions): Promise<CheckReport> 
     const analysed = reports.filter((report) => report.status === 'analysed').length;
     return {
       project: project.project,
-      ok: reports.length > 0 && !all.some((diagnostic) => diagnostic.kind !== 'unproven'),
+      ok:
+        analysed > 0 &&
+        analysed === selected.length &&
+        !all.some((diagnostic) => diagnostic.kind !== 'unproven'),
       queries: reports,
       diagnostics: all,
       coverage: { total: selected.length, analysed, unchecked: selected.length - analysed },

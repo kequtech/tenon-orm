@@ -168,6 +168,9 @@ Index signatures, unresolved generic key sets, shape unions, and unknown shapes 
 Fixed literal batches are supported; unknown batch lengths are not. Runtime helpers still accept
 inferred shapes and optional fields without source checking.
 
+For an otherwise finite shape, a constrained generic field uses its base constraint to determine
+defined and omitted variants. Open generic shapes and unconstrained field values remain unchecked.
+
 ## Programmatic use and custom codecs
 
 The checking API has a separate entry point, so ordinary queries do not load TypeScript:

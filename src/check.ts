@@ -137,17 +137,16 @@ export async function checkQueries(options: CheckOptions): Promise<CheckReport> 
             const description = queryDescription(metadata, context, codecs);
             described++;
             findings.push(
-              ...compareContracts(project, entry.query, variant, description, readTypes).map(
-                (diagnostic) =>
-                  variant.uncertainParameters.length && diagnostic.kind === 'mismatch'
-                    ? {
-                        ...diagnostic,
-                        kind: 'unproven' as const,
-                        code: 'encoder-dependent-result-unproven',
-                        variant: index + 1,
-                        message: `${diagnostic.message} The actual encoder OID is unknown, so this inferred result cannot contradict the declared type.`,
-                      }
-                    : { ...diagnostic, variant: index + 1 },
+              ...compareContracts(project, entry.query, description, readTypes).map((diagnostic) =>
+                variant.uncertainParameters.length && diagnostic.kind === 'mismatch'
+                  ? {
+                      ...diagnostic,
+                      kind: 'unproven' as const,
+                      code: 'encoder-dependent-result-unproven',
+                      variant: index + 1,
+                      message: `${diagnostic.message} The actual encoder OID is unknown, so this inferred result cannot contradict the declared type.`,
+                    }
+                  : { ...diagnostic, variant: index + 1 },
               ),
             );
           } catch (error) {

@@ -147,7 +147,7 @@ test('the checker resolves imported aliases, indexed types, Pick, unions and bar
       assert.equal(report.ok, true, JSON.stringify(errors(report)));
       assert.equal(report.queries.length, 2);
       assert.ok(report.queries.every(({ status }) => status === 'analysed'));
-      assert.ok(report.diagnostics.some(({ code }) => code === 'nullability-unproven'));
+      assert.deepEqual(report.diagnostics, []);
     },
   );
 });
@@ -531,7 +531,7 @@ test('unknown inputs remain unchecked while declared Parameter values receive th
   );
 });
 
-test('narrow literals, JSON members and nullability stay unproven instead of becoming definite mismatches', async () => {
+test('narrow literals and JSON members stay unproven without repeating general limitations', async () => {
   await sourceProject(
     {
       'queries.ts': [
@@ -544,11 +544,7 @@ test('narrow literals, JSON members and nullability stay unproven instead of bec
     async (options) => {
       const report = await checkQueries(options);
       assert.equal(report.ok, true, JSON.stringify(errors(report)));
-      for (const code of [
-        'result-refinement-unproven',
-        'result-representation-unproven',
-        'nullability-unproven',
-      ])
+      for (const code of ['result-refinement-unproven', 'result-representation-unproven'])
         assert.ok(report.diagnostics.some((issue) => issue.code === code));
     },
   );
@@ -759,6 +755,8 @@ test('check CLI supports whole-file and line targeting, JSON reports, exit statu
         cwd: directory,
       });
       assert.match(text.stdout, /1 queries, 1 analysed, 0 unchecked/);
+      assert.equal(text.stdout.trim().split('\n').length, 2);
+      assert.deepEqual((JSON.parse(good.stdout) as CheckReport).diagnostics, []);
       await assert.rejects(
         run(process.execPath, [cli, 'check', '--project', options.project!, '--json'], {
           env,
@@ -778,6 +776,52 @@ test('check CLI supports whole-file and line targeting, JSON reports, exit statu
           return true;
         },
       );
+    },
+  );
+});
+
+test('check CLI groups repeated findings and retains variant details in JSON', async () => {
+  await sourceProject(
+    {
+      'queries.ts': [
+        tag,
+        'declare const choose: boolean;',
+        "const value = choose ? sql.fragment`'left'::text` : sql.fragment`'right'::text`;",
+        'export const query = sql<{first: number; second: number}>`SELECT ${value} AS first, ${value} AS second`;',
+      ].join('\n'),
+    },
+    async (options, directory) => {
+      await writeConfig(directory, { connection: testConnection });
+      const args = [resolve('dist/cli.js'), 'check', '--project', options.project!];
+      for (const json of [false, true]) {
+        await assert.rejects(
+          run(process.execPath, [...args, ...(json ? ['--json'] : [])], { cwd: directory }),
+          (error: unknown) => {
+            const failed = error as { code: number; stdout: string };
+            assert.equal(failed.code, 1);
+            if (json) {
+              const report = JSON.parse(failed.stdout) as CheckReport;
+              assert.equal(report.diagnostics.length, 4);
+              assert.deepEqual(
+                report.diagnostics.map(({ variant }) => variant),
+                [1, 1, 2, 2],
+              );
+            } else {
+              assert.equal(
+                failed.stdout.split('\n').filter((line) => line.includes('result-type-mismatch'))
+                  .length,
+                2,
+              );
+              assert.match(failed.stdout, /2 definite mismatches/);
+              assert.equal(
+                failed.stdout.split('\n').filter((line) => line.includes('[variants 1, 2]')).length,
+                2,
+              );
+            }
+            return true;
+          },
+        );
+      }
     },
   );
 });

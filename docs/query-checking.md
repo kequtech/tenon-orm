@@ -65,13 +65,16 @@ type alone does not reject a narrower application declaration.
 For enum results with unchanged default decoding, catalog labels establish exact or superset string
 unions, including when unrelated Date/bigint codecs change. Narrower label subsets and branded
 strings remain unproven. Custom enum decoders keep their registry representations; catalog labels
-never narrow a decoder that transforms them. Result nullability remains unproven.
+never narrow a decoder that transforms them. Disjoint string-literal declarations fail as definite
+mismatches; a declaration with some matching labels remains unproven. Result nullability is outside
+the check.
 
 Input and output contracts are separate. For example, an int8 input accepts exact text, bigint, or
 an explicit encoder; its default output is a string. Strings, numbers, bigint, Date, and supported
 Temporal inputs use OID 0/server inference. Booleans, bytes, and recoverable `json`/`param` calls
 supply the same OID hints as execution. Unions with different hints create variants. Input types do
-not prove value ranges, valid Dates, or textual formats.
+not prove value ranges, valid Dates, or textual formats. These general limits are stated once in
+readable output, rather than repeated as diagnostics for ordinary queries.
 
 A plain object, array, or undefined input contradicts the driver's bind API. An opaque `Parameter`
 is trusted, with its unknown OID reported as unproven. Describe uses server inference in that case;
@@ -108,7 +111,10 @@ Exit 0 means no mismatch or unchecked site in the selected scope. It does not es
 nullability, cardinality, or every runtime branch. No query sites also fails. Independent queries
 continue after an unsupported site, and a recoverable branch can expose a mismatch even when another
 branch is unchecked. Diagnostics include locations, codes, parameter/column identifiers, expected
-and observed types, and variant numbers. `--json` returns the structured report.
+and observed types, and variant numbers. Readable output groups equivalent findings within each
+query and counts those groups, preserving distinct columns, parameters and types. `--json` retains
+the individual variant findings in the structured report. Ordinary scalar bindings and unknown
+result nullability do not generate per-query findings.
 
 ## Supported composition
 
@@ -146,10 +152,17 @@ function createUser(input: NewUser) {
 }
 ```
 
-The shape is a trusted expansion contract; the checker does not read the object. Prefer an explicit
-column list so runtime and checking select the same keys/order. Without one, the declared shape is
-assumed to describe exactly the expanded fields. Structural typing cannot prove the absence of
-extra own keys or their order, so that assumption is unproven.
+For a direct object literal, the checker recovers its actual own fields and value expressions without
+evaluating them. This includes shorthand properties and literals within fixed batches. A broad
+generated shape therefore does not multiply variants for fields absent from the literal. An
+undefined-valued expression still creates defined/omitted branches when its type permits both.
+
+For other inputs, the shape is a trusted expansion contract. Prefer an explicit column list so
+runtime and checking select the same keys/order. Without one, the declared shape is assumed to
+describe exactly the expanded fields, unless the input is a recovered literal. Structural typing
+cannot prove the absence of extra own keys or their order, so that assumption is unproven. Object
+aliases, spreads, computed keys and accessors retain this conservative shape analysis; the checker
+does not reconstruct object mutation or evaluate getters.
 
 Optional or undefined-valued fields create bounded SQL variants. With explicit insert columns, an
 absent/undefined cell becomes `DEFAULT`; with inferred columns, a field absent from every row is

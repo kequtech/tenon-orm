@@ -1,5 +1,6 @@
 import { builtin } from '@kequtech/pgclear';
 import ts from 'typescript';
+import { assignmentParts, insertParts } from '../mutations.js';
 import { joinSeparator, quote } from '../sql.js';
 import { location, symbol, type Project } from './project.js';
 import type { CheckDiagnostic } from './types.js';
@@ -19,7 +20,6 @@ interface Expansion {
 }
 export interface QueryVariant {
   readonly text: string;
-  readonly parameters: readonly Binding[];
   readonly parameterTypes: readonly number[];
   readonly uncertainParameters: readonly number[];
 }
@@ -347,6 +347,29 @@ export class SourceAnalysis {
     return variants;
   }
 
+  /** Only direct data-property literals establish actual own keys and value expressions. */
+  private literalFields(input: ts.Expression): Map<string, Binding> | undefined {
+    const node = unwrap(input);
+    if (!ts.isObjectLiteralExpression(node)) return undefined;
+    const fields = new Map<string, Binding>();
+    for (const property of node.properties) {
+      if (!ts.isPropertyAssignment(property) && !ts.isShorthandPropertyAssignment(property))
+        return undefined;
+      const name = property.name;
+      if (!ts.isIdentifier(name) && !ts.isStringLiteral(name) && !ts.isNumericLiteral(name))
+        return undefined;
+      // A colon-form __proto__ property changes the prototype rather than defining an own key.
+      if (name.text === '__proto__' && ts.isPropertyAssignment(property)) return undefined;
+      const value = ts.isPropertyAssignment(property) ? property.initializer : property.name;
+      fields.set(name.text, {
+        node: value,
+        type: this.project.checker.getTypeAtLocation(value),
+        field: name.text,
+      });
+    }
+    return fields;
+  }
+
   private mutation(node: ts.CallExpression, helper: string): Expansion[] {
     const shapeNode = node.typeArguments?.[0];
     if (!shapeNode)
@@ -385,55 +408,18 @@ export class SourceAnalysis {
     const input = node.arguments[0];
     if (!input)
       return this.fail(node, 'expansion-input-required', 'Object expansion requires an input.');
-    if (!node.arguments[1])
-      this.issues.push({
-        ...location(node),
-        kind: 'unproven',
-        code: 'expansion-shape-assumed',
-        message:
-          'The explicit shape is trusted to describe exactly the expanded own fields and their order. An explicit column list removes that assumption.',
-      });
-    const columns = node.arguments[1]
+    const explicit = node.arguments[1]
       ? this.array(node.arguments[1]).map((key) => this.text(key))
-      : shape.getProperties().map((property) => property.name);
-    if (node.arguments[1] && !columns.length)
-      return this.fail(node, 'expansion-columns', 'An explicit column list must be nonempty.');
-    if (new Set(columns).size !== columns.length)
-      return this.fail(node, 'expansion-columns', 'Expansion column names must be unique.');
-    for (const name of columns) {
-      try {
-        quote(name);
-      } catch {
-        return this.fail(
-          node,
-          'expansion-columns',
-          'Expansion columns must be valid PostgreSQL identifiers.',
-        );
-      }
-    }
-    const fields = columns.map((name) => {
-      const property = shape.getProperty(name);
-      if (!property)
+      : undefined;
+    if (explicit && (!explicit.length || new Set(explicit).size !== explicit.length))
+      return this.fail(node, 'expansion-columns', 'Expansion columns must be nonempty and unique.');
+    for (const name of explicit ?? [])
+      if (!shape.getProperty(name))
         return this.fail(
           node,
           'expansion-columns',
           `Column ${name} is absent from the expansion shape.`,
         );
-      const type = this.project.checker.getTypeOfSymbolAtLocation(property, shapeNode);
-      // Presence follows the same constrained value type used to derive bind hints.
-      const valueType = this.project.checker.getBaseConstraintOfType(type) ?? type;
-      const members = valueType.isUnion() ? valueType.types : [valueType];
-      return {
-        name,
-        type,
-        optional:
-          !!(property.flags & ts.SymbolFlags.Optional) ||
-          members.some((member) => !!(member.flags & ts.TypeFlags.Undefined)),
-        defined: members.some(
-          (member) => !(member.flags & (ts.TypeFlags.Undefined | ts.TypeFlags.Never)),
-        ),
-      };
-    });
     const inputType = this.project.checker.getTypeAtLocation(input);
     const rows =
       helper === 'sql.insertValues' &&
@@ -442,18 +428,58 @@ export class SourceAnalysis {
         : [input];
     if (!rows.length)
       return this.fail(node, 'empty-expansion', 'Expansion requires a nonempty batch.');
+    const literals = rows.map((row) => this.literalFields(row));
+    if (!explicit && literals.some((literal) => !literal))
+      this.issues.push({
+        ...location(node),
+        kind: 'unproven',
+        code: 'expansion-shape-assumed',
+        message:
+          'The explicit shape is trusted to describe exactly the expanded own fields and their order. An explicit column list removes that assumption.',
+      });
 
-    // A cell is either a defined bind or absent/undefined. Enumerate only this SQL structure,
-    // without evaluating objects or using undefined as a PostgreSQL parameter.
-    type Cell = Binding | undefined;
-    let variants: Cell[][][] = [[]];
-    for (const row of rows) {
-      let choices: Cell[][] = [[]];
-      for (const field of fields) {
-        const values: Cell[] = [];
-        if (field.defined) values.push({ node: row, type: field.type, field: field.name });
-        if (field.optional || !field.defined) values.push(undefined);
-        choices = choices.flatMap((choice) => values.map((value) => [...choice, value]));
+    // Recover literal fields where possible; otherwise enumerate the finite shape's presence choices.
+    type Row = Record<string, Binding | undefined>;
+    let variants: Row[][] = [[]];
+    for (const [index, row] of rows.entries()) {
+      const literal = literals[index];
+      const columns =
+        explicit ?? (literal ? [...literal.keys()] : shape.getProperties().map((p) => p.name));
+      let choices: Row[] = [{}];
+      for (const name of columns) {
+        try {
+          quote(name);
+        } catch {
+          return this.fail(
+            node,
+            'expansion-columns',
+            'Expansion columns must be valid PostgreSQL identifiers.',
+          );
+        }
+        const property = shape.getProperty(name);
+        const binding = literal
+          ? literal.get(name)
+          : property && {
+              node: row,
+              type: this.project.checker.getTypeOfSymbolAtLocation(property, shapeNode),
+              field: name,
+            };
+        const valueType =
+          binding && (this.project.checker.getBaseConstraintOfType(binding.type) ?? binding.type);
+        const members = valueType ? (valueType.isUnion() ? valueType.types : [valueType]) : [];
+        const defined = members.some(
+          (member) => !(member.flags & (ts.TypeFlags.Undefined | ts.TypeFlags.Never)),
+        );
+        const optional =
+          !binding ||
+          (!literal && !!(property && property.flags & ts.SymbolFlags.Optional)) ||
+          members.some((member) => !!(member.flags & ts.TypeFlags.Undefined));
+        const values: (Binding | undefined)[] = [];
+        if (binding && defined) values.push(binding);
+        if (optional || !defined) values.push(undefined);
+        choices = choices.flatMap((choice) =>
+          values.map((value) => ({ ...choice, [name]: value })),
+        );
         if (choices.length * variants.length > variantLimit)
           return this.fail(
             node,
@@ -467,43 +493,22 @@ export class SourceAnalysis {
     const result: Expansion[] = [];
     let rejected = false;
     for (const variant of variants) {
-      const selected = node.arguments[1]
-        ? columns.map((_, index) => index)
-        : [
-            ...new Set(
-              variant.flatMap((row) => row.flatMap((cell, index) => (cell ? [index] : []))),
-            ),
-          ];
-      const parts: Part[] = [];
-      if (helper === 'sql.assignments') {
-        for (const [index, cell] of variant[0]!.entries()) {
-          if (!cell) continue;
-          if (parts.length) parts.push(', ');
-          parts.push(`${quote(columns[index]!)} = `, cell);
-        }
-        if (!parts.length) {
-          rejected = true;
-          continue;
-        }
-      } else if (!selected.length) {
-        if (rows.length > 1) {
-          rejected = true;
-          continue;
-        }
-        parts.push('DEFAULT VALUES');
-      } else {
-        parts.push(`(${selected.map((index) => quote(columns[index]!)).join(', ')}) VALUES `);
-        for (const [index, row] of variant.entries()) {
-          if (index) parts.push(', ');
-          parts.push('(');
-          for (const [position, column] of selected.entries()) {
-            if (position) parts.push(', ');
-            parts.push(row[column] ?? 'DEFAULT');
-          }
-          parts.push(')');
-        }
+      const hasValues = variant.some((row) =>
+        Object.values(row).some((value) => value !== undefined),
+      );
+      if (!hasValues && (helper === 'sql.assignments' || (!explicit && rows.length > 1))) {
+        rejected = true;
+        continue;
       }
-      result.push({ parts, choices: new Map() });
+      // These builders see only compiler-created bindings, never application objects or values.
+      const parts =
+        helper === 'sql.assignments'
+          ? assignmentParts(variant[0]!, explicit)
+          : insertParts(variant, explicit);
+      result.push({
+        parts: parts.map((part) => (typeof part === 'string' ? part : (part.value as Binding))),
+        choices: new Map(),
+      });
     }
     if (!result.length)
       return this.fail(
@@ -735,7 +740,7 @@ export class SourceAnalysis {
       if (checker.isTypeAssignableTo(type, this.project.parameterType)) {
         let oid: number | undefined;
         try {
-          oid = binding.field === undefined ? this.encoderOid(binding.node) : undefined;
+          oid = this.encoderOid(binding.node);
         } catch (error) {
           if (!(error instanceof Unsupported)) throw error;
         }
@@ -845,7 +850,6 @@ export class SourceAnalysis {
     }
     return lists.map((parameterTypes) => ({
       text,
-      parameters: bindings,
       parameterTypes,
       uncertainParameters,
     }));

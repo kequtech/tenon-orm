@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.7
+
+- Remove routine parameter-value and result-nullability checker notes. General limits are stated
+  once; remaining readable findings are grouped per query with their variant numbers. JSON retains
+  individual variant findings, without the removed routine notes.
+- Reject enum result declarations whose string literals are disjoint from every catalog label.
+  Overlapping refinements and custom decoders retain conservative handling.
+- Recover actual fields and value types from direct mutation object literals and fixed literal
+  batches, reducing needless expansion under broad generated shapes. Source checking and runtime
+  mutations share SQL assembly; dynamic inputs retain bounded shape analysis.
+
 ## 0.4.6
 
 - Add `inspectSchema` and `tenon schema` for versioned, codec-independent catalog snapshots and

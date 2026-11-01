@@ -9,6 +9,7 @@ import { checkQueries } from '../src/check.js';
 import { describeQuery, migrate } from '../src/index.js';
 import { qualified } from '../src/sql.js';
 import { assertTestDatabase, migrationProject, testConnection } from './helpers/database.js';
+import { sourceProject } from './helpers/checker.js';
 
 const pool = createPool(testConnection);
 const project = migrationProject(pool);
@@ -222,10 +223,8 @@ test('source checking proves catalog enum unions while retaining narrower and cu
       report.queries[5]!.diagnostics.find(({ kind }) => kind === 'mismatch')!.code,
       'result-type-mismatch',
     );
-    assert.ok(
-      report.queries[6]!.diagnostics.some(({ code }) => code === 'parameter-value-unproven'),
-    );
-    assert.ok(report.queries[6]!.diagnostics.every(({ kind }) => kind === 'unproven'));
+    // Runtime enum input validation is PostgreSQL's job, not a repeated checker finding.
+    assert.deepEqual(report.queries[6]!.diagnostics, []);
     assert.equal(report.ok, false);
 
     // A decoder's declared string output still cannot prove the catalog label union.
@@ -241,5 +240,62 @@ test('source checking proves catalog enum unions while retaining narrower and cu
     });
     assert.ok(transformed.diagnostics.some(({ code }) => code === 'result-refinement-unproven'));
     assert.equal(transformed.ok, true);
+  });
+});
+
+test('disjoint enum literals fail while overlapping declarations and transformed decoders remain conservative', async () => {
+  await project({ '0001_enum.up.sql': schema }, async (database) => {
+    await migrate(database);
+    const table = qualified(database.namespace, 'records');
+    await sourceProject(
+      {
+        'queries.ts': [
+          "import { sql } from '@kequtech/tenon-orm';",
+          `export const single = sql<{state: 'other'}>\`SELECT state FROM ${table}\`;`,
+          `export const union = sql<{state: 'other' | 'missing'}>\`SELECT state FROM ${table}\`;`,
+          `export const nullable = sql<{state: 'other' | null}>\`SELECT state FROM ${table}\`;`,
+          `export const mixed = sql<{state: 'other' | number}>\`SELECT state FROM ${table}\`;`,
+          `export const overlap = sql<{state: 'queued' | 'other'}>\`SELECT state FROM ${table}\`;`,
+          `export const broad = sql<{state: string | number}>\`SELECT state FROM ${table}\`;`,
+          `export const rows = sql<{state: 'other'} | {state: 'missing'}>\`SELECT state FROM ${table}\`;`,
+          `export const partial = sql<{state: 'other'} | {state: 'done'}>\`SELECT state FROM ${table}\`;`,
+        ].join('\n'),
+      },
+      async (options, directory) => {
+        const report = await checkQueries({
+          ...options,
+          codecs: defaultCodecs.with(builtin.timestamptzDate),
+        });
+        assert.equal(report.ok, false);
+        assert.deepEqual(report.coverage, { total: 8, analysed: 8, unchecked: 0 });
+        for (const query of report.queries.slice(0, 4))
+          assert.deepEqual(
+            query.diagnostics.map(({ kind, code }) => ({ kind, code })),
+            [{ kind: 'mismatch', code: 'result-type-mismatch' }],
+          );
+        assert.equal(report.queries[4]!.diagnostics[0]!.code, 'result-refinement-unproven');
+        assert.deepEqual(report.queries[5]!.diagnostics, []);
+        assert.equal(report.queries[6]!.diagnostics[0]!.code, 'result-union-mismatch');
+        assert.equal(report.queries[7]!.diagnostics[0]!.kind, 'unproven');
+        const oid = (await pool.describe(`SELECT state FROM ${table}`)).fields[0]!.dataTypeOid;
+        const transformed = await checkQueries({
+          ...options,
+          target: `${join(directory, 'queries.ts')}:2`,
+          codecs: defaultCodecs.with({
+            oid,
+            text: { encode: String, decode: () => 'other', typescript: '"other"' },
+          }),
+        });
+        assert.equal(transformed.ok, true);
+        assert.deepEqual(transformed.diagnostics, []);
+        const unknown = await checkQueries({
+          ...options,
+          target: `${join(directory, 'queries.ts')}:2`,
+          codecs: defaultCodecs.with({ oid, text: { encode: String, decode: (value) => value } }),
+        });
+        assert.equal(unknown.ok, true);
+        assert.equal(unknown.diagnostics[0]!.code, 'result-representation-unproven');
+      },
+    );
   });
 });

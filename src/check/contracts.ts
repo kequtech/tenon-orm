@@ -1,7 +1,7 @@
 import ts from 'typescript';
 import type { QueryDescription } from '../inspection/types.js';
 import { location, type Project } from './project.js';
-import type { QueryNode, QueryVariant } from './source.js';
+import type { QueryNode } from './source.js';
 import type { CheckDiagnostic } from './types.js';
 
 function kinds(project: Project, type: ts.Type, seen = new Set<ts.Type>()): Set<string> {
@@ -29,6 +29,10 @@ function kinds(project: Project, type: ts.Type, seen = new Set<ts.Type>()): Set<
 
 function disjoint(project: Project, actual: ts.Type, expected: ts.Type, depth = 0): boolean {
   if (depth > 8) return false;
+  if (expected.isUnion())
+    return expected.types.every((member) => disjoint(project, actual, member, depth + 1));
+  if (actual.isStringLiteral() && expected.isStringLiteral())
+    return actual.value !== expected.value;
   const a = kinds(project, actual),
     b = kinds(project, expected);
   if (!b.size) return true;
@@ -86,37 +90,12 @@ function rowType(project: Project, query: QueryNode): ts.Type | undefined {
 export function compareContracts(
   project: Project,
   query: QueryNode,
-  variant: QueryVariant,
   description: QueryDescription,
   readTypes: Readonly<Record<number, string>>,
 ): CheckDiagnostic[] {
   const checker = project.checker;
   const at = location(query);
   const diagnostics: CheckDiagnostic[] = [];
-  for (const [index, parameter] of variant.parameters.entries()) {
-    const expected = description.parameters[index];
-    if (!expected) continue;
-    const inputKinds = kinds(project, parameter.type);
-    if (inputKinds.has('string') || inputKinds.has('number')) {
-      diagnostics.push({
-        ...location(parameter.node),
-        kind: 'unproven',
-        code: 'parameter-value-unproven',
-        parameter: index + 1,
-        expected: expected.postgres,
-        observed: checker.typeToString(parameter.type),
-        message: `Parameter ${index + 1}${parameter.field ? ` (${parameter.field})` : ''}: ${checker.typeToString(parameter.type)} does not prove PostgreSQL ranges or textual formats for ${expected.postgres}.`,
-      });
-    }
-  }
-  if (description.columns.length)
-    diagnostics.push({
-      ...at,
-      kind: 'unproven',
-      code: 'nullability-unproven',
-      message:
-        'Describe does not establish result nullability; column representation checks exclude SQL NULL.',
-    });
   for (const issue of description.issues) {
     if (issue.code === 'duplicate-column')
       diagnostics.push({

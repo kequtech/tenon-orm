@@ -36,6 +36,8 @@ alone cannot establish that a custom enum decoder preserves labels.
 Tenon consumes these expressions instead of maintaining another decoder registry. The source checker
 resolves them in the application's TypeScript project without executing modules. `readTypes` is a
 fallback only for unidentified decoder representations; it cannot replace known metadata.
+The checker uses TypeScript 6 compiler APIs. TypeScript 7 has a different API, so keep the included
+compiler isolated from the application compiler rather than imposing an incompatible peer dependency.
 
 Codec metadata is a trusted description of conversion behavior, not data validation. Application
 column meanings and JSON members remain application contracts. Wire OIDs select execution's decoder;

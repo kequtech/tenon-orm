@@ -265,6 +265,8 @@ The bundled TypeScript compiler loads only through that path or the check comman
 Options are `{ connection, target?, project?, session?, timeouts?, codecs?, readTypes? }`.
 Connection is a URI or pool-option values; connection codecs are inherited unless `codecs` is explicit. The report contains `ok`, `project`, `queries`, `diagnostics`, and available
 inspection `context`. Mismatches, unchecked sites, and no sites fail; unproven findings alone do not.
+Readable output groups equivalent findings per query; JSON retains their variant records. General
+limits on runtime values and result nullability do not generate individual diagnostics.
 See [query checking](query-checking.md) for selection, supported composition, and custom decoders.
 
 ## Query inspection

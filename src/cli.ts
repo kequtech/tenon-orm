@@ -3,6 +3,7 @@ import { parseArgs } from 'node:util';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { defaultCodecs } from '@kequtech/pgclear';
+import { formatCheckReport } from './check/output.js';
 import type { DatabaseToolOptions } from './migrations/connection.js';
 import { adoptBaseline, captureBaseline } from './baseline.js';
 import { describeFlags, inspectionSettings } from './inspection/cli.js';
@@ -223,15 +224,7 @@ async function main(): Promise<void> {
       ...(values.project === undefined ? {} : { project: values.project }),
     });
     if (values.json) process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
-    else {
-      for (const diagnostic of report.diagnostics)
-        process.stdout.write(
-          `${diagnostic.file}:${diagnostic.line}:${diagnostic.column} [${diagnostic.kind}] ${diagnostic.code}: ${diagnostic.message}\n`,
-        );
-      process.stdout.write(
-        `${report.coverage.total} queries, ${report.coverage.analysed} analysed, ${report.coverage.unchecked} unchecked, ${report.queries.reduce((count, query) => count + query.variants, 0)} variants described; ${report.diagnostics.filter((diagnostic) => diagnostic.kind === 'mismatch').length} mismatches, ${report.diagnostics.filter((diagnostic) => diagnostic.kind === 'unproven').length} unproven findings.\n`,
-      );
-    }
+    else process.stdout.write(formatCheckReport(report));
     if (!report.ok) process.exitCode = 1;
     return;
   }

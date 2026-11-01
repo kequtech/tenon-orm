@@ -359,3 +359,128 @@ test('constrained generic fields retain DEFAULT variants while empty and unconst
     },
   );
 });
+
+test('literal mutations recover actual fields under wide generated shapes and share runtime default/null behavior', async () => {
+  await project(
+    {
+      '0001_records.up.sql': `CREATE TABLE records (
+      id integer GENERATED ALWAYS AS IDENTITY, label text DEFAULT 'default', active boolean DEFAULT true,
+      a text, b text, c text, d text, e text
+    );`,
+    },
+    async (database) => {
+      await migrate(database);
+      await sourceProject(
+        {
+          'queries.ts': [
+            "import { sql, identifier, param, builtin, type Parameter } from '@kequtech/tenon-orm';",
+            'type Wide = {label?: string | null | Parameter | undefined; active?: boolean | Parameter | undefined; a?: string; b?: string; c?: string; d?: string; e?: string};',
+            `const table = identifier(${JSON.stringify(database.namespace)}, 'records');`,
+            "export const inferred = sql<{label: string}>`INSERT INTO ${table} ${sql.insertValues<Wide>({label: 'one'})} RETURNING label`;",
+            "export const explicit = sql<{label: string; active: boolean}>`INSERT INTO ${table} ${sql.insertValues<Wide>({label: 'two'}, ['label', 'active'])} RETURNING label, active`;",
+            "export const nullable = sql`INSERT INTO ${table} ${sql.insertValues<Wide>({label: null, active: undefined}, ['label', 'active'])}`;",
+            'export const update = sql`UPDATE ${table} SET ${sql.assignments<Wide>({active: false, label: undefined})}`;',
+            "export const batch = sql`INSERT INTO ${table} ${sql.insertValues<Wide>([{label: 'first'}, {active: true}])}`;",
+            "export const encoded = sql`INSERT INTO ${table} ${sql.insertValues<Wide>({label: param('encoded', builtin.text)})}`;",
+            'export function generic<T extends string | null | undefined>(label: T) {',
+            'return sql`INSERT INTO ${table} ${sql.insertValues<Wide>({label})}`;',
+            '}',
+            'export const empty = sql`INSERT INTO ${table} ${sql.insertValues<Wide>({})}`;',
+          ].join('\n'),
+        },
+        async (options) => {
+          const report = await checkQueries(options);
+          assert.equal(report.ok, true, JSON.stringify(errors(report)));
+          assert.deepEqual(report.coverage, { total: 8, analysed: 8, unchecked: 0 });
+          assert.deepEqual(
+            report.queries.map(({ variants }) => variants),
+            [1, 1, 1, 1, 1, 1, 2, 1],
+          );
+          assert.deepEqual(report.diagnostics, []);
+          assert.deepEqual(
+            (await pool.queryClassic(`SELECT * FROM "${database.namespace}".records`)).rows,
+            [],
+          );
+          const db = createTenon({ connection: pool });
+          type Wide = {
+            label?: string | null | undefined;
+            active?: boolean | undefined;
+            a?: string;
+            b?: string;
+            c?: string;
+            d?: string;
+            e?: string;
+          };
+          const table = identifier(database.namespace, 'records');
+          try {
+            const first = await db.query(
+              sql`INSERT INTO ${table} ${sql.insertValues<Wide>({ label: 'first' })} RETURNING label, active`,
+              { returns: 'one' },
+            );
+            assert.deepEqual(first, { label: 'first', active: true });
+            const nullable = await db.query(
+              sql`INSERT INTO ${table} ${sql.insertValues<Wide>({ label: null, active: undefined }, ['label', 'active'])} RETURNING label, active`,
+              { returns: 'one' },
+            );
+            assert.deepEqual(nullable, { label: null, active: true });
+            assert.deepEqual(
+              await db.query(
+                sql`INSERT INTO ${table} ${sql.insertValues<Wide>({})} RETURNING label, active`,
+                { returns: 'one' },
+              ),
+              { label: 'default', active: true },
+            );
+            assert.deepEqual(
+              await db.query(
+                sql`UPDATE ${table} SET ${sql.assignments<Wide>({ active: false, label: undefined })} WHERE id = ${1} RETURNING label, active`,
+                { returns: 'one' },
+              ),
+              { label: 'first', active: false },
+            );
+            assert.deepEqual(
+              await db.query(
+                sql`INSERT INTO ${table} ${sql.insertValues<Wide>([{ label: 'batch' }, { active: false }])} RETURNING label, active`,
+                { returns: 'many' },
+              ),
+              [
+                { label: 'batch', active: true },
+                { label: 'default', active: false },
+              ],
+            );
+          } finally {
+            await db.close();
+          }
+        },
+      );
+    },
+  );
+});
+
+test('mutable inputs, aliases, spreads, computed keys and accessors retain conservative shape recovery', async () => {
+  await sourceProject(
+    {
+      'queries.ts': [
+        tag,
+        'type Wide = {label?: string | undefined; a?: string; b?: string; c?: string; d?: string; e?: string};',
+        'declare let input: Wide;',
+        "const alias = {label: 'initial'}; alias.label = 'changed';",
+        "const key = 'label';",
+        'export const dynamic = sql`INSERT INTO records ${sql.insertValues<Wide>(input)}`;',
+        'export const referenced = sql`INSERT INTO records ${sql.insertValues<Wide>(alias)}`;',
+        "export const spread = sql`INSERT INTO records ${sql.insertValues<Wide>({...input, label: 'fixed'})}`;",
+        "export const computed = sql`INSERT INTO records ${sql.insertValues<Wide>({[key]: 'fixed'})}`;",
+        "export const accessor = sql`INSERT INTO records ${sql.insertValues<Wide>({get label() {throw new Error('Must not execute');}})}`;",
+        'export const empty = sql`UPDATE records SET ${sql.assignments<Wide>({label: undefined})}`;',
+      ].join('\n'),
+    },
+    async (options) => {
+      const report = await checkQueries({ ...options, connection: 'postgresql://unused' });
+      assert.equal(report.ok, false);
+      assert.deepEqual(report.coverage, { total: 6, analysed: 0, unchecked: 6 });
+      for (const query of report.queries.slice(0, 5))
+        assert.ok(query.diagnostics.some(({ code }) => code === 'variant-limit'));
+      assert.ok(report.queries[5]!.diagnostics.some(({ code }) => code === 'empty-expansion'));
+      assert.ok(!report.diagnostics.some(({ code }) => code === 'inspection-failed'));
+    },
+  );
+});

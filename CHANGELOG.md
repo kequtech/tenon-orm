@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.9
+
+- Include pgclear-jobs with opt-in, typed `db.jobs` and transactional `tx.jobs` facades; preserve
+  Tenon query guards, observation and transaction scopes while Jobs owns worker lifecycle.
+- Forward pgclear transaction options, including cancellation, deadlines and isolation settings.
+- Add offline `tenon jobs setup` / `createJobsMigration` to generate immutable application SQL
+  migration pairs. Future Jobs schema changes remain application-authored.
+- Expire all transactional Jobs operations, including empty batches, after callback completion
+  or driver cancellation. Recognize generated Jobs migrations with LF/CRLF or a UTF-8 BOM.
+
 ## 0.4.8
 
 - Include literal labels from direct query calls in checker results, including unchecked SQL.

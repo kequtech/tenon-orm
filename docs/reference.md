@@ -7,7 +7,7 @@ For a complete first setup, follow [Getting started](human-guide.md). Task guide
 ## Installation and connection
 
 Requires Node.js 24+, PostgreSQL 16+, and ESM. TypeScript consumers need TypeScript 6+ and Node.js
-development typings. Install `@kequtech/tenon-orm`; pgclear is included as a runtime dependency.
+development typings. Install `@kequtech/tenon-orm`; pgclear and pgclear-jobs are included as runtime dependencies.
 
 ```text
 createTenon(config: TenonConfig): Database
@@ -26,12 +26,13 @@ See [shared configuration](configuration.md) for the complete setup.
 
 The returned `Database` provides:
 
-| Member                   | Contract                                                                                 |
-| ------------------------ | ---------------------------------------------------------------------------------------- |
-| `query(query, options?)` | Execute a Tenon `SqlQuery` and apply result/count options                                |
-| `transaction(callback)`  | Commit on callback success, roll back on an escaping error; return the callback's result |
-| `native`                 | The underlying pgclear pool                                                              |
-| `close({ timeoutMs? }?)` | Disable the wrapper and close an owned pool; default grace 5,000 ms                      |
+| Member                            | Contract                                                                                 |
+| --------------------------------- | ---------------------------------------------------------------------------------------- |
+| `query(query, options?)`          | Execute a Tenon `SqlQuery` and apply result/count options                                |
+| `transaction(callback, options?)` | Commit on callback success, roll back on an escaping error; return the callback's result |
+| `jobs`                            | Opt-in Jobs record operations and worker runner; see [durable jobs](jobs.md)             |
+| `native`                          | The underlying pgclear pool                                                              |
+| `close({ timeoutMs? }?)`          | Disable the wrapper and close an owned pool; default grace 5,000 ms                      |
 
 `onQuery(event)` observes completed Tenon query calls. It may return void or a promise; it is not
 awaited. Observer failures emit warnings without changing the outcome. `QueryEvent` contains
@@ -361,3 +362,18 @@ with unresolved findings. There is no migration dry-run command.
 
 Programmatic runner APIs are [documented with migrations](migrations.md#programmatic-api).
 Baseline APIs and prerequisites are in [adoption](adoption-guide.md#baseline-api).
+
+## Jobs
+
+Set `jobs: true` in `TenonConfig` to enable the stable `db.jobs`/`tx.jobs` facades; default false.
+`db.jobs.run(definitions, options?)` forwards worker lifecycle to pgclear-jobs. Transactions expose
+only record operations. `defineJob` and transaction-bearing definition/context types use the ORM
+transaction. See [durable jobs](jobs.md) for the complete contract and setup.
+
+`tenon jobs setup [--directory migrations] [--config path] [--database export]` writes a concrete
+numbered migration pair without a database connection. Programmatic
+`createJobsMigration({ directory? })` returns `{ id, upPath, downPath, created }`. Repeated setup
+preserves existing files. Schema changes require an application-authored migration.
+
+`db.transaction(callback, options?)` forwards pgclear `TransactionOptions`: `signal`, `timeoutMs`,
+`isolation`, `readOnly`, and `deferrable`. Original driver/aggregate errors propagate.

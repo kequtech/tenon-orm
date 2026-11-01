@@ -22,7 +22,9 @@ postgresql://postgres:postgres@localhost:5432/tenon_orm_test
 
 Create it once if necessary. `TENON_TEST_DATABASE_URL` can override the address, but the database
 name must remain `tenon_orm_test`. Tests check its name and server version before changing temporary
-namespaces. Some tests need permission to create roles; connection-failure tests terminate their
+namespaces. Jobs integration tests create and remove a temporary database on the same server to
+isolate their fixed `pgclear_jobs` schema, preserving any storage in `tenon_orm_test`. The test role
+therefore needs `CREATEDB`. Some tests need permission to create roles; connection-failure tests terminate their
 own backends. Scripts do not load `.env` automatically.
 
 CI runs PostgreSQL 16 and 18 with matching `pg_dump` clients. Packed-consumer tests install the actual
@@ -50,6 +52,22 @@ entry using the final candidate's actual integrity; keep local paths out of comm
 Candidate checks do not establish registry availability. Before releasing Tenon, publish pgclear
 first, verify its registry integrity against the lockfile, then run `npm ci` and ordinary checks.
 Refresh the lockfile and rerun checks if the published artifact differs.
+
+### Test unpublished Jobs and driver candidates
+
+Pack both repositories locally, then install both artifacts together without saving local paths:
+
+```sh
+npm install --no-save --package-lock=false --ignore-scripts /absolute/path/pgclear.tgz /absolute/path/pgclear-jobs.tgz
+TENON_TEST_PGCLEAR_TARBALL=/absolute/path/pgclear.tgz TENON_TEST_JOBS_TARBALL=/absolute/path/pgclear-jobs.tgz npm run check
+```
+
+The packed-consumer harness installs both selected artifacts and overrides transitive resolution
+so Jobs and Tenon use the selected driver. Omitting either variable uses that dependency's registry
+version. Candidate checks do not publish packages or establish registry availability. The initial
+Jobs lock entry records the local release candidate's actual integrity at its intended registry URL;
+before release, verify the published artifact, refresh the lock if needed, and run ordinary `npm ci`
+and checks without overrides. Application pilots remain separate from library integration tests.
 
 ### Regenerate the fixture
 

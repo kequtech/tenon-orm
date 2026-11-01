@@ -16,6 +16,7 @@ export function configSection(
 export function configObject(value: unknown): Record<string, unknown> {
   const config = configSection(value, 'Tenon config', [
     'connection',
+    'jobs',
     'onQuery',
     'generate',
     'migrations',
@@ -25,6 +26,9 @@ export function configObject(value: unknown): Record<string, unknown> {
     'timeouts',
   ]);
   if (!('connection' in config)) throw new Error('Tenon config must declare connection.');
+  if (config.jobs !== undefined && typeof config.jobs !== 'boolean') {
+    throw new Error('Tenon config jobs must be a boolean.');
+  }
   if (config.onQuery !== undefined && typeof config.onQuery !== 'function') {
     throw new Error('Tenon config onQuery must be a function.');
   }

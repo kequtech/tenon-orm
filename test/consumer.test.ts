@@ -13,11 +13,19 @@ import { writeConfig } from './helpers/config.js';
 const run = promisify(execFile);
 // Exercise an unpublished driver candidate explicitly without replacing registry dependencies.
 const driverTarball = process.env.TENON_TEST_PGCLEAR_TARBALL;
+const jobsTarball = process.env.TENON_TEST_JOBS_TARBALL;
+const jobsDependency = jobsTarball
+  ? { '@kequtech/pgclear-jobs': `file:${resolve(jobsTarball)}` }
+  : {};
 const driverDependency = driverTarball
   ? { '@kequtech/pgclear': `file:${resolve(driverTarball)}` }
   : {};
-const driverOverrides = driverTarball
-  ? { overrides: { '@kequtech/pgclear': '$@kequtech/pgclear' } }
+const selectedOverrides = {
+  ...(driverTarball && { '@kequtech/pgclear': '$@kequtech/pgclear' }),
+  ...(jobsTarball && { '@kequtech/pgclear-jobs': '$@kequtech/pgclear-jobs' }),
+};
+const driverOverrides = Object.keys(selectedOverrides).length
+  ? { overrides: selectedOverrides }
   : {};
 
 test('the packed package preserves API contracts and consumes generated .d.ts schemas under TypeScript 6 and 7', async () => {
@@ -99,6 +107,7 @@ test('the packed package preserves API contracts and consumes generated .d.ts sc
         dependencies: {
           '@kequtech/tenon-orm': `file:${join(temporary, tarball)}`,
           ...driverDependency,
+          ...jobsDependency,
         },
         devDependencies: {
           typescript: minimum.version,
@@ -133,6 +142,7 @@ test('the packed package preserves API contracts and consumes generated .d.ts sc
     assert.equal(metadata.license, 'ISC');
     assert.deepEqual(metadata.dependencies, {
       '@kequtech/pgclear': '^0.3.4',
+      '@kequtech/pgclear-jobs': '^0.1.0',
       typescript: '~6.0.2',
     });
     assert.equal(metadata.peerDependencies, undefined);
@@ -192,6 +202,19 @@ test('the packed package preserves API contracts and consumes generated .d.ts sc
         const reverse = second.sql.join([sql.fragment\`TRUE\`], 'AND');
         const types: [Assert<Equal<typeof a, { id: number }>>, Assert<Equal<typeof b, { id: number }>>,
           Assert<Equal<typeof c, readonly { id: number }[]>>, Assert<Equal<typeof d, { id: number } | undefined>>] = [true, true, true, true];
+        const { defineJob } = await import('@kequtech/tenon-orm');
+        const child = defineJob({ name: 'child', handler(_payload: number) {} });
+        const definition = defineJob({ name: 'orm', transactional: true,
+          async handler(payload: { id: number }, { tx }) {
+            const row = await tx.query(sql<{ id: number }>\`SELECT \${payload.id}::int AS id\`, { returns: 'one' });
+            await tx.jobs.send(child, row.id);
+            // @ts-expect-error ORM transaction handlers cannot access native driver SQL.
+            await tx.queryClassic('SELECT 1');
+          }
+        });
+        await db.jobs.send(definition, { id: 1 });
+        // @ts-expect-error A submission cannot widen a definition's payload.
+        await db.jobs.send(definition, { id: 'invalid' });
         // @ts-expect-error generation is a CLI tool, not a database-instance operation
         await db.generateTypes({ out: 'schema.d.ts' });
         // @ts-expect-error crossing package copies preserves the input contract
@@ -326,6 +349,7 @@ ${result.stderr ?? ''}`);
         dependencies: {
           '@kequtech/tenon-orm': `file:${join(temporary, tarball)}`,
           ...driverDependency,
+          ...jobsDependency,
         },
       }),
     );
@@ -388,6 +412,13 @@ ${result.stderr ?? ''}`);
       const composed = sql\`SELECT \${second.sql.fragment\`\${7}::int\`} AS id\`;
       assert.equal(composed.text, 'SELECT $1::int AS id');
       assert.deepEqual(composed.values, [7]);
+      const {defineJob, JobError} = await import('@kequtech/tenon-orm');
+      const jobs = await import('@kequtech/pgclear-jobs');
+      assert.equal(JobError, jobs.JobError);
+      const def = defineJob({name:'packed', handler() {}});
+      const inert = createTenon({connection: undefined, jobs: true});
+      await inert.jobs.run([def], {signal: AbortSignal.abort()});
+      await inert.close();
       const db = createTenon({ connection: 'postgresql://unused' });
       await db.close();
       const buildConfig = {connection: {connectionString: undefined}};
@@ -439,6 +470,21 @@ ${result.stderr ?? ''}`);
       ],
       { cwd: production, env: { ...process.env, TENON_TEST_DATABASE_URL: testConnection } },
     );
+    await writeFile(
+      join(production, 'jobs-lifecycle.mjs'),
+      await readFile(resolve('test/fixtures/jobs-lifecycle.mjs'), 'utf8'),
+    );
+    try {
+      await run(process.execPath, ['jobs-lifecycle.mjs'], {
+        cwd: production,
+        env: { ...process.env, TENON_TEST_DATABASE_URL: testConnection },
+      });
+    } catch (error) {
+      const result = error as { stdout?: string; stderr?: string };
+      assert.fail(
+        `Installed Jobs lifecycle failed:\n${result.stdout ?? ''}\n${result.stderr ?? ''}`,
+      );
+    }
     const sqlFile = join(production, 'inspection.sql');
     await writeFile(
       sqlFile,

@@ -56,38 +56,47 @@ export async function createMigration(options: CreateMigrationOptions): Promise<
     throw new Error('Migration names must contain only letters, digits, underscores or hyphens.');
   }
   return withMigrationCreationLock(options.directory ?? 'migrations', async (directory) => {
-    let latest = 0n;
-    let width = 4;
-    for (const file of await readdir(directory, { withFileTypes: true })) {
-      if (!file.isFile() || !file.name.endsWith('.sql')) {
-        continue;
-      }
-      const match = migrationFilename.exec(file.name);
-      if (!match) {
-        throw new Error(`Invalid migration filename: ${file.name}`);
-      }
-      const id = BigInt(match[1]!);
-      if (id > latest) {
-        latest = id;
-      }
-      width = Math.max(width, match[1]!.length);
-    }
-    const id = (latest + 1n).toString().padStart(width, '0');
-    const upPath = join(directory, `${id}_${options.name}.up.sql`);
-    const downPath = join(directory, `${id}_${options.name}.down.sql`);
-    await writeFile(upPath, '', { flag: 'wx' });
-    try {
-      await writeFile(downPath, '', { flag: 'wx' });
-    } catch (error) {
-      try {
-        await unlink(upPath);
-      } catch (cleanupError) {
-        throw new AggregateError([error, cleanupError], 'Migration creation and cleanup failed.');
-      }
-      throw error;
-    }
-    return { id, upPath, downPath };
+    return writeMigrationPair(directory, options.name);
   });
+}
+
+/** Internal writer; callers hold the directory's creation lock until both bodies are written. */
+export async function writeMigrationPair(
+  directory: string,
+  name: string,
+  sql: { readonly up: string; readonly down: string } = { up: '', down: '' },
+): Promise<CreatedMigration> {
+  let latest = 0n;
+  let width = 4;
+  for (const file of await readdir(directory, { withFileTypes: true })) {
+    if (!file.isFile() || !file.name.endsWith('.sql')) {
+      continue;
+    }
+    const match = migrationFilename.exec(file.name);
+    if (!match) {
+      throw new Error(`Invalid migration filename: ${file.name}`);
+    }
+    const id = BigInt(match[1]!);
+    if (id > latest) {
+      latest = id;
+    }
+    width = Math.max(width, match[1]!.length);
+  }
+  const id = (latest + 1n).toString().padStart(width, '0');
+  const upPath = join(directory, `${id}_${name}.up.sql`);
+  const downPath = join(directory, `${id}_${name}.down.sql`);
+  await writeFile(upPath, sql.up, { flag: 'wx' });
+  try {
+    await writeFile(downPath, sql.down, { flag: 'wx' });
+  } catch (error) {
+    try {
+      await unlink(upPath);
+    } catch (cleanupError) {
+      throw new AggregateError([error, cleanupError], 'Migration creation and cleanup failed.');
+    }
+    throw error;
+  }
+  return { id, upPath, downPath };
 }
 
 export async function readMigrations(directory = 'migrations'): Promise<readonly SqlMigration[]> {

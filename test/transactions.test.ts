@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { Transaction as NativeTransaction } from '@kequtech/pgclear';
 import type { Transaction } from '../src/index.js';
-import { createTenon, sql, unsafeSql } from '../src/index.js';
+import { createTenon, defineJob, sql, unsafeSql } from '../src/index.js';
 import { mockDriver, result } from './helpers/driver.js';
 const gate = () => Promise.withResolvers<void>();
 
@@ -60,7 +60,7 @@ for (const boundary of ['COMMIT', 'ROLLBACK'])
         return value as T;
       },
     );
-    const db = createTenon({ connection: driver.sql });
+    const db = createTenon({ connection: driver.sql, jobs: true });
     let escaped!: Transaction;
     const pending = db.transaction(async (tx) => {
       escaped = tx;
@@ -74,6 +74,8 @@ for (const boundary of ['COMMIT', 'ROLLBACK'])
     await entered.promise;
     try {
       await assert.rejects(escaped.query(sql`SELECT 1`), /transaction has finished/);
+      const definition = defineJob({ name: 'finished-scope', handler() {} });
+      await assert.rejects(escaped.jobs.sendMany(definition, []), /transaction has finished/);
     } finally {
       finish.resolve();
     }

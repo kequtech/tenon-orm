@@ -7,7 +7,39 @@ export type {
   PgArray,
   TemporalConstructors,
   TemporalInput,
+  TransactionOptions,
 } from '@kequtech/pgclear';
+
+export { defineJob } from './jobs.js';
+export { createJobsMigration } from './jobs-migration.js';
+export type { CreateJobsMigrationOptions, CreatedJobsMigration } from './jobs-migration.js';
+export type {
+  DatabaseJobs,
+  TransactionJobs,
+  JobDefinition,
+  JobOptions,
+  TransactionalHandlerContext,
+} from './jobs.js';
+export { JobError, JobNotFoundError, JobStateError, previewSchedule } from '@kequtech/pgclear-jobs';
+export type {
+  ExecutionPolicy,
+  HandlerContext,
+  JobErrorOptions,
+  RunnerOptions,
+  SendOptions,
+  TimingOptions,
+  RequestOptions,
+  Submission,
+  FindOptions,
+  Attempt,
+  TerminalState,
+  PruneOptions,
+  JobStats,
+  Job,
+  JobState,
+  Schedule,
+  ScheduleOptions,
+} from '@kequtech/pgclear-jobs';
 
 export type { Connection, ConnectionConfig, ConnectionOptions, QueryResult } from './connection.js';
 export type { AffectedRowsConstraint } from './affected-rows.js';

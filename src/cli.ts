@@ -17,12 +17,14 @@ import { validatePath } from './validation.js';
 import { describeQuery } from './describe.js';
 import { migrate, migrationStatus, rollback } from './migrations.js';
 import { createMigration } from './migrations/files.js';
+import { createJobsMigration } from './jobs-migration.js';
 
 const help = `tenon init [--config path] (create config without a database)
 tenon migrate|status|rollback [--directory migrations] [--namespace public]
 tenon baseline capture|adopt [--directory migrations] [--namespace public]
 baseline capture: [--schema name ...] [--connection native-uri] (default: whole database schema)
 tenon new <name> [--directory migrations] (no database required)
+tenon jobs setup [--directory migrations] (generate Jobs migration files without a database)
 tenon generate [--out path] [--namespace public] [--check] [--config path]
 tenon schema [--namespace public] (versioned catalog snapshot and fingerprint as JSON)
 tenon describe <query.sql> [--role name] [--search-path schemas] [--time-zone zone]
@@ -106,7 +108,7 @@ async function main(): Promise<void> {
   const allowed = new Set(['help']);
   if (!['describe', 'check', 'generate', 'schema', 'init'].includes(command ?? ''))
     allowed.add('directory');
-  if (!['new', 'describe', 'check', 'init'].includes(command ?? '')) {
+  if (!['new', 'jobs', 'describe', 'check', 'init'].includes(command ?? '')) {
     allowed.add('namespace');
   }
   if (command === 'rollback') {
@@ -156,6 +158,20 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (command === 'jobs') {
+    if (argument !== 'setup' || positionals.length !== 2) {
+      throw new Error('Use jobs setup to generate the Jobs migration pair.');
+    }
+    const config = await loadConfig(values.config, values.database, false);
+    const files = await createJobsMigration({
+      directory: values.directory ?? config?.migrations?.directory ?? 'migrations',
+    });
+    process.stdout.write(
+      `${files.created ? 'Created' : 'Already generated'} ${files.upPath}\n${files.downPath}\nReview the SQL and apply it with your normal migration runner. Future Jobs schema changes require an application-authored migration.\n`,
+    );
+    return;
+  }
+
   const baseline = command === 'baseline' && (argument === 'capture' || argument === 'adopt');
   const valid =
     command === 'check'
@@ -166,7 +182,7 @@ async function main(): Promise<void> {
           ['migrate', 'generate', 'schema', 'status', 'rollback'].includes(command ?? '');
   if (!valid) {
     throw new Error(
-      'Choose init, new, baseline capture|adopt, migrate, generate, schema, describe <query.sql>, check [file.ts[:line]], status, or rollback. Use --help for options.',
+      'Choose init, new, jobs setup, baseline capture|adopt, migrate, generate, schema, describe <query.sql>, check [file.ts[:line]], status, or rollback. Use --help for options.',
     );
   }
 

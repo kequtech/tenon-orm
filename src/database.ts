@@ -5,8 +5,10 @@ import type { TenonConfig } from './config.js';
 import { configConnection } from './config/connection.js';
 import { configObject } from './config/validate.js';
 import { withTransaction } from './transaction.js';
-import type { CloseOptions, Database } from './types.js';
+import type { CloseOptions, Database, Transaction } from './types.js';
 import { plainObject } from './validation.js';
+import { createJobRecords, jobsIntegration } from './jobs.js';
+import type { DatabaseJobs, TransactionJobs } from './jobs.js';
 
 function closeTimeout(options: CloseOptions | undefined): number {
   const settings = plainObject(options === undefined ? {} : options, 'Close options');
@@ -28,6 +30,7 @@ function closeTimeout(options: CloseOptions | undefined): number {
 export function createTenon(config: TenonConfig): Database {
   configObject(config);
   const onQuery = config.onQuery;
+  const jobsEnabled = config.jobs === true;
   let connection: ReturnType<typeof createConnection> | undefined;
   let closing: Promise<void> | undefined;
 
@@ -35,6 +38,25 @@ export function createTenon(config: TenonConfig): Database {
     if (closing) {
       throw new Error('This database instance is closed.');
     }
+  }
+
+  function checkJobs() {
+    checkOpen();
+    if (!jobsEnabled) throw new Error('Jobs are disabled. Set jobs: true in the Tenon config.');
+  }
+
+  function transactionClient(query: QueryExecutor, checkActive: () => void): Transaction {
+    let jobs: TransactionJobs | undefined;
+    const tx: Transaction = {
+      ...createClient(query, onQuery),
+      get jobs() {
+        return (jobs ??= createJobRecords(tx, () => {
+          checkJobs();
+          checkActive();
+        }));
+      },
+    };
+    return tx;
   }
 
   function currentConnection() {
@@ -53,15 +75,33 @@ export function createTenon(config: TenonConfig): Database {
     return executeSql(pool, text, input).then(readResult);
   };
 
-  return {
+  let jobs: DatabaseJobs | undefined;
+  const db: Database = {
     ...createClient(query, onQuery),
+    get jobs() {
+      return (jobs ??= {
+        ...createJobRecords(db, checkJobs),
+        run(definitions, options) {
+          try {
+            checkJobs();
+            return jobsIntegration.runJobs(db, definitions, options);
+          } catch (error) {
+            return Promise.reject(error);
+          }
+        },
+      });
+    },
     get native() {
       return currentConnection().pool;
     },
-    async transaction(callback) {
+    async transaction(callback, options) {
       checkOpen();
       const { pool } = currentConnection();
-      return withTransaction(pool, (query) => callback(createClient(query, onQuery)));
+      return withTransaction(
+        pool,
+        (query, checkActive) => callback(transactionClient(query, checkActive)),
+        options,
+      );
     },
     close(options) {
       if (closing) return closing;
@@ -75,4 +115,5 @@ export function createTenon(config: TenonConfig): Database {
       }
     },
   };
+  return db;
 }

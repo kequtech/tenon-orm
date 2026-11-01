@@ -138,3 +138,10 @@ const reverted = await rollback({ ...options, steps: 1 });
 application ownership. `createMigration({ name, directory? })` returns `{ id, upPath, downPath }`;
 `readMigrations(directory?)` returns validated `{ id, name, up, down?, checksum }` records.
 See [the command reference](reference.md#command-reference) for all CLI forms.
+
+## Jobs storage
+
+`tenon jobs setup` generates a numbered up/down pair containing the installed Jobs package's
+concrete SQL. Apply it with the normal runner. Setup is offline and repeatable; it never rewrites
+existing generated files. Future schema changes require an application-authored migration.
+See [Jobs storage setup](jobs.md#storage-setup).

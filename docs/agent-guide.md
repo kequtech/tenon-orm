@@ -109,3 +109,11 @@ Match runtime role, search path, timezone, and codecs. Describe uses a separate 
 calls bypass Tenon's guards/observations and need explicit resource ownership; see
 [connections and driver access](connections.md). For common failures, use
 [troubleshooting](reference.md#troubleshooting).
+
+## Jobs
+
+Use the included Jobs facade for durable background work. Read [durable jobs](jobs.md), enable
+`jobs: true`, generate storage with `tenon jobs setup`, and apply the reviewed SQL through the
+existing migration runner. Use `tx.jobs` for atomic submissions and the handler's supplied ORM
+transaction for atomic writes. Supervise `db.jobs.run` and await shutdown before closing the database.
+Jobs owns worker reliability; future schema changes use application-authored migrations.

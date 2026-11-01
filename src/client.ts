@@ -5,13 +5,13 @@ import { queryOutput, validateOptions } from './query-options.js';
 import type { SqlQuery } from './query.js';
 import { assertQuery } from './query.js';
 import { validateTransactionSql } from './transaction-sql.js';
-import type { QueryEvent, Transaction } from './types.js';
+import type { QueryClient, QueryEvent } from './types.js';
 
 /** All public execution shares validation, atomic checks, and result handling. */
 export function createClient(
   query: QueryExecutor,
   onQuery?: (event: QueryEvent) => void | Promise<void>,
-): Transaction {
+): QueryClient {
   async function execute(statement: SqlQuery, input?: QueryOptions) {
     const options = validateOptions(input);
     assertQuery(statement);
@@ -61,5 +61,5 @@ export function createClient(
       }
     }
   }
-  return { query: execute } as Transaction;
+  return { query: execute } as QueryClient;
 }

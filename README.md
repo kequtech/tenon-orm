@@ -11,7 +11,8 @@ npm install @kequtech/tenon-orm
 ```
 
 Requires Node.js 24+, PostgreSQL 16+, and ESM. TypeScript applications need TypeScript 6+ and Node.js
-typings. The PostgreSQL driver, [pgclear](https://github.com/kequtech/pgclear), is included.
+typings. The PostgreSQL driver, [pgclear](https://github.com/kequtech/pgclear), and the
+[Jobs engine](https://github.com/kequtech/pgclear-jobs) are included. Jobs operations are opt-in.
 
 ## Query with SQL
 
@@ -117,6 +118,7 @@ the guide for your task:
 | [Writing queries](docs/sql.md)                             | Parameters, reusable functions, joins, aggregates, pagination, and fragments |
 | [Writing data](docs/mutations.md)                          | Inserts, patches, defaults, upserts, JSON, arrays, and batches               |
 | [Schema types and values](docs/schema-types.md)            | Generation, read/write types, codecs, and domain validation                  |
+| [Durable jobs](docs/jobs.md)                               | Typed definitions, atomic submissions, worker lifecycle, and storage setup   |
 | [Migrations](docs/migrations.md)                           | Creating, applying, inspecting, and rolling back SQL migrations              |
 | [Connections and driver access](docs/connections.md)       | Pool configuration, shutdown, custom codecs, and native features             |
 | [Checking query types](docs/query-checking.md)             | Source-aware checks and their supported SQL composition                      |

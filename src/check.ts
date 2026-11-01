@@ -79,6 +79,8 @@ export async function checkQueries(options: CheckOptions): Promise<CheckReport> 
   }
   const recovered = selected.map((query) => {
     const analysis = new SourceAnalysis(project, libraries);
+    const label = analysis.label(query);
+    const at = { ...location(query), ...(label === undefined ? {} : { label }) };
     const variants = analysis.recover(query);
     if (!variants.length && !analysis.issues.some((issue) => issue.kind === 'unchecked')) {
       analysis.issues.push({
@@ -88,7 +90,7 @@ export async function checkQueries(options: CheckOptions): Promise<CheckReport> 
         message: 'No complete SQL variant could be recovered for this query.',
       });
     }
-    return { query, variants, diagnostics: analysis.issues };
+    return { query, at, variants, diagnostics: analysis.issues };
   });
   const reports: CheckedQuery[] = [];
   const readTypes = { ...options.readTypes };
@@ -115,7 +117,7 @@ export async function checkQueries(options: CheckOptions): Promise<CheckReport> 
   if (!recovered.some(({ variants }) => variants.length)) {
     for (const entry of recovered)
       reports.push({
-        ...location(entry.query),
+        ...entry.at,
         status: 'unchecked',
         variants: 0,
         diagnostics: distinct(entry.diagnostics),
@@ -167,7 +169,7 @@ export async function checkQueries(options: CheckOptions): Promise<CheckReport> 
           }
         }
         reports.push({
-          ...location(entry.query),
+          ...entry.at,
           status: findings.some((finding) => finding.kind === 'unchecked')
             ? 'unchecked'
             : 'analysed',
@@ -180,7 +182,7 @@ export async function checkQueries(options: CheckOptions): Promise<CheckReport> 
   } catch (error) {
     for (const entry of recovered.slice(reports.length))
       reports.push({
-        ...location(entry.query),
+        ...entry.at,
         status: 'unchecked',
         variants: 0,
         diagnostics: entry.diagnostics,

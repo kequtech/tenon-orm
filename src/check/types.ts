@@ -30,6 +30,8 @@ export interface CheckDiagnostic extends SourceLocation {
 }
 
 export interface CheckedQuery extends SourceLocation {
+  /** Literal label on an immediately enclosing Tenon query call, when available. */
+  readonly label?: string;
   readonly status: 'analysed' | 'unchecked';
   readonly variants: number;
   readonly diagnostics: readonly CheckDiagnostic[];

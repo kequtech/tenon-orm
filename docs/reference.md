@@ -93,9 +93,8 @@ The copy supplies a mutable array if the adapter requires one. Values must alrea
 inputs; external arrays/objects need type-aware `param`, `json`, or text encoding. Await adapter
 work inside the callback. Native pool queries use another checkout and do not join it.
 
-For a job-library transaction adapter such as pg-boss's, verify actual SQL inputs and timestamp
-expectations. Enqueueing and returning an ID may need no output conversion; returned timestamps
-follow the database-wide codecs. Keep atomic commit/rollback tests. Tenon provides no per-query
+Verify adapted SQL inputs and output representations, including timestamps, against the
+database-wide codecs. Keep atomic commit/rollback tests. Tenon provides no per-query
 codec override, and input encoders are independent of output codecs.
 
 ## SQL parameters and identifiers
@@ -266,7 +265,9 @@ Options are `{ connection, target?, project?, session?, timeouts?, codecs?, read
 Connection is a URI or pool-option values; connection codecs are inherited unless `codecs` is explicit. The report contains `ok`, `project`, `queries`, `diagnostics`, and available
 inspection `context`. Mismatches, unchecked sites, and no sites fail; unproven findings alone do not.
 Readable output groups equivalent findings per query; JSON retains their variant records. General
-limits on runtime values and result nullability do not generate individual diagnostics.
+limits on runtime values and result nullability do not generate individual diagnostics. Each query
+result may include its literal runtime `label` from a direct query call with inline options, even
+when the SQL is unchecked.
 See [query checking](query-checking.md) for selection, supported composition, and custom decoders.
 
 ## Query inspection

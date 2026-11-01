@@ -127,16 +127,40 @@ const query = sql<Summary>`SELECT id, email FROM public.users
 
 The checker follows inline fragments and const bindings with recoverable initializers, fixed
 identifiers, fixed join lists/separators, and ternaries with recoverable branches. Both branches are
-checked without evaluating the condition.
+checked without evaluating the condition. Identifier components may themselves be conditional
+strings or const aliases of those choices:
+
+```ts
+const table = archived ? 'archived_users' : 'users';
+const query = sql`SELECT id FROM ${identifier('public', table)}`;
+```
+
+Every recovered name is quoted, and every SQL variant is inspected. A parameter typed as a string
+literal union alone does not supply recoverable source choices. Arbitrary computed strings and
+conditional raw SQL passed to `unsafeSql` remain unsupported.
 
 Reusing a conditional fragment preserves its branch choice. Separate ternaries using the same const
 condition or an unwritten function parameter also share that choice, including simple negation.
 Repeated mutable guards with unresolved correlation are unchecked. General control-flow reachability
 is not inferred.
 
+Small fragment factories are supported when a const arrow returns a single `sql.fragment` template
+that interpolates only its required `SqlFragment` parameters:
+
+```ts
+const equals = (left: SqlFragment, right: SqlFragment) => sql.fragment`${left} = ${right}`;
+const query = sql`SELECT id FROM public.users
+  WHERE ${equals(sql.fragment`id`, sql.fragment`${id}`)}`;
+```
+
+Arguments use the existing fragment recovery. Reusing a parameter preserves its argument's branch
+choice; separate calls retain their own arguments. No helper code is executed. Statement bodies,
+scalar parameters, defaults, rest/destructured parameters, generics and other expressions inside
+factory templates remain unsupported.
+
 Limits are 16 complete variants per query, including parameter OID alternatives, and 32 levels of
-composition references. Arbitrary fragment factories, function-body reconstruction, loops, dynamic
-identifiers, mutable/escaping fragment lists, and runtime joins are unsupported. These can be valid
+composition references. General function-body analysis, loops, dynamic identifiers,
+mutable/escaping fragment lists, and runtime joins are unsupported. These can be valid
 runtime SQL, but need database tests. Unknown source is never replaced with invented SQL.
 
 ## Object expansion
@@ -200,7 +224,13 @@ if (!report.ok) process.exitCode = 1;
 ```
 
 The report has `ok`, `project`, `queries`, `diagnostics`, `coverage`, and available inspection
-`context`. Coverage counts recognized Tenon query sites in the selected scope:
+`context`. Each entry in `queries` may also have a `label` from literal inline options on its
+immediately enclosing Tenon `db.query` or transaction `query` call. This metadata is retained even
+when SQL recovery or inspection fails, including for `unsafeSql`. Labels from variables, wrappers,
+separate query objects, or options with spreads/computed keys are omitted; no label is guessed.
+Label uniqueness and exception policy remain application-owned.
+
+Coverage counts recognized Tenon query sites in the selected scope:
 
 - `total`: recognized complete query sites, including unsupported ones.
 - `analysed`: sites whose complete SQL variant set was recovered and inspected.

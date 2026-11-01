@@ -344,7 +344,7 @@ ${result.stderr ?? ''}`);
     await run(join(production, 'node_modules/.bin/tenon'), ['--help'], { cwd: production });
     await writeFile(
       join(production, 'queries.ts'),
-      `import {sql} from '@kequtech/tenon-orm';\nexport const query = sql<{total: string}>\`SELECT count(*) AS total FROM pg_class\`;\n`,
+      `import {sql, type QueryClient} from '@kequtech/tenon-orm'; declare const db: QueryClient;\nexport const query = db.query(sql<{total: string}>\`SELECT count(*) AS total FROM pg_class\`, {label: 'production.count'});\n`,
     );
     await writeFile(
       join(production, 'tsconfig.json'),
@@ -366,7 +366,12 @@ ${result.stderr ?? ''}`);
       ['check', 'queries.ts:2', '--json'],
       { cwd: production, env: { ...process.env, DATABASE_URL: testConnection } },
     );
-    assert.equal((JSON.parse(checked.stdout) as { ok: boolean }).ok, true);
+    const checkedReport = JSON.parse(checked.stdout) as {
+      ok: boolean;
+      queries: { label?: string }[];
+    };
+    assert.equal(checkedReport.ok, true);
+    assert.equal(checkedReport.queries[0]!.label, 'production.count');
     await run(
       process.execPath,
       [

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.8
+
+- Include literal labels from direct query calls in checker results, including unchecked SQL.
+- Check bounded identifier string choices and const arrow fragment templates with fragment
+  parameters. Existing limits and conservative handling of broader dynamic composition remain.
+
 ## 0.4.7
 
 - Remove routine parameter-value and result-nullability checker notes. General limits are stated

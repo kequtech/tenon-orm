@@ -61,7 +61,7 @@ function constant(declaration: ts.VariableDeclaration): boolean {
   );
 }
 
-/** A bounded interpreter for SQL structure, never for application values or function bodies. */
+/** Bounded source recovery for SQL structure; application expressions are never executed. */
 export class SourceAnalysis {
   readonly issues: CheckDiagnostic[] = [];
   private readonly immutableArrays = new Set<ts.Symbol>();
@@ -111,6 +111,47 @@ export class SourceAnalysis {
     };
     visit(source);
     return queries;
+  }
+
+  /** Metadata only: direct query calls and inline options need no SQL recovery. */
+  label(query: QueryNode): string | undefined {
+    let argument: ts.Expression = query;
+    while (ts.isExpression(argument.parent) && unwrap(argument.parent) === query)
+      argument = argument.parent;
+    const call = argument.parent;
+    if (
+      !ts.isCallExpression(call) ||
+      call.arguments[0] !== argument ||
+      !ts.isPropertyAccessExpression(call.expression) ||
+      call.expression.name.text !== 'query'
+    )
+      return undefined;
+    const client = this.libraries.get('@kequtech/tenon-orm:QueryClient');
+    const method =
+      client && this.project.checker.getDeclaredTypeOfSymbol(client).getProperty('query');
+    const declaration = this.project.checker.getResolvedSignature(call)?.declaration;
+    if (!declaration || !method?.declarations?.includes(declaration)) return undefined;
+    const options = call.arguments[1] && unwrap(call.arguments[1]);
+    if (
+      !options ||
+      !ts.isObjectLiteralExpression(options) ||
+      options.properties.some(
+        (property) =>
+          ts.isSpreadAssignment(property) ||
+          (property.name && ts.isComputedPropertyName(property.name)),
+      )
+    )
+      return undefined;
+    const labels = options.properties.filter(
+      (property) =>
+        property.name &&
+        (ts.isIdentifier(property.name) || ts.isStringLiteral(property.name)) &&
+        property.name.text === 'label',
+    );
+    const label = labels.length === 1 ? labels[0] : undefined;
+    return label && ts.isPropertyAssignment(label) && ts.isStringLiteralLike(label.initializer)
+      ? label.initializer.text
+      : undefined;
   }
 
   private fail(node: ts.Node, code: string, message: string): never {
@@ -244,7 +285,12 @@ export class SourceAnalysis {
     return result;
   }
 
-  private conditional(node: ts.ConditionalExpression, depth: number): Expansion[] {
+  private conditional(
+    node: ts.ConditionalExpression,
+    depth: number,
+    expand: (input: ts.Expression, depth: number) => Expansion[] = (input, depth) =>
+      this.expression(input, depth),
+  ): Expansion[] {
     let condition = unwrap(node.condition);
     let negated = false;
     while (
@@ -309,7 +355,7 @@ export class SourceAnalysis {
       [node.whenFalse, false],
     ] as const) {
       try {
-        for (const expansion of this.expression(branch, depth + 1)) {
+        for (const expansion of expand(branch, depth + 1)) {
           const value = negated ? !selected : selected;
           if (expansion.choices.has(choice) && expansion.choices.get(choice) !== value) continue;
           variants.push({
@@ -332,19 +378,98 @@ export class SourceAnalysis {
     return variants;
   }
 
-  private template(node: ts.TaggedTemplateExpression, depth: number): Expansion[] {
+  private template(
+    node: ts.TaggedTemplateExpression,
+    depth: number,
+    argumentsByParameter?: ReadonlyMap<ts.Symbol, readonly Expansion[]>,
+  ): Expansion[] {
     if (ts.isNoSubstitutionTemplateLiteral(node.template))
       return [{ parts: [node.template.text], choices: new Map() }];
     let variants: Expansion[] = [{ parts: [node.template.head.text], choices: new Map() }];
     for (const span of node.template.templateSpans) {
+      const parameter = symbol(this.project.checker, unwrap(span.expression));
+      const argument = parameter && argumentsByParameter?.get(parameter);
+      if (argumentsByParameter && (!ts.isIdentifier(unwrap(span.expression)) || !argument))
+        return this.fail(
+          span.expression,
+          'dynamic-fragment',
+          'Fragment factory templates may interpolate only their fragment parameters.',
+        );
       variants = this.combine(
         variants,
-        this.expression(span.expression, depth + 1),
+        argument ?? this.expression(span.expression, depth + 1),
         span.expression,
       );
       for (const variant of variants) variant.parts.push(span.literal.text);
     }
     return variants;
+  }
+
+  private identifierName(input: ts.Expression, depth: number): Expansion[] {
+    const node = this.reference(input, depth);
+    if (ts.isConditionalExpression(node))
+      return this.conditional(node, depth, (branch, depth) => this.identifierName(branch, depth));
+    if (!ts.isStringLiteralLike(node))
+      return this.fail(
+        input,
+        'dynamic-text',
+        'Identifier names require fixed strings, const aliases or conditional choices between them.',
+      );
+    try {
+      return [{ parts: [quote(node.text)], choices: new Map() }];
+    } catch {
+      return this.fail(
+        input,
+        'invalid-identifier',
+        'Identifier names must contain 1–63 UTF-8 bytes and no NUL.',
+      );
+    }
+  }
+
+  /** A const arrow returning one template; substitute fragment arguments without interpreting a body. */
+  private fragmentFactory(call: ts.CallExpression, depth: number): Expansion[] | undefined {
+    const declaration = variable(this.project.checker, unwrap(call.expression));
+    if (!declaration || !constant(declaration) || !declaration.initializer) return undefined;
+    const fn = unwrap(declaration.initializer);
+    if (
+      !ts.isArrowFunction(fn) ||
+      fn.modifiers?.length ||
+      fn.typeParameters?.length ||
+      ts.isBlock(fn.body) ||
+      fn.parameters.length !== call.arguments.length ||
+      call.arguments.some(ts.isSpreadElement)
+    )
+      return undefined;
+    const body = unwrap(fn.body);
+    if (
+      !ts.isTaggedTemplateExpression(body) ||
+      this.role(body.tag) !== 'sql.fragment' ||
+      fn.parameters.some(
+        (parameter) =>
+          !ts.isIdentifier(parameter.name) ||
+          parameter.initializer ||
+          parameter.questionToken ||
+          parameter.dotDotDotToken,
+      )
+    )
+      return undefined;
+    const argumentsByParameter = new Map<ts.Symbol, readonly Expansion[]>();
+    for (const [index, parameter] of fn.parameters.entries()) {
+      const type = this.project.checker.getTypeAtLocation(parameter.name);
+      if (
+        !(type.isUnion() ? type.types : [type]).every((member) =>
+          member.getProperty('__tenonFragment'),
+        )
+      )
+        return undefined;
+      argumentsByParameter.set(
+        symbol(this.project.checker, parameter.name)!,
+        this.expression(call.arguments[index]!, depth + 1),
+      );
+    }
+    if (ts.isNoSubstitutionTemplateLiteral(body.template) && !body.template.text.trim())
+      return this.fail(call, 'empty-fragment', 'SQL fragments must not be empty.');
+    return this.template(body, depth + 1, argumentsByParameter);
   }
 
   /** Only direct data-property literals establish actual own keys and value expressions. */
@@ -559,16 +684,12 @@ export class SourceAnalysis {
       if (role === 'identifier') {
         if (!node.arguments.length)
           return this.fail(node, 'invalid-identifier', 'An identifier requires at least one name.');
-        const names = node.arguments.map((argument) => this.text(argument));
-        try {
-          return [{ parts: [names.map(quote).join('.')], choices: new Map() }];
-        } catch {
-          return this.fail(
-            node,
-            'invalid-identifier',
-            'Identifier names must contain 1–63 UTF-8 bytes and no NUL.',
-          );
+        let variants: Expansion[] = [{ parts: [], choices: new Map() }];
+        for (const [index, argument] of node.arguments.entries()) {
+          if (index) for (const variant of variants) variant.parts.push('.');
+          variants = this.combine(variants, this.identifierName(argument, depth + 1), argument);
         }
+        return variants;
       }
       if (role === 'sql.insertValues' || role === 'sql.assignments')
         return this.mutation(node, role);
@@ -606,6 +727,10 @@ export class SourceAnalysis {
     if (
       members.some((member) => member.getProperty('__tenonFragment') || member.getProperty('names'))
     ) {
+      if (ts.isCallExpression(node)) {
+        const factory = this.fragmentFactory(node, depth);
+        if (factory) return factory;
+      }
       const resolved = this.reference(node, depth);
       if (resolved === node)
         return this.fail(

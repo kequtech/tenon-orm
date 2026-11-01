@@ -74,7 +74,8 @@ version. For work in an existing project, start with the [agent guide](docs/agen
 - **SQL defines the operation.** Use PostgreSQL joins, aggregates, constraints, and upserts directly.
   Reuse queries with ordinary functions; use fragments when parts of the SQL need to vary.
 - **TypeScript describes the values.** Declare query projections with `sql<Row>`. Optionally generate
-  table read/insert/update types with `tenon generate`.
+  table read/insert/update types with `tenon generate`. Capture a versioned
+  [schema fingerprint](docs/schema-inspection.md) with `tenon schema` for application-owned guards.
 - **Transactions define what commits together.** Use `db.transaction(async (tx) => { ... })` and run
   every participating query through `tx`.
 - **Write guards check affected rows.** `{ affectedRows: { exact: 1 } }` rolls back a write unless

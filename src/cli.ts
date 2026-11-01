@@ -10,6 +10,7 @@ import { loadConfig } from './config/load.js';
 import { initConfig } from './config/init.js';
 import { configConnection } from './config/connection.js';
 import { generateDefinitions } from './generate.js';
+import { inspectSchema } from './schema.js';
 import { writeDefinitions } from './generation/output.js';
 import { validatePath } from './validation.js';
 import { describeQuery } from './describe.js';
@@ -22,9 +23,10 @@ tenon baseline capture|adopt [--directory migrations] [--namespace public]
 baseline capture: [--schema name ...] [--connection native-uri] (default: whole database schema)
 tenon new <name> [--directory migrations] (no database required)
 tenon generate [--out path] [--namespace public] [--check] [--config path]
+tenon schema [--namespace public] (versioned catalog snapshot and fingerprint as JSON)
 tenon describe <query.sql> [--role name] [--search-path schemas] [--time-zone zone]
 tenon check [file.ts[:line]] [--project tsconfig.json] [--json]
-generate/check/describe require tenon.config.ts, .mts, .js or .mjs, or --config path.
+generate/schema/check/describe require tenon.config.ts, .mts, .js or .mjs, or --config path.
 describe: [--connect-timeout-ms 3000] [--statement-timeout-ms 5000] [--lock-timeout-ms 1000]
 describe emits JSON metadata; it does not execute the query or verify result annotations.
 check compares source contracts; mismatches, unchecked sites and no sites fail. Unproven types are notes.
@@ -101,7 +103,8 @@ async function main(): Promise<void> {
   // Validate explicitly supplied flags, not defaults. Silently ignoring --check
   // on migrate, for example, would turn an intended dry run into a schema change.
   const allowed = new Set(['help']);
-  if (!['describe', 'check', 'generate', 'init'].includes(command ?? '')) allowed.add('directory');
+  if (!['describe', 'check', 'generate', 'schema', 'init'].includes(command ?? ''))
+    allowed.add('directory');
   if (!['new', 'describe', 'check', 'init'].includes(command ?? '')) {
     allowed.add('namespace');
   }
@@ -159,15 +162,32 @@ async function main(): Promise<void> {
       : baseline || command === 'describe'
         ? positionals.length === 2
         : positionals.length === 1 &&
-          ['migrate', 'generate', 'status', 'rollback'].includes(command ?? '');
+          ['migrate', 'generate', 'schema', 'status', 'rollback'].includes(command ?? '');
   if (!valid) {
     throw new Error(
-      'Choose init, new, baseline capture|adopt, migrate, generate, describe <query.sql>, check [file.ts[:line]], status, or rollback. Use --help for options.',
+      'Choose init, new, baseline capture|adopt, migrate, generate, schema, describe <query.sql>, check [file.ts[:line]], status, or rollback. Use --help for options.',
     );
   }
 
-  if (command === 'generate' || command === 'check' || command === 'describe') {
+  if (
+    command === 'generate' ||
+    command === 'schema' ||
+    command === 'check' ||
+    command === 'describe'
+  ) {
     const config = await loadConfig(values.config, values.database);
+    if (command === 'schema') {
+      const snapshot = await inspectSchema({
+        connection: configConnection(config.connection),
+        namespace:
+          values.namespace ??
+          config.generate?.namespace ??
+          config.migrations?.namespace ??
+          'public',
+      });
+      process.stdout.write(`${JSON.stringify(snapshot, null, 2)}\n`);
+      return;
+    }
     if (command === 'generate') {
       const out = values.out === undefined ? config.generate?.out : resolve(values.out);
       if (out === undefined) throw new Error('Configure generate.out or pass --out.');
@@ -209,7 +229,7 @@ async function main(): Promise<void> {
           `${diagnostic.file}:${diagnostic.line}:${diagnostic.column} [${diagnostic.kind}] ${diagnostic.code}: ${diagnostic.message}\n`,
         );
       process.stdout.write(
-        `${report.queries.length} queries, ${report.queries.filter((query) => query.status === 'analysed').length} analysed, ${report.queries.filter((query) => query.status === 'unchecked').length} unchecked, ${report.queries.reduce((count, query) => count + query.variants, 0)} variants described; ${report.diagnostics.filter((diagnostic) => diagnostic.kind === 'mismatch').length} mismatches, ${report.diagnostics.filter((diagnostic) => diagnostic.kind === 'unproven').length} unproven findings.\n`,
+        `${report.coverage.total} queries, ${report.coverage.analysed} analysed, ${report.coverage.unchecked} unchecked, ${report.queries.reduce((count, query) => count + query.variants, 0)} variants described; ${report.diagnostics.filter((diagnostic) => diagnostic.kind === 'mismatch').length} mismatches, ${report.diagnostics.filter((diagnostic) => diagnostic.kind === 'unproven').length} unproven findings.\n`,
       );
     }
     if (!report.ok) process.exitCode = 1;

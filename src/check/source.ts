@@ -420,50 +420,103 @@ export class SourceAnalysis {
           `Column ${name} is absent from the expansion shape.`,
         );
       const type = this.project.checker.getTypeOfSymbolAtLocation(property, shapeNode);
-      if (property.flags & ts.SymbolFlags.Optional || this.containsUndefined(type)) {
-        return this.fail(
-          shapeNode,
-          'optional-expansion',
-          `Expansion field ${name} may be absent or undefined, changing the SQL. Select required, defined fields for checking.`,
-        );
-      }
-      return { name, binding: { node: input, type, field: name } satisfies Binding };
+      return {
+        name,
+        type,
+        optional: !!(property.flags & ts.SymbolFlags.Optional) || this.containsUndefined(type),
+        defined: (type.isUnion() ? type.types : [type]).some(
+          (member) => !(member.flags & (ts.TypeFlags.Undefined | ts.TypeFlags.Never)),
+        ),
+      };
     });
-    const parts: Part[] = [];
-    if (helper === 'sql.assignments') {
-      if (!fields.length)
-        return this.fail(node, 'empty-expansion', 'An assignment needs at least one field.');
-      for (const [index, field] of fields.entries()) {
-        if (index) parts.push(', ');
-        parts.push(`${quote(field.name)} = `, field.binding);
+    const inputType = this.project.checker.getTypeAtLocation(input);
+    const rows =
+      helper === 'sql.insertValues' &&
+      (this.project.checker.isArrayType(inputType) || this.project.checker.isTupleType(inputType))
+        ? this.array(input)
+        : [input];
+    if (!rows.length)
+      return this.fail(node, 'empty-expansion', 'Expansion requires a nonempty batch.');
+
+    // A cell is either a defined bind or absent/undefined. Enumerate only this SQL structure,
+    // without evaluating objects or using undefined as a PostgreSQL parameter.
+    type Cell = Binding | undefined;
+    let variants: Cell[][][] = [[]];
+    for (const row of rows) {
+      let choices: Cell[][] = [[]];
+      for (const field of fields) {
+        const values: Cell[] = [];
+        if (field.defined) values.push({ node: row, type: field.type, field: field.name });
+        if (field.optional || !field.defined) values.push(undefined);
+        choices = choices.flatMap((choice) => values.map((value) => [...choice, value]));
+        if (choices.length * variants.length > variantLimit)
+          return this.fail(
+            node,
+            'variant-limit',
+            `Mutation expansion exceeds the ${variantLimit}-variant budget.`,
+          );
       }
-    } else {
-      const inputType = this.project.checker.getTypeAtLocation(input);
-      const rows =
-        this.project.checker.isArrayType(inputType) || this.project.checker.isTupleType(inputType)
-          ? this.array(input)
-          : [input];
-      if (!rows.length || (!fields.length && rows.length > 1))
-        return this.fail(
-          node,
-          'empty-expansion',
-          'Expansion requires a nonempty batch; a default-only insert requires one row.',
-        );
-      if (!fields.length) parts.push('DEFAULT VALUES');
-      else {
-        parts.push(`(${columns.map(quote).join(', ')}) VALUES `);
-        for (const [index, row] of rows.entries()) {
+      variants = variants.flatMap((variant) => choices.map((choice) => [...variant, choice]));
+    }
+
+    const result: Expansion[] = [];
+    let rejected = false;
+    for (const variant of variants) {
+      const selected = node.arguments[1]
+        ? columns
+        : [
+            ...new Set(
+              variant.flatMap((row) =>
+                row.flatMap((cell, index) => (cell ? [columns[index]!] : [])),
+              ),
+            ),
+          ];
+      const parts: Part[] = [];
+      if (helper === 'sql.assignments') {
+        for (const [index, cell] of variant[0]!.entries()) {
+          if (!cell) continue;
+          if (parts.length) parts.push(', ');
+          parts.push(`${quote(columns[index]!)} = `, cell);
+        }
+        if (!parts.length) {
+          rejected = true;
+          continue;
+        }
+      } else if (!selected.length) {
+        if (rows.length > 1) {
+          rejected = true;
+          continue;
+        }
+        parts.push('DEFAULT VALUES');
+      } else {
+        parts.push(`(${selected.map(quote).join(', ')}) VALUES `);
+        for (const [index, row] of variant.entries()) {
           if (index) parts.push(', ');
           parts.push('(');
-          for (const [position, field] of fields.entries()) {
+          for (const [position, name] of selected.entries()) {
             if (position) parts.push(', ');
-            parts.push({ ...field.binding, node: row });
+            parts.push(row[columns.indexOf(name)] ?? 'DEFAULT');
           }
           parts.push(')');
         }
       }
+      result.push({ parts, choices: new Map() });
     }
-    return [{ parts, choices: new Map() }];
+    if (!result.length)
+      return this.fail(
+        node,
+        'empty-expansion',
+        'Every expansion is rejected by the runtime helper: assignments need a defined field and default-only inserts need one row.',
+      );
+    if (rejected)
+      this.issues.push({
+        ...location(node),
+        kind: 'unproven',
+        code: 'empty-expansion-rejected',
+        message:
+          'The runtime helper rejects empty assignments or default-only batches before SQL is sent. Only SQL-producing variants are analysed; validate inputs if rejection is not intended.',
+      });
+    return result;
   }
 
   private containsUndefined(type: ts.Type): boolean {
@@ -624,6 +677,7 @@ export class SourceAnalysis {
     const hints = new Set<number>();
     let uncertain = false;
     const visit = (type: ts.Type): void => {
+      if (binding.field !== undefined && type.flags & ts.TypeFlags.Undefined) return;
       if (type.isUnion()) {
         type.types.forEach(visit);
         return;

@@ -91,7 +91,10 @@ The namespace must already exist. Repeating adoption with matching history is ha
 after later migrations; conflicting history fails. Once adopted, leave the baseline unchanged and
 add forward migrations.
 
-For an application-owned schema guard, keep a frozen checkpoint reference. Generated relation types
+For an application-owned schema guard, keep a frozen checkpoint reference. The versioned
+[schema snapshot API](schema-inspection.md) provides codec- and generator-independent relation
+metadata for new guards; verify any transition against an immutable disposable baseline replay.
+Keep function, security, and migration-history checks independent. Generated relation types
 do not cover functions or privileges; check required objects separately. Neither generated text nor
 schema-summary formatting is a version-stable fingerprint. If a guard hashes that text, preserve
 its original reference and freeze a separate reviewed reference for each generator version, taken

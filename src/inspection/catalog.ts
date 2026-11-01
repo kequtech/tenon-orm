@@ -5,6 +5,7 @@ interface CatalogType {
   oid: number;
   schema: string;
   name: string;
+  enumLabels: readonly string[] | null;
 }
 
 interface ColumnSource {
@@ -34,7 +35,11 @@ export async function readStatementMetadata(
   const types = (
     await client.queryClassic<CatalogType>(
       `
-    SELECT t.oid, n.nspname AS schema, t.typname AS name
+    SELECT t.oid, n.nspname AS schema, t.typname AS name,
+      CASE WHEN t.typtype = 'e' THEN ARRAY(
+        SELECT e.enumlabel::text FROM pg_catalog.pg_enum e
+        WHERE e.enumtypid = t.oid ORDER BY e.enumsortorder
+      ) END AS "enumLabels"
     FROM pg_catalog.pg_type t
       JOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace
     WHERE t.oid = ANY(pg_catalog.string_to_array($1, ',')::pg_catalog.oid[])

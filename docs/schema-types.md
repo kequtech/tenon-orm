@@ -272,3 +272,27 @@ It does not check query annotations, pending migrations, functions, privileges, 
 object. A driver or generator update can change output without schema drift. Review generated diffs
 after upgrades. Generated text and schema-summary formatting are not version-stable schema
 fingerprints; see [baseline verification](adoption-guide.md#check-and-adopt-an-existing-database).
+
+### UUID array parameters
+
+`builtin.uuidArray` encodes a UUID array parameter with PostgreSQL's UUID-array OID. For a UUID
+`id` column:
+
+```ts
+import { builtin, param, sql } from '@kequtech/tenon-orm';
+
+const ids = ['123e4567-e89b-42d3-a456-426614174000'];
+const query = sql`SELECT id FROM public.users WHERE id = ANY(${param(ids, builtin.uuidArray)})`;
+```
+
+PostgreSQL validates UUID syntax; the codec uses the existing recursive string-array encoding rules,
+including empty arrays and SQL NULL elements. This additive helper does not change default decoding.
+The existing `param(ids, builtin.textArray)::uuid[]` form remains valid.
+
+### Decode error context
+
+`PGCLEAR_DECODE` errors expose `column` and `dataTypeOid` when the failing output field is known.
+These identify the field without adding row values, SQL, or parameters to the error context. The
+original decoder error remains available through `cause`; application-defined causes retain their
+own content. Date/infinity failures still propagate and should retain the application's existing
+fail-closed expiry checks.

@@ -70,6 +70,13 @@ codecs. Pgclear does not resolve application imports or render schema declaratio
 The decoder override on catalog queries is internal. Application queries, including callback
 transactions, retain database-wide codecs; Tenon exposes no per-query override.
 
+## Stable schema evidence
+
+`inspectSchema` owns a separate versioned catalog contract rather than hashing generated declaration
+syntax or comments. Its fingerprint includes PostgreSQL major and schema identity, with explicit
+scope exclusions. Keep the version-1 inputs stable when changing the generator; expand the catalog
+contract under a new format version. See [snapshot scope](docs/schema-inspection.md).
+
 ## Upgrade checks
 
 Review the installed driver's changelog, configuration, and representation changes. Retain runtime,

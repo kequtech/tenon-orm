@@ -2,7 +2,7 @@
 
 For a complete first setup, follow [Getting started](human-guide.md). Task guides explain
 [queries](sql.md), [writes](mutations.md), [schema types](schema-types.md),
-[migrations](migrations.md), and [connections](connections.md).
+[migrations](migrations.md), [schema snapshots](schema-inspection.md), and [connections](connections.md).
 
 ## Installation and connection
 
@@ -44,7 +44,7 @@ handling, timeout bounds, and lifecycle examples. Runtime `search_path` is indep
 
 ### Driver updates
 
-The dependency range is `@kequtech/pgclear: ^0.3.3`. Compatible patches may be updated independently;
+The dependency range is `@kequtech/pgclear: ^0.3.4`. Compatible patches may be updated independently;
 see [driver updates](connections.md#update-the-driver). Tenon re-exports `builtin`, `json`, `param`,
 `defaultCodecs`, and `createTemporalCodecs`, with the driver's `Codec`, `CodecRegistry`, `Parameter`,
 `PgArray`, `TemporalConstructors`, and `TemporalInput` types.
@@ -325,6 +325,7 @@ Unsupported command flags reject.
 ```text
 tenon init [--config path]
 tenon new <name> [--directory migrations]
+tenon schema [--namespace schema]
 tenon generate [--out path] [--namespace schema] [--check]
 tenon migrate [--directory migrations] [--namespace public]
 tenon status [--directory migrations] [--namespace public]
@@ -344,6 +345,7 @@ tenon describe <query.sql> [--role name] [--search-path value] [--time-zone valu
 | `new`                  | Paths of the new empty up/down pair; fill before applying                               |
 | `migrate` / `rollback` | Completed IDs or “nothing to do”; each file commits independently                       |
 | `status`               | JSON `{ applied, pending }`; validates history                                          |
+| `schema`               | Emits a versioned catalog snapshot and fingerprint; requires shared configuration       |
 | `baseline capture`     | Writes a reviewed schema-only baseline using native `pg_dump`                           |
 | `baseline adopt`       | Records baseline history without executing its SQL                                      |
 | `generate`             | Writes output atomically; `--check` rejects missing/stale output without writing        |

@@ -11,11 +11,13 @@ import type {
   SqlQuery,
   UnknownRow,
   TenonConfig,
+  SchemaSnapshot,
 } from '../src/index.js';
 import {
   CardinalityError,
   createTenon,
   describeQuery,
+  inspectSchema,
   identifier,
   sql,
   unsafeSql,
@@ -44,13 +46,26 @@ async function checkingContracts(connection: string) {
     readTypes: { 23: 'string' },
   });
   const ok: boolean = report.ok;
+  const total: number = report.coverage.total;
   // @ts-expect-error use file:line rather than a separate line option
   await checkQueries({ connection, line: 23 });
   // @ts-expect-error readTypes values must be TypeScript type expressions
   await checkQueries({ connection, readTypes: { 23: 42 } });
-  return ok;
+  return { ok, total };
 }
 void checkingContracts;
+
+async function schemaContracts(connection: string) {
+  const snapshot: SchemaSnapshot = await inspectSchema({ connection, namespace: 'app' });
+  const version: 1 = snapshot.formatVersion;
+  const fingerprint: string = snapshot.fingerprint;
+  // @ts-expect-error snapshots expose readonly metadata collections
+  snapshot.tables.push({});
+  // @ts-expect-error schema inspection takes a connection, not a config path
+  await inspectSchema({ config: 'tenon.config.ts' });
+  return { version, fingerprint };
+}
+void schemaContracts;
 
 function sharedConfigContracts() {
   const config = {
@@ -79,8 +94,14 @@ function conversionContracts() {
   const registry: CodecRegistry = defaultCodecs.with(codec);
   const array: PgArray<number> = [1, null, [2]];
   const encoded: Parameter = param(array, builtin.int4Array);
+  const uuids: Parameter = param(['123e4567-e89b-42d3-a456-426614174000'], builtin.uuidArray);
   const temporal: TemporalInput | undefined = undefined;
-  return { registry, temporal, query: sql`SELECT ${encoded}::int[], ${json({ ok: true })}::jsonb` };
+  return {
+    registry,
+    temporal,
+    uuids,
+    query: sql`SELECT ${encoded}::int[], ${json({ ok: true })}::jsonb`,
+  };
 }
 void conversionContracts;
 

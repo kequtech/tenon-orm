@@ -75,6 +75,12 @@ Known read types in `rowType` include null; unknown already includes it. A sourc
 constraint cannot prove result nullability through outer joins, expressions, or grouping. JSON
 members remain unknown.
 
+An enum with its default decoder reports its catalog label union and `enumLabels`, including when
+unrelated Date or bigint codecs are configured. Source checking can verify an exact enum union or
+broader string result annotation against those labels. Narrower application refinements and
+nullability remain unproven. Enum arrays retain their actual wire representation rather than
+becoming arrays of label unions.
+
 | Finding code          | Meaning                                               |
 | --------------------- | ----------------------------------------------------- |
 | `nullability-unknown` | Result nullability is unresolved                      |
@@ -99,6 +105,9 @@ explicit array overrides win. Custom `text.typescript` expressions appear in the
 declaration and are shared with generation/source checking. Without known metadata, a custom
 decoder remains unknown even for a familiar scalar/enum/domain OID. Catalog base types do not
 replace the wire OID's decoder contract.
+
+A custom enum decoder uses its declared output representation and does not receive catalog-label
+narrowing or `enumLabels`, even if it declares `string`: the decoder may transform those labels.
 
 Inspection's own catalog/context queries use default decoding. Reported parameter read types are
 not encoding rules: exact text can be a valid int8 input while its output also uses text by default.

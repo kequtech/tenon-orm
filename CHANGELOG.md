@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.4.6
+
+- Add `inspectSchema` and `tenon schema` for versioned, codec-independent catalog snapshots and
+  SHA-256 fingerprints. Version 1 includes scoped relation/type/sequence definitions and PostgreSQL
+  major version; functions, security policy, data and other excluded objects still need independent
+  checks. Existing adoption guards are unchanged. See [schema snapshots](docs/schema-inspection.md).
+- Check bounded optional insert/update mutation shapes, including omission, DEFAULT and nullable
+  values. Empty runtime-rejected combinations remain explicit notes; unresolved SQL and queries
+  beyond the 16-variant budget still fail. Reports include recognized-site coverage counts.
+- Inspect default-decoded enum outputs as catalog label unions, including with unrelated codec
+  overrides. Source checking proves matching enum output unions while retaining narrower/custom
+  refinements and unknown nullability as unproven.
+- Require pgclear `^0.3.4`, adding `builtin.uuidArray`, safe decode-error column/type context, and
+  a complete shared-listener ownership example. See [connections](docs/connections.md).
+
 ## 0.4.5
 
 - Preserve generated enum and enum-domain label unions when unrelated codecs change, including

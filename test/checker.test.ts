@@ -1,69 +1,22 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { access, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { access, readFile, writeFile } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
 import { after, before, test } from 'node:test';
 import { promisify } from 'node:util';
 import { builtin, createPool, defaultCodecs } from '@kequtech/pgclear';
-import { checkQueries, type CheckOptions, type CheckReport } from '../src/check.js';
+import { checkQueries, type CheckReport } from '../src/check.js';
 import { migrate } from '../src/index.js';
 import { qualified, quote } from '../src/sql.js';
 import { assertTestDatabase, migrationProject, testConnection } from './helpers/database.js';
 import { writeConfig } from './helpers/config.js';
+import { errors, sourceProject } from './helpers/checker.js';
 
 const pool = createPool(testConnection);
 before(() => assertTestDatabase(pool));
 after(() => pool.close());
 const run = promisify(execFile);
 const tag = "import { sql, unsafeSql, identifier } from '@kequtech/tenon-orm';";
-
-async function sourceProject(
-  files: Record<string, string>,
-  work: (options: CheckOptions, directory: string) => Promise<void>,
-) {
-  const directory = await mkdtemp(join(tmpdir(), 'tenon-checker-'));
-  try {
-    await writeFile(join(directory, 'package.json'), '{"type":"module"}');
-    await writeFile(
-      join(directory, 'tsconfig.json'),
-      JSON.stringify({
-        compilerOptions: {
-          strict: true,
-          exactOptionalPropertyTypes: true,
-          noUncheckedIndexedAccess: true,
-          target: 'ES2022',
-          lib: ['ES2024'],
-          module: 'NodeNext',
-          moduleResolution: 'NodeNext',
-          skipLibCheck: true,
-          noEmit: true,
-          types: ['node'],
-          typeRoots: [resolve('node_modules/@types')],
-          paths: {
-            '@kequtech/tenon-orm': [resolve('dist/index.d.ts')],
-            '@kequtech/pgclear': [resolve('node_modules/@kequtech/pgclear/dist/index.d.ts')],
-          },
-        },
-        include: ['**/*.ts'],
-      }),
-    );
-    for (const [name, source] of Object.entries(files)) {
-      await mkdir(dirname(join(directory, name)), { recursive: true });
-      await writeFile(join(directory, name), source);
-    }
-    await work(
-      { connection: testConnection, project: join(directory, 'tsconfig.json') },
-      directory,
-    );
-  } finally {
-    await rm(directory, { recursive: true, force: true });
-  }
-}
-
-function errors(report: CheckReport) {
-  return report.diagnostics.filter(({ kind }) => kind !== 'unproven');
-}
 
 test('codec metadata resolves imported scalar types, derived arrays and explicit array overrides', async () => {
   await sourceProject(
@@ -463,7 +416,7 @@ test('required object shapes, fixed batches, selected columns and assignments us
   );
 });
 
-test('untyped, optional, open and dynamic object expansions never become guessed SQL', async () => {
+test('untyped, open and dynamic object expansions never become guessed SQL', async () => {
   await sourceProject(
     {
       'queries.ts': [
@@ -473,7 +426,6 @@ test('untyped, optional, open and dynamic object expansions never become guessed
         'declare const batch: {name: string}[];',
         'declare const dictionary: Record<string, string>;',
         'export const inferred = sql`INSERT INTO users ${sql.insertValues(input)}`;',
-        'export const optional = sql`UPDATE users SET ${sql.assignments<Shape>(input)}`;',
         'export const dynamic = sql`INSERT INTO users ${sql.insertValues<{name: string}>(batch)}`;',
         'export const open = sql`INSERT INTO users ${sql.insertValues<Record<string, string>>(dictionary)}`;',
       ].join('\n'),
@@ -481,14 +433,9 @@ test('untyped, optional, open and dynamic object expansions never become guessed
     async (options) => {
       const report = await checkQueries(options);
       assert.equal(report.ok, false);
-      assert.equal(report.queries.filter(({ status }) => status === 'unchecked').length, 4);
+      assert.equal(report.queries.filter(({ status }) => status === 'unchecked').length, 3);
       assert.ok(report.queries.every(({ variants }) => variants === 0));
-      for (const code of [
-        'expansion-type-required',
-        'optional-expansion',
-        'dynamic-array',
-        'expansion-shape-unresolved',
-      ])
+      for (const code of ['expansion-type-required', 'dynamic-array', 'expansion-shape-unresolved'])
         assert.ok(report.diagnostics.some((issue) => issue.code === code));
     },
   );

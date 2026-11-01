@@ -20,7 +20,14 @@ export function queryDescription(
     const type = catalog.get(oid);
     if (!type) throw new Error(`PostgreSQL type OID ${oid} was not found.`);
     const representation = codecs.typescript(oid);
-    const readType = representation ?? 'unknown';
+    const enumLabels =
+      type.enumLabels !== null && representation === 'string' && codecs.isDefaultDecoder(oid)
+        ? type.enumLabels
+        : undefined;
+    const readType =
+      enumLabels === undefined
+        ? (representation ?? 'unknown')
+        : enumLabels.map((label) => JSON.stringify(label)).join(' | ') || 'never';
     if (representation === undefined) {
       issues.set(`type:${oid}`, {
         code: 'unmapped-type',
@@ -29,7 +36,12 @@ export function queryDescription(
         message: `The selected pgclear registry cannot identify the decoder representation for ${type.schema}.${type.name} (OID ${oid}). Supply an application type for this custom decoder.`,
       });
     }
-    return { oid, postgres: `${type.schema}.${type.name}`, readType };
+    return {
+      oid,
+      postgres: `${type.schema}.${type.name}`,
+      readType,
+      ...(enumLabels === undefined ? {} : { enumLabels }),
+    };
   }
   const sourceMap = new Map(sources.map((s) => [`${s.oid}:${s.number}`, s]));
   const names = new Set<string>();

@@ -29,7 +29,7 @@ export async function withMigrationLock<T>(
     lease = await pool.acquire();
     const client = lease;
     await client.queryClassic(
-      `SELECT pg_advisory_lock${suffix}(hashtextextended($1, 0))`,
+      `SELECT pg_catalog.pg_advisory_lock${suffix}(pg_catalog.hashtextextended($1, 0))`,
       [lockKey],
       { codecs: defaultCodecs },
     );
@@ -44,7 +44,7 @@ export async function withMigrationLock<T>(
         if (lease.transactionStatus !== 'idle') await client.queryClassic('ROLLBACK', []);
         if (locked) {
           await client.queryClassic(
-            `SELECT pg_advisory_unlock${suffix}(hashtextextended($1, 0))`,
+            `SELECT pg_catalog.pg_advisory_unlock${suffix}(pg_catalog.hashtextextended($1, 0))`,
             [lockKey],
             { codecs: defaultCodecs },
           );

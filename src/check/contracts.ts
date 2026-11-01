@@ -167,13 +167,18 @@ export function compareContracts(
       if (!expected) continue; // Structural result types may omit additional selected columns.
       const representation = readTypes[column.oid] ?? column.readType;
       const actual = project.types.get(representation);
+      const actualTypes =
+        column.enumLabels?.map((label) => checker.getStringLiteralType(label)) ??
+        (actual && !(actual.flags & (ts.TypeFlags.Unknown | ts.TypeFlags.Any))
+          ? [actual]
+          : undefined);
       const common = {
         ...at,
         resultColumn: column.name,
         expected: checker.typeToString(expected),
         observed: representation,
       };
-      if (!actual || actual.flags & (ts.TypeFlags.Unknown | ts.TypeFlags.Any)) {
+      if (!actualTypes) {
         findings.push({
           ...common,
           kind: 'unproven',
@@ -190,8 +195,8 @@ export function compareContracts(
           code: 'result-type-unproven',
           message: `Column ${JSON.stringify(column.name)} is declared as any.`,
         });
-      } else if (!checker.isTypeAssignableTo(actual, nonnull)) {
-        const mismatch = disjoint(project, actual, nonnull);
+      } else if (!actualTypes.every((type) => checker.isTypeAssignableTo(type, nonnull))) {
+        const mismatch = actualTypes.every((type) => disjoint(project, type, nonnull));
         findings.push({
           ...common,
           kind: mismatch ? 'mismatch' : 'unproven',

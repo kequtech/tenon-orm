@@ -58,6 +58,8 @@ export interface DescribedType {
   readonly postgres: string;
   /** pgclear read representation, before considering result nullability. */
   readonly readType: string;
+  /** Catalog labels when this enum's effective decoder preserves its default output. */
+  readonly enumLabels?: readonly string[];
 }
 
 export interface DescribedColumn extends DescribedType {

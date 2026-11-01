@@ -120,12 +120,13 @@ npx tenon new create_users
 npx tenon migrate
 npx tenon generate
 npx tenon generate --check
+npx tenon schema
 npx tenon check
 npx tenon check src/users.ts:23 --json
 npx tenon describe query.sql
 ```
 
-Generation, checking, and inspection require configuration and use its connection and codecs. A
+Generation, schema snapshots, checking, and inspection require configuration and use its connection and codecs. A
 missing or invalid config fails instead of falling back to `DATABASE_URL`. The config chooses which
 environment variables to read; Tenon does not load `.env` files.
 

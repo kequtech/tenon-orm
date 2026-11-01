@@ -62,6 +62,11 @@ Each variant must fit at least one member of a declared result union. Nullabilit
 literal/branded refinements, and unfamiliar decoder types may remain unproven. A broader metadata
 type alone does not reject a narrower application declaration.
 
+For enum results with unchanged default decoding, catalog labels establish exact or superset string
+unions, including when unrelated Date/bigint codecs change. Narrower label subsets and branded
+strings remain unproven. Custom enum decoders keep their registry representations; catalog labels
+never narrow a decoder that transforms them. Result nullability remains unproven.
+
 Input and output contracts are separate. For example, an int8 input accepts exact text, bigint, or
 an explicit encoder; its default output is a string. Strings, numbers, bigint, Date, and supported
 Temporal inputs use OID 0/server inference. Booleans, bytes, and recoverable `json`/`param` calls
@@ -83,8 +88,8 @@ dependent result comparisons and inference errors remain unproven. This does not
 - **Unproven:** retain the declaration when justified, with validation/tests for what metadata cannot
   establish. A note alone does not fail the command.
 
-For example, generated update fields are optional and can disappear from SQL. If application
-validation always supplies a boolean, declare that required contract:
+Finite optional mutation shapes are supported within the variant budget. A required, narrower
+contract can reduce that budget when application validation always supplies a value:
 
 ```ts
 type ActivePatch = { active: boolean };
@@ -95,8 +100,9 @@ function setActive(id: number, patch: ActivePatch) {
 }
 ```
 
-If omission is intended, keep optional fields and test the SQL/effects. An explicit column list does
-not make optional fields required. Avoid assertions that merely hide this distinction.
+If omission is intended, keep optional fields. An explicit column list fixes column selection and
+order; it does not make optional fields required. Empty assignments still reject at runtime, so
+validate the patch if that rejection is not intended. Keep execution tests for the actual effects.
 
 Exit 0 means no mismatch or unchecked site in the selected scope. It does not establish JSON shape,
 nullability, cardinality, or every runtime branch. No query sites also fails. Independent queries
@@ -132,7 +138,7 @@ runtime SQL, but need database tests. Unknown source is never replaced with inve
 For checking, `insertValues` and `assignments` need an explicit finite shape type:
 
 ```ts
-type NewUser = { email: string; active: boolean };
+type NewUser = { email: string; active?: boolean | undefined };
 
 function createUser(input: NewUser) {
   return sql<{ id: number }>`INSERT INTO public.users
@@ -145,11 +151,22 @@ column list so runtime and checking select the same keys/order. Without one, the
 assumed to describe exactly the expanded fields. Structural typing cannot prove the absence of
 extra own keys or their order, so that assumption is unproven.
 
-Selected fields must be required and exclude undefined. Optional presence changes the SQL through
-omission or DEFAULT and is unchecked. Unselected optional properties are fine. Index signatures,
-unresolved generic key sets, shape unions, and unknown shapes are unsupported. Fixed literal batches
-are supported; unknown batch lengths are not. Runtime helpers still accept inferred shapes and
-optional fields.
+Optional or undefined-valued fields create bounded SQL variants. With explicit insert columns, an
+absent/undefined cell becomes `DEFAULT`; with inferred columns, a field absent from every row is
+omitted. Fixed batches use each row's defined fields and per-cell defaults. Assignments omit
+absent/undefined fields. SQL NULL stays a bound value and is separate from omission.
+
+The checker describes only variants that can produce SQL. Empty assignments and inferred multi-row batches
+with no defined fields are rejected by the runtime helper before dispatch; the report retains an
+`empty-expansion-rejected` unproven note when such an input is possible. A mutation whose every
+combination rejects is unchecked. These checks do not establish that application input validation
+avoids runtime rejection.
+
+The same 16-variant limit covers optional combinations, surrounding fragments, and parameter OID
+alternatives. Select fewer columns or a narrower validated shape when that limit is exceeded.
+Index signatures, unresolved generic key sets, shape unions, and unknown shapes remain unsupported.
+Fixed literal batches are supported; unknown batch lengths are not. Runtime helpers still accept
+inferred shapes and optional fields without source checking.
 
 ## Programmatic use and custom codecs
 
@@ -166,8 +183,20 @@ const report = await checkQueries({
 if (!report.ok) process.exitCode = 1;
 ```
 
-The report has `ok`, `project`, `queries`, `diagnostics`, and available inspection `context`. Options
-also accept `session`, `timeouts`, `codecs`, and `readTypes`. `connection` is a URI or pool-option
+The report has `ok`, `project`, `queries`, `diagnostics`, `coverage`, and available inspection
+`context`. Coverage counts recognized Tenon query sites in the selected scope:
+
+- `total`: recognized complete query sites, including unsupported ones.
+- `analysed`: sites whose complete SQL variant set was recovered and inspected.
+- `unchecked`: sites with unsupported structure or incomplete inspection, including a site where only
+  some branches were recovered.
+
+An analysed site can still have mismatches or unproven findings; use `ok` and diagnostics for the
+result. Unrelated SQL tags are outside these counts. No recognized sites still fails with zero
+coverage. JSON reports expose the same counts, so focused CI checks can retain visibility of their
+scope without accepting unchecked sites as successes.
+
+Options also accept `session`, `timeouts`, `codecs`, and `readTypes`. `connection` is a URI or pool-option
 values; its `codecs` are inherited unless the explicit inspection `codecs` argument is supplied.
 The programmatic API does not discover shared configuration.
 

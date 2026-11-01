@@ -395,7 +395,7 @@ test('inspection internal queries are independent of functions in the inspected 
       assert.deepEqual(result.context.resolvedSearchPath, [options.namespace, 'pg_catalog']);
       assert.equal(result.columns[0]!.source?.schema, options.namespace);
       assert.equal(result.columns[0]!.readType, 'number');
-      assert.equal(result.columns[1]!.readType, 'string');
+      assert.equal(result.columns[1]!.readType, '"ready" | "waiting"');
     },
   );
 });

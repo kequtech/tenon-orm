@@ -337,7 +337,7 @@ test('described mappings agree with pgclear for precision, JSON, dates, arrays, 
         'string',
         'PgArray<string>',
         'PgArray<string>',
-        'string',
+        '"ready" | "waiting"',
         'string',
       ],
     );

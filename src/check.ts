@@ -12,6 +12,7 @@ import type { InspectionContext } from './inspection/types.js';
 export type {
   CheckOptions,
   CheckReport,
+  CheckCoverage,
   CheckDiagnostic,
   CheckedQuery,
   SourceLocation,
@@ -68,7 +69,13 @@ export async function checkQueries(options: CheckOptions): Promise<CheckReport> 
         ? 'Several queries occupy this line. Put their SQL tags on distinct lines.'
         : 'No recognized complete Tenon query was found at the selected target.',
     });
-    return { project: project.project, ok: false, queries: [], diagnostics };
+    return {
+      project: project.project,
+      ok: false,
+      queries: [],
+      diagnostics,
+      coverage: { total: selected.length, analysed: 0, unchecked: selected.length },
+    };
   }
   const recovered = selected.map((query) => {
     const analysis = new SourceAnalysis(project, libraries);
@@ -85,11 +92,13 @@ export async function checkQueries(options: CheckOptions): Promise<CheckReport> 
   }
   const finish = (): CheckReport => {
     const all = distinct([...diagnostics, ...reports.flatMap((report) => report.diagnostics)]);
+    const analysed = reports.filter((report) => report.status === 'analysed').length;
     return {
       project: project.project,
       ok: reports.length > 0 && !all.some((diagnostic) => diagnostic.kind !== 'unproven'),
       queries: reports,
       diagnostics: all,
+      coverage: { total: selected.length, analysed, unchecked: selected.length - analysed },
     };
   };
   if (!recovered.some(({ variants }) => variants.length)) {

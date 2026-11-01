@@ -203,7 +203,7 @@ for deadlines, cancellation, and changes queued during reconnect.
 
 ## Update the driver
 
-Tenon depends on `@kequtech/pgclear: ^0.3.3`, which permits compatible 0.3.x patch updates. With npm:
+Tenon depends on `@kequtech/pgclear: ^0.3.4`, which permits compatible 0.3.x patch updates. With npm:
 
 ```sh
 npm update @kequtech/pgclear
@@ -216,3 +216,47 @@ this range and requires an explicit Tenon compatibility update.
 
 If the application imports pgclear directly, declare it as a dependency with a compatible version
 so the package manager can share a copy. See the [changelog](../CHANGELOG.md) when updating Tenon.
+
+### Reuse configuration for a dedicated listener
+
+Keep session settings separate from pool limits when both a query pool and a listener use them:
+
+```ts
+import { builtin, defaultCodecs, type TenonConfig } from '@kequtech/tenon-orm';
+import { listen } from '@kequtech/pgclear';
+
+const session = {
+  codecs: defaultCodecs.with(builtin.timestamptzDate),
+  startupParameters: { search_path: 'app,public' },
+  connectTimeoutMs: 5000,
+};
+export const main = {
+  connection: { ...session, connectionString: process.env.DATABASE_URL, maxConnections: 10 },
+} satisfies TenonConfig;
+
+// Call during startup with the application's validated database URI.
+async function startNotifications(connectionString: string) {
+  return listen(
+    { ...session, connectionString },
+    {
+      channels: [],
+      timeoutMs: 5000,
+      reconnect: false,
+      onNotification: ({ channel, payload }) => console.log(channel, payload),
+    },
+  );
+}
+```
+
+The config remains safe to import without credentials. Pool-only settings (`maxConnections`,
+`maxWaiting`, `acquireTimeoutMs`, `idleTimeoutMs`, `maxLifetimeMs`) belong on the query pool; `listen`
+takes native connection settings and rejects pool limits. A supplied pool does not expose its
+credentials; retain the application-owned connection settings when using both resources.
+
+For multiple SSE/WebSocket consumers, use the complete
+[pgclear shared-listener example](https://github.com/kequtech/pgclear/blob/main/docs/notifications.md#shared-consumer-ownership).
+It demonstrates reference counts, shared readiness, ordered removal/replacement, bounded shutdown,
+and stale-generation guards. Those remain application responsibilities. If a table's actual schema
+must be discovered first, reuse the existing application pool before opening subscriptions; a
+separate listener query hook is unnecessary for that startup workflow. Keep reconciliation after a
+notification gap tied to authoritative application reads.

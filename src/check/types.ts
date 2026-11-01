@@ -40,5 +40,13 @@ export interface CheckReport {
   readonly ok: boolean;
   readonly queries: readonly CheckedQuery[];
   readonly diagnostics: readonly CheckDiagnostic[];
+  /** Recognized query sites in the selected scope; analysed does not mean mismatch-free. */
+  readonly coverage: CheckCoverage;
   readonly context?: InspectionContext;
+}
+
+export interface CheckCoverage {
+  readonly total: number;
+  readonly analysed: number;
+  readonly unchecked: number;
 }

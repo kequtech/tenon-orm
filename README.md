@@ -11,18 +11,22 @@ npm install @kequtech/tenon-orm
 ```ts
 import { createTenon, sql } from '@kequtech/tenon-orm';
 
+type User = { id: number; email: string };
+
 const db = createTenon({ connection: process.env.DATABASE_URL });
 try {
-  const value = await db.query(sql<{ answer: number }>`SELECT ${42}::integer AS answer`, {
-    returns: 'one',
+  const user = await db.query(sql<User>`SELECT id, email FROM users WHERE id = ${1}`, {
+    returns: 'oneOrNone',
   });
-  console.log(value.answer);
+  console.log(user?.email);
 } finally {
   await db.close();
 }
 ```
 
-Interpolations bind values separately from SQL. `sql<Row>` describes one result row; `returns`
+This example assumes a `users` table with integer `id` and text `email` columns.
+Interpolations bind values separately from SQL; PostgreSQL infers parameter types from context.
+`sql<Row>` describes one result row; `returns`
 chooses `many`, `oneOrNone`, `one`, or the default driver result. Tenon adds no implicit limits,
 relationship loading, transaction retries or runtime validation of `Row`.
 

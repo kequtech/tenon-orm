@@ -24,7 +24,7 @@ history/search path, not queue isolation. Existing storage needs deliberate migr
 
 ### Upgrading from Jobs 0.2.0
 
-Jobs 0.2.1 requires storage version 2. Stop old producers/workers and apply a **new** application
+Jobs 0.2.1 and later require storage version 2. Stop old producers/workers and apply a **new** application
 migration with jobsUpgrade.up from `@kequtech/pgclear-jobs/migrations`; keep the original pair unchanged.
 Then restart with the matching package. Setup never upgrades/reset storage implicitly. The
 [storage guide](https://github.com/kequtech/pgclear-jobs/blob/main/docs/storage.md) owns upgrade/reversal
@@ -90,18 +90,15 @@ payload validation, timing, keys, pagination, retention and cancellation.
 ## Run and close
 
 ```ts
-const stop = new AbortController();
-const worker = db.jobs.start([refreshWorker], { signal: stop.signal });
-void worker.done.catch(stopApplication); // Application-owned failure policy.
-await worker.ready;
-// Start serving requests. On shutdown, stop requests first, then:
-stop.abort();
-await worker.done;
-await db.close();
+await db.jobs.run([refreshWorker]);
 ```
 
-start forwards the engine's ready/done handle; run returns its lifetime promise. Supervise done
-immediately. Tenon owns neither process signals nor worker restart policy, and db.close does not
+run runs continuously and returns its lifetime promise. When the application host provides a shutdown
+signal, pass it as `{ signal: shutdownSignal }`. One host signal can serve all runners; the engine
+handles draining active work. Await the runner before closing the database.
+
+For readiness, start forwards the engine's ready/done handle; supervise done immediately.
+Tenon owns neither process signals nor worker restart policy, and db.close does not
 stop workers. Supplied pools remain application-owned. The ORM
 [HTTP example](../examples/jobs-host.ts) demonstrates readiness and ordered cleanup with a real ORM
 query; the [worker entry](../examples/jobs-worker.ts) shows ORM bindings for a separate worker process.

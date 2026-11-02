@@ -16,7 +16,7 @@ const query = defineJob<{ value: number }>({ name: 'example:query' });
 const worker = defineWorker(query, {
   transactional: true,
   async handler({ value }, { tx }) {
-    await tx.query(sql`SELECT ${value}::integer`);
+    await tx.query(sql`SELECT ${value} AS value`);
   },
 });
 let ready = false;

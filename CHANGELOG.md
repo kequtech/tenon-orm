@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.1
+
+- Simplify the introductory query and remove unnecessary casts from worker examples.
+- Keep basic worker usage to one call; explain shared host shutdown signals in the hosting guidance.
+- Include the pgclear 0.3.6 and pgclear-jobs 0.2.2 documentation patches.
+
 ## 0.5.0
 
 - Keep detailed queue/driver contracts in their owning packages. Tenon's guides retain concise

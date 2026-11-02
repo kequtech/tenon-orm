@@ -133,8 +133,8 @@ test('the packed package preserves API contracts and consumes generated .d.ts sc
     assert.equal(metadata.name, '@kequtech/tenon-orm');
     assert.equal(metadata.license, 'ISC');
     assert.deepEqual(metadata.dependencies, {
-      '@kequtech/pgclear': '^0.3.5',
-      '@kequtech/pgclear-jobs': '^0.2.1',
+      '@kequtech/pgclear': '^0.3.6',
+      '@kequtech/pgclear-jobs': '^0.2.2',
       typescript: '~6.0.2',
     });
     assert.equal(metadata.peerDependencies, undefined);

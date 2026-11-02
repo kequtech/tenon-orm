@@ -2,13 +2,14 @@ import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { access, cp, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, posix, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { test } from 'node:test';
 import { promisify } from 'node:util';
 import { createPool } from '@kequtech/pgclear';
 
 import { assertTestDatabase, migrationProject, testConnection } from './helpers/database.js';
 import { writeConfig } from './helpers/config.js';
+import { checkDocumentationLinks } from './helpers/documentation.js';
 
 const run = promisify(execFile);
 // Exercise an unpublished driver candidate explicitly without replacing registry dependencies.
@@ -64,19 +65,19 @@ test('the packed package preserves API contracts and consumes generated .d.ts sc
       'dist/cli.js',
       'dist/describe.js',
       'dist/schema.js',
-      'docs/schema-inspection.md',
       'dist/check.js',
       'dist/check/project.js',
       'dist/inspection/catalog.js',
       'dist/inspection/connection.js',
-      'docs/configuration.md',
-      'docs/agent-guide.md',
-      'docs/adoption-guide.md',
-      'docs/human-guide.md',
+      'docs/getting-started.md',
+      'docs/queries.md',
+      'docs/database.md',
+      'docs/types.md',
+      'docs/checking.md',
+      'docs/jobs.md',
       'docs/reference.md',
-      'docs/query-inspection.md',
-      'docs/query-checking.md',
-      'docs/mutations.md',
+      'examples/next-host.mjs',
+      'examples/jobs-worker.ts',
       'examples/jobs-host.ts',
     ]) {
       assert.ok(paths.includes(required), `Package is missing ${required}`);
@@ -85,7 +86,7 @@ test('the packed package preserves API contracts and consumes generated .d.ts sc
       assert.ok(
         ['LICENSE', 'README.md', 'CHANGELOG.md', 'package.json'].includes(path) ||
           /^docs\/(?:[\w-]+\/)*[\w-]+\.md$/.test(path) ||
-          /^examples\/[\w-]+\.ts$/.test(path) ||
+          /^examples\/[\w-]+\.(?:ts|mjs)$/.test(path) ||
           /^dist\/(?:[\w-]+\/)*[\w-]+\.(?:js|d\.ts)$/.test(path),
         `Unexpected package content: ${path}`,
       );
@@ -123,17 +124,7 @@ test('the packed package preserves API contracts and consumes generated .d.ts sc
     await run('npm', installArgs, { cwd: consumer, env: npmEnv });
     const installed = join(consumer, 'node_modules/@kequtech/tenon-orm');
     // Relative documentation links must also work for readers of the installed package.
-    for (const path of paths.filter((path) => path.endsWith('.md'))) {
-      const markdown = await readFile(join(installed, path), 'utf8');
-      for (const match of markdown.matchAll(/\[[^\]]*\]\(([^\s)]+)\)/g)) {
-        const target = match[1]!.split('#')[0]!;
-        if (!target || /^[a-z][a-z0-9+.-]*:/i.test(target)) continue;
-        const relative = posix.normalize(
-          posix.join(posix.dirname(path), decodeURIComponent(target)),
-        );
-        assert.ok(paths.includes(relative), `${path} links to missing package file ${target}`);
-      }
-    }
+    await checkDocumentationLinks(installed, paths);
     const metadata = JSON.parse(await readFile(join(installed, 'package.json'), 'utf8')) as {
       name: string;
       license: string;
@@ -143,8 +134,8 @@ test('the packed package preserves API contracts and consumes generated .d.ts sc
     assert.equal(metadata.name, '@kequtech/tenon-orm');
     assert.equal(metadata.license, 'ISC');
     assert.deepEqual(metadata.dependencies, {
-      '@kequtech/pgclear': '^0.3.4',
-      '@kequtech/pgclear-jobs': '^0.2.0',
+      '@kequtech/pgclear': '^0.3.5',
+      '@kequtech/pgclear-jobs': '^0.2.1',
       typescript: '~6.0.2',
     });
     assert.equal(metadata.peerDependencies, undefined);
@@ -245,6 +236,7 @@ test('the packed package preserves API contracts and consumes generated .d.ts sc
           'copies.ts',
           'checked.ts',
           'node_modules/@kequtech/tenon-orm/examples/jobs-host.ts',
+          'node_modules/@kequtech/tenon-orm/examples/jobs-worker.ts',
         ],
       }),
     );
@@ -413,9 +405,9 @@ ${result.stderr ?? ''}`);
         `
       import assert from 'node:assert/strict';
       import { createPool } from '@kequtech/pgclear';
-      const { CardinalityError, builtin, createTemporalCodecs, defaultCodecs, json, param, createTenon, describeQuery, sql } = await import('@kequtech/tenon-orm');
+      const { CardinalityError, builtin, createTemporalCodecs, defaultCodecs, findDriverErrors, json, param, createTenon, describeQuery, sql } = await import('@kequtech/tenon-orm');
       const driver = await import('@kequtech/pgclear');
-      for (const [name, value] of Object.entries({builtin, createTemporalCodecs, defaultCodecs, json, param}))
+      for (const [name, value] of Object.entries({builtin, createTemporalCodecs, defaultCodecs, findDriverErrors, json, param}))
         assert.equal(value, driver[name]);
       const second = await import('./second-tenon/index.js');
       const composed = sql\`SELECT \${second.sql.fragment\`\${7}::int\`} AS id\`;
@@ -427,6 +419,10 @@ ${result.stderr ?? ''}`);
       const def = defineJob({name:'packed', handler() {}});
       const inert = createTenon({connection: undefined});
       await inert.jobs.run([def], {signal: AbortSignal.abort()});
+      assert.deepEqual(await inert.jobs.getMany([]), []);
+      const handle = inert.jobs.start([def], {signal: AbortSignal.abort()});
+      await assert.rejects(handle.ready, {name:'AbortError'});
+      await handle.done;
       await inert.close();
       const db = createTenon({ connection: 'postgresql://unused' });
       await db.close();

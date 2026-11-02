@@ -2,7 +2,7 @@
 
 Tenon includes `@kequtech/pgclear` as a runtime dependency, currently supporting 0.3.x. This document
 explains the library boundary for maintenance. Application contracts belong in the
-[reference](docs/reference.md), value mappings in [schema types](docs/schema-types.md), and
+[reference](docs/reference.md), value mappings in [schema types](docs/types.md), and
 consumer-visible changes in the [changelog](CHANGELOG.md). The
 [integration brief](notes/tenon-pgclear-integration-brief.md) records the original agreement.
 
@@ -77,7 +77,7 @@ transactions, retain database-wide codecs; Tenon exposes no per-query override.
 `inspectSchema` owns a separate versioned catalog contract rather than hashing generated declaration
 syntax or comments. Its fingerprint includes PostgreSQL major and schema identity, with explicit
 scope exclusions. Keep the version-1 inputs stable when changing the generator; expand the catalog
-contract under a new format version. See [snapshot scope](docs/schema-inspection.md).
+contract under a new format version. See [snapshot scope](docs/checking.md#schema-checkpoints).
 
 ## Upgrade checks
 

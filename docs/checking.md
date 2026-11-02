@@ -1,0 +1,196 @@
+# Checking SQL and schema contracts
+
+[All guides](../README.md) · [Types](types.md) · [Reference](reference.md)
+
+[Choose a check](#choose-a-check) · [Source checking](#source-checking) ·
+[Supported composition](#supported-composition) · [Describe](#describe) ·
+[Schema checkpoints](#schema-checkpoints) · [Behavior tests](#behavior-tests)
+
+## Choose a check
+
+| Tool                     | Establishes                                                                  | Does not establish                                               |
+| ------------------------ | ---------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| TypeScript               | Call/type compatibility in your project                                      | SQL correctness or runtime data validity                         |
+| `tenon generate --check` | Exact generated output matches the selected schema/codecs                    | Query projections, privileges or full schema equivalence         |
+| `tenon check`            | Recoverable source SQL has no definite contradiction with declared contracts | Nullability, JSON members, authorization or every runtime branch |
+| `tenon describe`         | PostgreSQL metadata for one finished statement                               | Its actual result/effects or a checked source annotation         |
+| `tenon schema`           | A versioned catalog snapshot/fingerprint                                     | Complete database, security or migration-history equivalence     |
+| Database workflow tests  | Observed rows, effects, rollback and permissions for exercised cases         | All production failures or capacity                              |
+
+Use a migrated representative development/test database. Match runtime role, search path, timezone
+and codecs. Checking/Describe never execute application SQL or bind its values, but PostgreSQL
+parses/analyzes statements and can take locks. Importing the trusted config executes that config;
+query modules themselves are only read.
+
+## Source checking
+
+```sh
+npx tenon check
+npx tenon check src/users.ts
+npx tenon check src/users.ts:23 --json
+```
+
+Select a project, file or one complete multiline query containing a one-based line. A fragment alone
+is not a query target. `--project` overrides `check.project`; targets must belong to that project.
+The checker uses bundled TypeScript 6 and the project's imports, aliases, indexed access, Pick,
+unions and path mappings. It requires strictNullChecks and reports selected-file compiler errors.
+
+| Finding   | Action                                                                                  | Fails command? |
+| --------- | --------------------------------------------------------------------------------------- | -------------- |
+| mismatch  | Fix a definite SQL/input/result contradiction                                           | Yes            |
+| unchecked | Resolve unsupported recovery/inspection, or retain visible scoped exceptions plus tests | Yes            |
+| unproven  | Validate the part metadata cannot establish                                             | No             |
+
+No recognized sites also fails. An analysed site may still have mismatches. Each variant must fit
+at least one declared result-union member; missing required properties fail, extra selected columns
+are structurally allowed. Default enum labels can establish exact/superset string unions and disjoint
+mismatches. Partial overlap, brands, refinements, nullability and JSON members can remain unproven.
+Custom enum decoders retain their own representations rather than catalog labels.
+
+Inputs and outputs differ: int8 accepts exact strings or bigint but defaults to string output.
+Ordinary string/number/bigint/Date/Temporal binds use server inference. Boolean, bytes and recoverable
+json/param calls provide the same OID hints as execution. Opaque Parameters are trusted with
+unproven encoder OIDs; dependent result checks and inference failures remain unproven. Plain
+objects/arrays/undefined contradict ordinary binds. Format/range validity still needs runtime checks.
+
+The readable report groups equivalent findings while retaining distinct columns/parameters/types;
+JSON keeps individual variant diagnostics. It includes source locations, codes and expected/observed
+types. Coverage counts recognized complete sites as total, analysed and unchecked. Unrelated tags
+are outside the counts. Literal inline query labels are preserved from immediately enclosing Tenon
+query calls; labels hidden by variables/wrappers/spreads are not guessed. Exception policy and label
+uniqueness belong to the application. A recoverable branch can expose a mismatch even when another
+branch is unchecked; remaining queries continue after unsupported sites.
+
+```ts
+import { checkQueries } from '@kequtech/tenon-orm/check';
+
+const report = await checkQueries({ connection, project: 'tsconfig.json', target: 'src/users.ts' });
+if (!report.ok) process.exitCode = 1;
+```
+
+This separate entry point keeps TypeScript out of ordinary runtime initialization. Programmatic
+options never discover config. Connection-option codecs are inherited; an explicit codecs value
+overrides the reported mappings. Use readTypes only for unidentified decoder representations, not
+to override known codecs or assert JSON members. Type expressions resolve from the tsconfig directory
+without executing referenced modules. Unresolvable expressions never become successful checks.
+
+## Supported composition
+
+Recovery follows Tenon's imported symbols through aliases, namespaces, barrels and const aliases.
+It supports fixed unsafeSql text/values lists, inline/const fragments, fixed identifiers, fixed join
+lists/separators and ternaries with recoverable branches. Reused conditional fragments and stable
+shared conditions retain their branch choices, including simple negation. General reachability is
+not inferred. Mutable guards with unresolved repeated correlation stay unchecked.
+
+Finite helper parameters now work directly:
+
+```ts
+import { identifier, sql } from '@kequtech/tenon-orm';
+
+export function catalogCount(table: 'pg_class' | 'pg_namespace') {
+  return sql<{ total: string }>`SELECT count(*) AS total FROM ${identifier('pg_catalog', table)}`;
+}
+```
+
+Every name in an immutable string-literal parameter union is quoted and inspected. Imported type
+aliases and const aliases of a parameter work; reusing it keeps the same name choice. Separate
+parameters describe independent alternatives. Broad strings, reassigned parameters, narrowing casts
+on broad values, and property access through correlated object unions remain unchecked. When table
+and column choices depend on each other, use explicit branches sharing a stable condition or
+separate concrete queries. If independent name combinations produce missing-table/column errors, the query remains unchecked
+with identifier-correlation-unresolved rather than reporting an invented pairing as a mismatch.
+
+Small const-arrow factories returning one sql.fragment template can interpolate only required
+SqlFragment parameters. Calls substitute recovered arguments; defaults, rest/destructuring,
+generics, statement bodies and scalar factory parameters stay unsupported. No helper code executes.
+
+Object expansion needs an explicit finite shape:
+
+```ts
+type Patch = { email?: string; active?: boolean };
+export function patchUser(id: number, patch: Patch) {
+  return sql`UPDATE public.users SET ${sql.assignments<Patch>(patch, ['email', 'active'])}
+    WHERE id = ${id}`;
+}
+```
+
+Optional/undefined fields create bounded omitted/defined alternatives. Explicit insert columns use
+DEFAULT for absent cells; assignments omit them, and null remains a bind. Direct object literals
+supply actual own fields/value expressions; unknown objects use the declared shape as a trusted
+expansion contract. Explicit columns avoid assumed key/order equivalence. Aliases/spreads/accessors
+do not gain invented object-mutation analysis. Fixed batches are supported; unknown batch lengths,
+shape unions, open generics and index signatures are not. A constrained generic field can use its
+base constraint, while an unresolved shape stays unchecked.
+
+Empty assignments and inferred multi-row default-only batches reject at runtime before SQL. Checking
+retains an unproven rejection note and inspects SQL-producing variants; an entirely rejecting query
+is unchecked. Keep intended omission and validate empty patches rather than casting fields required
+to silence a diagnostic.
+
+The budget is 16 complete variants per query, including optional fields and parameter OID choices,
+and 32 composition references. Loops, escaping/mutable fragment lists, runtime joins and arbitrary
+function-body analysis remain unsupported. Unknown source is never replaced with invented SQL.
+Review newly analysed sites and stale exceptions when upgrading the checker, against the same schema.
+
+## Describe
+
+```sh
+npx tenon describe query.sql --search-path app,public --time-zone UTC
+```
+
+Save ordinary SQL, using `$1` placeholders if needed. The output includes parameters, columns,
+PostgreSQL OIDs/types, source-column information, read representations, a conservative row declaration
+and unresolved issues. It does not compare that declaration with a source annotation. Source NOT NULL
+does not establish result nullability after joins/grouping. Issues include nullability-unknown,
+shape-unknown, unmapped-type and duplicate-column.
+
+```ts
+import { describeQuery } from '@kequtech/tenon-orm';
+const description = await describeQuery({ connection, query });
+```
+
+Pass SQL text or a finished statement with OID hints. Values are never bound or executed. Inspection
+uses a separate short-lived session, not the callback transaction's temporary objects or uncommitted
+state. It applies read-only analysis, bounded connect/statement/lock waits and explicit session
+overrides; inspect the returned context to verify role, paths, timezone and limits. Connection options
+and codecs follow [configuration](database.md#configuration); [reference flags](reference.md#commands)
+list defaults. A Describe success does not prove valid inputs, execution grants, cardinality or effects.
+
+## Schema checkpoints
+
+```sh
+npx tenon schema --namespace app
+```
+
+`inspectSchema({ connection, namespace? })` returns formatVersion 1, postgresMajor, namespace,
+tables, enums, domains, sequences and fingerprint. Namespace selection matches generation. It
+writes no files or database state. Reads use default codecs on one borrowed session in a read-only
+repeatable-read transaction with the shared migration lock. Temporary deparser/session settings
+are restored, and borrowed pools remain owned by the application.
+
+Included metadata covers ordinary/partitioned tables and attached partitions, column types/order,
+nullability/default/generated/identity/collation, inheritance/partition definitions, named constraints
+and indexes (including validity/readiness), ordered enum labels, domains and sequence declarations
+with owned-column associations. Sequence integer settings are exact strings; positions and row data
+are excluded, as is the namespace's __tenon_migrations table. Names use C sorting; meaningful catalog
+orders are preserved. See exported SchemaSnapshot types for individual fields and PostgreSQL kind codes.
+
+The fingerprint is `tenon-schema-v1:sha256:<hex>`, hashing canonical metadata JSON with sorted object
+keys and preserved array order. It includes namespace and PostgreSQL major, excludes OIDs/connection
+values and pins stable formatting settings. Codec, generator and prose changes do not affect it.
+Fresh replay in the same namespace/major reproduces it. Changed fingerprint inputs require a new
+format version; PostgreSQL deparsing can change even in patches, so review upgrade differences.
+
+Version 1 excludes functions, privileges/owners, RLS, triggers, rules, views/materialized views,
+foreign tables, extension/composite/range and collation definitions, external definitions and table
+storage settings. Index storage clauses emitted in index definitions are included. Qualified external
+references remain in SQL definitions. Uncoordinated external DDL is outside Tenon's lock contract.
+This is a checkpoint component, not full equivalence. [Baseline adoption](database.md#adopt-an-existing-schema)
+requires separately reviewed function/security/history checks and a frozen trusted replay reference.
+
+## Behavior tests
+
+Execute the same query functions used by the application against dedicated test storage. Assert
+actual rows and effects, including null/omitted fields, authorization, rollback, meaningful composition
+alternatives and retries/reconciliation where applicable. Preserve unexpected findings. Neither SQL
+string matching nor tests for words in documentation establish database behavior.

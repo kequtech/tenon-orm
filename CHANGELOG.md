@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.5.0
+
+- Replace the 15-guide documentation structure with seven task guides and a shorter README.
+  Humans and coding agents use the same first-use/existing-project workflow. Old pages map as follows:
+
+  | Earlier pages                                           | New guide                                  |
+  | ------------------------------------------------------- | ------------------------------------------ |
+  | human-guide, agent-guide                                | [Getting started](docs/getting-started.md) |
+  | sql, mutations; transaction explanations from reference | [Queries](docs/queries.md)                 |
+  | configuration, connections, migrations, adoption-guide  | [Database](docs/database.md)               |
+  | schema-types                                            | [Types and values](docs/types.md)          |
+  | query-checking, query-inspection, schema-inspection     | [Checking](docs/checking.md)               |
+  | jobs, job-workflows                                     | [Jobs](docs/jobs.md)                       |
+  | reference                                               | [API and CLI lookup](docs/reference.md)    |
+
+- Add `db.jobs.getMany` / `tx.jobs.getMany` for bounded ordered batch inspection, and
+  `db.jobs.start` with `ready` / `done` promises. Existing `run` remains supported.
+- Add schedule `requestKey` through Jobs 0.2.1 so scheduled/manual/startup requests share the same
+  durable key. **Upgrade action:** existing Jobs storage version 1 requires a new app migration
+  containing `jobsUpgrade.up` from `@kequtech/pgclear-jobs/migrations`, after stopping old producers
+  and workers. Never rewrite the original setup SQL or reset storage; see [Jobs upgrades](docs/jobs.md#upgrading-from-jobs-020).
+- Directly re-export pgclear 0.3.5's `findDriverErrors` for original-error traversal without a
+  transaction-outcome guess or retry wrapper.
+- Recover immutable finite string-literal identifier parameters in source checks, including imported
+  aliases and reused names. Correlated object choices and open/mutable names stay unchecked.
+- Ship a supervised Next.js process-hosting recipe and tested runtime-role grants. Process policy,
+  durable application results, authorization and external-effect reconciliation remain app-owned.
+
 ## 0.4.11
 
 - Remove the `jobs` configuration flag. `db.jobs` and `tx.jobs` are always available; remove
@@ -38,7 +66,7 @@
 - Add `inspectSchema` and `tenon schema` for versioned, codec-independent catalog snapshots and
   SHA-256 fingerprints. Version 1 includes scoped relation/type/sequence definitions and PostgreSQL
   major version; functions, security policy, data and other excluded objects still need independent
-  checks. Existing adoption guards are unchanged. See [schema snapshots](docs/schema-inspection.md).
+  checks. Existing adoption guards are unchanged. See [schema snapshots](docs/checking.md#schema-checkpoints).
 - Check bounded optional insert/update mutation shapes, including omission, DEFAULT and nullable
   values. Empty runtime-rejected combinations remain explicit notes; unresolved SQL and queries
   beyond the 16-variant budget still fail. Reports include recognized-site coverage counts.
@@ -48,7 +76,7 @@
   overrides. Source checking proves matching enum output unions while retaining narrower/custom
   refinements and unknown nullability as unproven.
 - Require pgclear `^0.3.4`, adding `builtin.uuidArray`, safe decode-error column/type context, and
-  a complete shared-listener ownership example. See [connections](docs/connections.md).
+  a complete shared-listener ownership example. See [connections](docs/database.md).
 
 ## 0.4.5
 
@@ -57,7 +85,7 @@
   decoders still warn and generate `unknown`. Enum write inputs retain catalog choices.
 - Require pgclear `^0.3.3` for per-type default-decoder metadata and dynamic notification
   subscriptions. Native listeners can add and remove channels on one dedicated connection; see
-  [notifications](docs/connections.md#listen-for-notifications) for ownership and recovery.
+  [notifications](docs/database.md#native-driver-access) for ownership and recovery.
 
 ## 0.4.4
 
@@ -88,7 +116,7 @@
 - Add `db.generateTypes({ out, namespace?, check?, onWarning? })`, using the instance's configured codecs.
 - Remove `tenon generate`; run generation and freshness checks from an application script.
   Use the configured database instance, set `check: true` for freshness checks, and close it when
-  the script finishes. See the [generation script example](docs/human-guide.md#generate-types).
+  the script finishes. See the [generation script example](docs/getting-started.md#generate-and-verify).
 
 ## 0.4.0
 
@@ -99,7 +127,7 @@
   Connections accept a PostgreSQL URI, pgclear `PoolOptions`, or a pgclear `Pool`; translate former
   pg configuration and supply deployment settings explicitly.
   PG environment defaults, pgpass/service files, and pg-specific URI options are not read. See
-  [connection configuration](docs/connections.md#configure-a-database-instance).
+  [connection configuration](docs/database.md#configuration).
 - `db.native` is now a pgclear `Pool`. Use `queryClassic(text, values?)` for finished SQL and
   acquire/withSession for held sessions; native `query` accepts pgclear's own sql tag only. Prepared
   statements, streams, and COPY use the public session APIs. Use pgclear `listen` for dedicated
@@ -151,7 +179,7 @@
   `constraint`). Native LISTEN uses checked-out clients with application-owned resubscription.
   Default results are no longer iterable: use `result.rows`, replace metadata `count` with
   `rowCount`, and update recording helpers. Selected SQL columns named `count` are unchanged. See
-  [transaction adapters](docs/reference.md#adapting-transactional-results) for `{ rows }` consumers.
+  [transaction adapters](docs/database.md#native-driver-access) for `{ rows }` consumers.
 - Driver defaults apply, including no acquisition timeout and SQL null for bound `undefined`. The
   parameter ceiling now matches PostgreSQL's 65,535 limit.
 - Regenerate types: temporal reads include numeric infinities, date-only values use Node's local
@@ -207,10 +235,10 @@ Changes since 0.1.0, including improvements shipped in 0.1.1–0.1.4.
   report PostgreSQL parameter/result types, source columns, a conservative row declaration, and
   unresolved findings. Inspection accepts completed dynamic SQL, uses a separate session, and
   supports explicit role, search path, timezone, and timeouts. It does not execute the query or
-  verify its TypeScript annotation. See [query inspection](docs/query-inspection.md).
+  verify its TypeScript annotation. See [query inspection](docs/checking.md#describe).
 - `sql.insertValues(input, columns?)` builds inserts with database defaults for missing or undefined
   cells. `sql.assignments(input, columns?)` builds updates that omit undefined fields. Both preserve
-  explicit null. See the [mutation cookbook](docs/mutations.md).
+  explicit null. See the [mutation cookbook](docs/queries.md#write-objects).
 - Generated `Rows.Insert['table']` and `Rows.Update['table']` types account for defaults,
   nullability, domains, generated columns, and driver input representations.
 

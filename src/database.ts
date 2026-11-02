@@ -75,6 +75,10 @@ export function createTenon(config: TenonConfig): Database {
     get jobs() {
       return (jobs ??= {
         ...createJobRecords(db, checkOpen),
+        start(definitions, options) {
+          checkOpen();
+          return jobsIntegration.startJobs(db, definitions, options);
+        },
         run(definitions, options) {
           try {
             checkOpen();

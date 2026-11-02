@@ -155,16 +155,28 @@ export async function checkQueries(options: CheckOptions): Promise<CheckReport> 
             const code =
               error && typeof error === 'object' && 'code' in error ? error.code : undefined;
             const sqlError = typeof code === 'string' && code.startsWith('42') && code !== '42501';
+            const nameCorrelation =
+              variant.uncertainIdentifiers && ['42703', '42P01'].includes(String(code));
             const uncertain =
               sqlError &&
               variant.uncertainParameters.length > 0 &&
               !['42601', '42P01'].includes(String(code));
             findings.push({
               ...location(entry.query),
-              kind: uncertain ? 'unproven' : sqlError ? 'mismatch' : 'unchecked',
-              code: typeof code === 'string' ? code : 'describe-failed',
+              kind: nameCorrelation
+                ? 'unchecked'
+                : uncertain
+                  ? 'unproven'
+                  : sqlError
+                    ? 'mismatch'
+                    : 'unchecked',
+              code: nameCorrelation
+                ? 'identifier-correlation-unresolved'
+                : typeof code === 'string'
+                  ? code
+                  : 'describe-failed',
               variant: index + 1,
-              message: `${error instanceof Error ? error.message : 'Describe failed.'}${uncertain ? ' The actual encoder OID is unknown; this inference failure does not disprove the declared contract.' : ''}`,
+              message: `${error instanceof Error ? error.message : 'Describe failed.'}${nameCorrelation ? ' Independent identifier choices may be correlated by callers; use explicit matching branches.' : uncertain ? ' The actual encoder OID is unknown; this inference failure does not disprove the declared contract.' : ''}`,
             });
           }
         }

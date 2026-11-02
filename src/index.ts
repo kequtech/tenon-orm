@@ -1,5 +1,12 @@
 // Reuse Pgclear's value conversion helpers without exposing its separate SQL tag.
-export { builtin, createTemporalCodecs, defaultCodecs, json, param } from '@kequtech/pgclear';
+export {
+  builtin,
+  createTemporalCodecs,
+  defaultCodecs,
+  findDriverErrors,
+  json,
+  param,
+} from '@kequtech/pgclear';
 export type {
   Codec,
   CodecRegistry,
@@ -35,6 +42,7 @@ export type {
   HandlerContext,
   JobErrorOptions,
   RunnerOptions,
+  RunnerHandle,
   SendOptions,
   TimingOptions,
   RequestOptions,

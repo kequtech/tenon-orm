@@ -1,129 +1,247 @@
-# Durable jobs
+# Durable background jobs
 
-Tenon includes `@kequtech/pgclear-jobs` through `db.jobs` and `tx.jobs`. This example assumes
-a `projects` table with text `id`, text `status` and timestamp `refreshed_at` columns:
+[All guides](../README.md) · [Database hosting](database.md#hosting) · [Reference](reference.md#jobs)
 
-```ts
-import { createTenon, defineJob, defineWorker, sql } from '@kequtech/tenon-orm';
+[Storage and grants](#storage-and-grants) · [Contracts and workers](#contracts-and-workers) ·
+[Submit and inspect](#submit-and-inspect) · [Keys and schedules](#keys-and-schedules) ·
+[Hosting](#hosting) · [Reliable application workflows](#reliable-application-workflows)
 
-const db = createTenon({ connection: process.env.DATABASE_URL });
-const refreshProject = defineJob<{ projectId: string }>({ name: 'refresh-project' });
-const refreshWorker = defineWorker(refreshProject, {
-  transactional: true,
-  async handler({ projectId }, { tx }) {
-    await tx.query(sql`UPDATE projects SET refreshed_at = now() WHERE id = ${projectId}`);
-  },
-});
+Tenon includes pgclear-jobs. `db.jobs` and `tx.jobs` are always available; access and definitions
+are inert. Storage installation and worker startup are explicit. Transaction scopes expose record
+operations only, while database scopes can also start workers.
 
-const projectId = 'project-123';
-await db.transaction(async (tx) => {
-  await tx.query(sql`UPDATE projects SET status = 'ready' WHERE id = ${projectId}`);
-  await tx.jobs.send(refreshProject, { projectId });
-});
-```
+## Storage and grants
 
-Imports, definitions and facade access are inert. Storage setup and worker startup are explicit;
-creating a database instance does neither.
-
-Put the `JobSpec<Payload>` returned by handler-free `defineJob` in a shared producer contract;
-bind its handler with `defineWorker` in the worker process. Submissions snapshot the specification's
-execution/retry policy. Worker options add the handler, transaction mode and local concurrency.
-Existing inline `defineJob({ name, handler, ... })` definitions remain supported. Runners require
-executable definitions through typing and startup validation.
-
-## Storage setup
-
-Generate, review and commit an application migration pair, then apply it with the existing runner:
+For a new installation:
 
 ```sh
 npx tenon jobs setup
 npx tenon migrate
 ```
 
-Setup is offline. It uses `migrations.directory` or `--directory` and supports `--config` and
-`--database`. Programmatic `createJobsMigration({ directory? })` returns
-`{ id, upPath, downPath, created }`; `created: false` identifies an existing generated pair.
+Setup copies the installed Jobs package's concrete up/down SQL into a numbered app migration pair.
+It works offline with the configured directory and recognizes existing setup files without changing
+them. Review/commit SQL and apply it through the existing runner; storage is never installed on
+startup. `migrations.namespace` controls application history, not queue isolation. Jobs uses the
+fixed `pgclear_jobs` schema. If it already exists, account for its installation before applying
+creation SQL. Applications sharing one database need one setup owner and deliberate grants.
 
-The files contain concrete SQL from the installed Jobs package and use Tenon's normal numbering,
-transaction runner and checksums. Repeated setup preserves existing files. Keep applied migrations
-unchanged; future Jobs schema changes require an application-authored migration. There is no
-incremental Jobs migration engine.
+### Upgrading from Jobs 0.2.0
 
-Jobs uses one fixed `pgclear_jobs` schema per physical database. The runner's namespace selects
-application history and search path, not a separate queue schema; setup does not accept `--namespace`.
-Applications sharing a database should choose one owner for its setup migration and runtime grants.
-If storage already exists, account for it in application history before applying the creation SQL.
-The down migration removes Jobs storage and its data.
+Jobs 0.2.1 uses storage version 2 for scheduled request keys. Stop old producers and workers,
+await worker cleanup, and apply a **new** app migration containing `jobsUpgrade.up` from
+`@kequtech/pgclear-jobs/migrations`. Keep the original installation pair unchanged. The SQL checks
+version 1 and adds the nullable schedule key without resetting records. Then restart all components
+using Jobs 0.2.1. Old/new workers reject incompatible storage; mixed-version operation is unsupported.
+Setup and `migrate up` do not perform this upgrade automatically.
 
-## Record operations and transactions
+`jobsUpgrade.down` restores version 1 only after keyed schedules have been removed or converted.
+It preserves jobs but cannot undo effects already produced. The supporting package's installed
+`docs/migrations.md` explains the upgrade and includes the exported SQL contract.
 
-`db.jobs` exposes Jobs record operations and the worker runner. `tx.jobs` exposes the record
-operations on that transaction, including submissions, inspection, scheduling and cleanup. Options,
-results and errors follow the [Jobs API](https://github.com/kequtech/pgclear-jobs/blob/main/docs/api.md).
-Transaction scopes cannot start workers or install storage.
+Run schema DDL as its owner and application operations as a separate runtime role:
 
-Use the supplied `tx` for writes and follow-up submissions that must commit with successful handler
-completion. Throwing rolls those changes back. Root `db` calls commit independently, even inside a
-handler. Notifications from transactional submissions become visible on commit.
+```sql
+GRANT USAGE ON SCHEMA pgclear_jobs TO jobs_runtime;
+GRANT SELECT ON pgclear_jobs.schema_version TO jobs_runtime;
+GRANT SELECT, INSERT, UPDATE, DELETE ON pgclear_jobs.jobs, pgclear_jobs.attempts,
+  pgclear_jobs.schedules TO jobs_runtime;
+REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA pgclear_jobs FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION pgclear_jobs.request_job(uuid, text, jsonb, text,
+  timestamptz, double precision, jsonb, boolean) TO jobs_runtime;
+```
 
-Tenon's `defineJob`, `defineWorker`, `JobDefinition<Payload>`, `JobOptions<Payload>`,
-`WorkerOptions<Payload>` and `TransactionalHandlerContext` use the ORM `Transaction`. Record operations also accept native Jobs
-definitions; runners require definitions matching their handler transaction type. Jobs error classes
-are re-exported unchanged.
+Create the role and its application-table grants through existing provisioning. Runtime needs no
+schema CREATE or ownership. Trigger functions need no direct runtime EXECUTE grant. The supporting
+package ships this tested recipe as `examples/runtime-grants.sql`. Producer-only roles can omit
+attempts privileges/DELETE and schedule privileges when unused. Job names do not isolate tenants or
+applications; use database grants as the authorization boundary. Down SQL drops the whole queue
+schema and its data; it is not an upgrade method.
 
-ORM execution retains affected-row savepoints, result modes, serialization, scope expiry and
-`onQuery` observation. Producer SQL, handler ORM queries and transactional completion are observed.
-Claims, heartbeats and maintenance use pgclear directly; use driver telemetry for that traffic.
+## Contracts and workers
 
-See [reliable job workflows](job-workflows.md) for durable results, atomic follow-ups, external effects
-and keyed concurrency.
-
-## Workers and shutdown
+Keep producer imports independent of worker implementations:
 
 ```ts
-const stop = new AbortController();
-process.once('SIGTERM', () => stop.abort());
-process.once('SIGINT', () => stop.abort());
-try {
-  await db.jobs.run([refreshWorker], { signal: stop.signal });
-} finally {
-  await db.close();
+// jobs.ts — safe for producers to import
+import { defineJob } from '@kequtech/tenon-orm';
+export const refresh = defineJob<{ projectId: string }>({
+  name: 'refresh-project',
+  maxAttempts: 3,
+  executionTimeoutMs: 300000,
+});
+```
+
+```ts
+// workers.ts
+import { defineWorker, sql } from '@kequtech/tenon-orm';
+import { refresh } from './jobs.ts';
+
+export const refreshWorker = defineWorker(refresh, {
+  transactional: true,
+  concurrency: 2,
+  async handler({ projectId }, { tx }) {
+    await tx.query(sql`UPDATE public.projects SET refreshed_at = now() WHERE id = ${projectId}`, {
+      affectedRows: { exact: 1 },
+    });
+  },
+});
+```
+
+This assumes `public.projects(id text, refreshed_at timestamptz)` exists. Producer specifications
+own saved retry/execution policy. Workers add handler, transaction mode and local concurrency;
+`defineWorker` infers payload and ORM `Transaction`. Existing inline defineJob handlers also work.
+Only executable definitions can run. See [reference options](reference.md#jobs).
+
+Transactional handler writes, follow-up submissions, attempt success and completion commit together
+when made through the supplied tx. A handler exception rolls them back before retry bookkeeping;
+loss of ownership prevents stale completion. A root db call commits independently. Nontransactional
+handlers receive id, one-based attempt, saved maxAttempts, signal and nullable scheduledFor.
+Pass the signal to cancellable dependencies; cancellation cannot stop arbitrary JavaScript.
+
+## Submit and inspect
+
+```ts
+await db.transaction(async (tx) => {
+  await tx.query(sql`UPDATE public.projects SET status = 'ready' WHERE id = ${projectId}`);
+  await tx.jobs.send(refresh, { projectId });
+});
+```
+
+This adds a text status column to the preceding table assumption. Submissions and notifications
+become visible with the application commit. Payloads are JSON primitives, dense arrays and plain
+objects; undefined object fields are omitted. Dates, bigint, nonfinite numbers, cycles/accessors and
+undefined array elements reject. Payload types do not validate persisted/untrusted data.
+
+`send` creates independent work, optionally with a stable UUID. Reusing an ID returns its first
+record unchanged while retained, even after completion. `sendMany` inserts up to 1000 entries,
+skipping duplicate IDs and returning only inserted rows without order guarantees. Empty input is inert.
+Use delayMs or runAt for timing, never both; relative delay uses the database clock.
+
+Use `getMany(ids)` for status projection: one bounded statement, original request order, duplicate
+IDs returned once and missing IDs omitted. Mixed IDs return unknown payloads. Empty input performs
+no SQL but still checks the Tenon facade's lifetime. For larger filtered lists, paginate completely:
+
+```ts
+let after: string | undefined;
+for (;;) {
+  const page = await db.jobs.find(refresh, { limit: 100, ...(after ? { after } : {}) });
+  if (!page.length) break;
+  for (const job of page) await projectStatus(job); // Application projection.
+  after = page.at(-1)!.cursor;
 }
 ```
 
-`db.jobs.run(definitions, options?)` forwards Jobs' runner options and lifetime promise. Jobs owns
-claims, retries, schedules, cancellation and cleanup. Each run is independently controlled; missing
-or incompatible storage rejects startup rather than installing it.
+`find` defaults to 100 records, maximum 1000. Cursors preserve database timestamp precision and
+remain valid after cursor-row removal. This is live pagination, not a frozen snapshot. Queue records
+are operational state; durable product results belong in application tables. `cancel` only cancels
+pending work, including backoff/successors; it does not abort a running provider call.
 
-In an HTTP framework startup hook, start the runner, observe rejection immediately, and retain
-its promise for shutdown; do not await the worker lifetime from that hook. The optional `onReady` callback
-runs once after storage validation, before dispatch, maintenance or listener startup. Its returned
-promise is awaited; failures reject the runner. It signals startup, while ongoing health and restart
-policy belong to application supervision. Shutdown can interrupt pending readiness work; asynchronous
-callbacks should honor the application's shutdown signal.
+## Keys and schedules
 
-On shutdown, abort the runner signal, await its promise, then close the database. `db.close()` does
-not stop or await workers, and supplied pools remain application-owned. Graceful shutdown allows
-accepted work to finish until Jobs' grace expires. Pass handler signals to cancellable dependencies
-and leave pool capacity for queue operations alongside application queries and handler transactions.
-
-## Observation and hosting
-
-`db.jobs.run` forwards Jobs' `onEvent` and `onHandlerError` options unchanged. `onEvent` reports
-local, best-effort lifecycle observations; observer failures cannot change job outcomes.
-`onHandlerError` receives the original handler error after any managed rollback and explicitly chooses
-`continue` or `stop`. Jobs owns these semantics; see the
-[Jobs API reference](https://github.com/kequtech/pgclear-jobs/blob/main/docs/api.md#observation-and-error-policy).
-
-The [small HTTP host](../examples/jobs-host.ts) demonstrates readiness, worker supervision and
-ordered cleanup with a transactional ORM query. It has no application tables or submission routes.
-After installing Jobs storage through the migrations above, copy it into an ESM application:
-
-```sh
-cp node_modules/@kequtech/tenon-orm/examples/jobs-host.ts ./jobs-host.ts
-DATABASE_URL=postgresql://localhost/example node jobs-host.ts
+```ts
+await db.jobs.request(refresh, { projectId }, { key: projectId });
+await db.jobs.schedule(
+  refresh,
+  { projectId },
+  {
+    cron: '0 * * * *',
+    key: `hourly:${projectId}`,
+    requestKey: projectId,
+    timeZone: 'UTC',
+  },
+);
 ```
 
-It listens on localhost port 3000 (`PORT` overrides this); requests return 200 when ready or 503
-while starting/stopping. SIGINT/SIGTERM stops the worker and closes the HTTP server and database.
-In this checkout, build first and run `node examples/jobs-host.ts`.
+A request key is scoped to the definition. It replaces an unstarted head's payload; after any
+attempt starts, requests preserve that head and its retries and coalesce into one trailing successor.
+Terminal head transition releases the successor atomically. Omitted timing preserves existing due
+times; explicit timing replaces them. Payloads replace rather than merge; sticky force/debounce
+intent belongs in application state, serialized with submission.
+
+Schedule `key` identifies the recurring producer; `requestKey` selects shared keyed execution.
+With requestKey, each due tick performs the same request without a timing override, so it cannot
+postpone a pending head/successor or disturb retry backoff. With no requestKey it creates an ordinary
+schedule-owned occurrence, suppressing overlap for that schedule. Different ordinary schedules and
+manual keyed requests are independent; per-runner concurrency does not serialize them globally.
+
+Shared jobs have null scheduleId/scheduledFor because several schedules/manual requests may
+contribute. Each schedule's lastJobId records the affected job. Unscheduling stops future ticks and
+leaves submitted jobs intact; retries follow normal key arbitration. Changing requestKey affects
+future ticks, while unchanged cron/timezone preserves the due cursor. Missed ticks submit at most
+one saved occurrence/request and advance into the future. Cron is deterministic five-field syntax;
+previewSchedule calculates future occurrences without a database.
+
+A key orders valid claims, not external effects from an expired handler. Keep operations safe under
+repetition. Reserve capacity for short jobs with definition limits/separate runs; concurrency is
+local per runner. The shared pool must also serve requests, claims, renewals and maintenance.
+
+## Hosting
+
+```ts
+const stop = new AbortController();
+const worker = db.jobs.start([refreshWorker], { signal: stop.signal });
+// Attach supervision immediately; stopApplication is application-owned.
+void worker.done.catch(stopApplication);
+await worker.ready;
+// Framework startup can now return while worker.done remains supervised.
+// On shutdown: stop accepting requests, then:
+stop.abort();
+await worker.done;
+await db.close();
+```
+
+`start` returns ready/done from the same Jobs runner as `db.jobs.run`, whose return value remains
+the full lifetime promise. Ready resolves after storage validation and successful onReady, before
+dispatch/maintenance/listener startup. It proves no ongoing health or listener connectivity. Startup
+errors reject both promises with the original error. A pre-aborted signal or shutdown before readiness
+rejects ready with AbortError and normally resolves done. A later failure rejects done. Both promises
+are observed immediately, but the host must supervise done and preserve failures during cleanup.
+
+The application owns process signals and restart policy. Abort stops new claims, lets accepted work
+finish until shutdown grace expires, then aborts handler scopes. Await done before closing the database;
+db.close does not stop workers. Borrowed pools remain application-owned.
+
+The runnable [HTTP host](../examples/jobs-host.ts) demonstrates readiness responses and ordered
+cleanup without application tables. Copy it outside node_modules, install storage, set DATABASE_URL
+and run `node jobs-host.ts`. It listens on localhost:3000, with PORT override.
+
+### Next.js and framework-owned process exit
+
+A framework can handle SIGTERM and exit without awaiting another asynchronous signal callback.
+Host Next and the worker in separate supervised child processes. The parent owns signals, forwards
+shutdown, observes either child's failure, awaits worker cleanup and returns a failing exit status
+when needed. Keep database ownership in the worker process; startup must not await its full lifetime.
+
+The [Next.js host example](../examples/next-host.mjs) runs a production Next app plus an application
+worker entry point. The [worker entry example](../examples/jobs-worker.ts) illustrates the small IPC
+readiness contract. Both children stay supervised after readiness. The examples include a bounded
+shutdown; a framework process cannot terminate the worker's pool cleanup. See comments for invocation.
+This is application hosting code, not a framework runtime dependency or a library process manager.
+
+## Reliable application workflows
+
+Keep remote generation, delivery and object storage outside long transactions. A transactional handler
+holds its connection/locks for its entire callback. A nontransactional handler can prepare results
+and use short independent transactions, but retry must recognize any result already committed before
+queue completion. Use stable business operation IDs and application records that survive queue pruning.
+Persist a result reference and its required follow-up in the same short transaction. Finding a result
+alone does not prove a separately committed follow-up exists.
+
+A lost COMMIT response can mean success. Keep IDs/storage keys outside the transaction and reconcile
+through a healthy connection before repeating effects or deleting uploaded objects. Retain uncertain
+objects for later orphan cleanup if reconciliation is unavailable. Provider idempotency keys help
+external delivery, but database fences cannot make an external effect exactly once.
+
+`onEvent` is local best-effort observation, not a durable business event stream; observer failures
+cannot change outcomes. `onHandlerError` sees an original escaping handler error after confirmed
+managed rollback and chooses continue or stop. Continue preserves saved retry policy; stop rejects
+the runner with the original error before failure bookkeeping and leaves recovery to the lease engine.
+It is escalation, not a durable queue pause. Managed infrastructure failures bypass this hook.
+
+Independent transaction failures inside a nontransactional handler normally follow handler retry
+policy; use findDriverErrors and an explicit onHandlerError decision when supervision must reconcile
+uncertain outcomes first. Preserve raw errors while choosing safe log metadata. JobError with
+retry:false marks permanent failure; retryAt sets a lower bound without extending attempt budget.
+Completed/cancelled retention defaults to seven days; failures need explicit pruning. Queue ID
+retention is not durable business idempotency. [Reference](reference.md#jobs) lists operations and hooks.

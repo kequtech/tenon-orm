@@ -121,6 +121,38 @@ function start(
   return { stop, running };
 }
 
+test('bulk inspection, keyed schedules and readiness handles retain the ORM scope and pool', async () => {
+  const spec = defineJob<number>({ name: name() });
+  await assert.rejects(
+    db.transaction(async (tx) => {
+      const job = await tx.jobs.send(spec, 42);
+      const schedule = await tx.jobs.schedule(spec, 42, {
+        cron: '0 * * * *',
+        requestKey: 'shared',
+      });
+      assert.equal(schedule.requestKey, 'shared');
+      assert.deepEqual(
+        (await tx.jobs.getMany([job.id, job.id])).map((j) => j.payload),
+        [42],
+      );
+      assert.deepEqual(await db.jobs.getMany([job.id]), []);
+      throw new Error('rollback');
+    }),
+    /rollback/,
+  );
+  assert.deepEqual(await db.jobs.find(spec), []);
+  assert.deepEqual(await db.jobs.schedules(spec), []);
+  const stop = new AbortController();
+  const worker = db.jobs.start([defineWorker(spec, { handler() {} })], { signal: stop.signal });
+  try {
+    await worker.ready;
+  } finally {
+    stop.abort();
+    await worker.done;
+  }
+  assert.equal((await pool.queryClassic('SELECT 1')).rows.length, 1);
+});
+
 test('transaction submissions commit or roll back with app writes and notify only after commit', async (t) => {
   const app = await table();
   const child = defineJob({ name: name(), handler(_payload: number) {} });

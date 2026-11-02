@@ -134,13 +134,12 @@ test('unrecoverable identifier branches remain unchecked while known contradicti
         'export const partial = sql<{value: number}>`SELECT count(*) AS value FROM ${identifier("pg_catalog", table)}`;',
         'export const invalid = sql`SELECT * FROM ${identifier("pg_catalog", choose ? "pg_class" : "")}`;',
         'export const raw = unsafeSql(choose ? "SELECT 1" : "SELECT 2", []);',
-        'export function literalType(name: "pg_class" | "pg_namespace") { return sql`SELECT * FROM ${identifier("pg_catalog", name)}`; }',
       ].join('\n'),
     },
     async (options) => {
       const report = await checkQueries(options);
       assert.equal(report.ok, false);
-      assert.deepEqual(report.coverage, { total: 4, analysed: 0, unchecked: 4 });
+      assert.deepEqual(report.coverage, { total: 3, analysed: 0, unchecked: 3 });
       assert.equal(report.queries[0]!.variants, 1);
       assert.ok(report.queries[0]!.diagnostics.some(({ code }) => code === 'dynamic-text'));
       assert.ok(report.queries[0]!.diagnostics.some(({ code }) => code === 'result-type-mismatch'));

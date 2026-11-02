@@ -10,6 +10,7 @@ import type {
   JobOptions,
   JobSpec,
   RunnerEvent,
+  RunnerHandle,
   WorkerOptions,
   Transaction,
   TransactionalHandlerContext,
@@ -33,6 +34,19 @@ async function contracts(pool: Pool) {
       await tx.queryClassic('SELECT 1');
     },
   });
+  const handle: RunnerHandle = db.jobs.start([worker], { signal: AbortSignal.abort() });
+  void handle.ready;
+  void handle.done;
+  const batch = await db.jobs.getMany([]);
+  const payload: unknown = batch[0]?.payload;
+  void payload;
+  // @ts-expect-error Heterogeneous IDs cannot assert a payload type.
+  await db.jobs.getMany<{ id: number }>([]);
+  await db.jobs.schedule(
+    specification,
+    { id: 1 },
+    { cron: '0 * * * *', key: 'hourly', requestKey: 'shared' },
+  );
   const workerOptions: WorkerOptions<{ id: number }> = {
     handler(payload) {
       const id: number = payload.id;
@@ -83,6 +97,8 @@ async function contracts(pool: Pool) {
       await tx.queryClassic('SELECT 1');
       // @ts-expect-error Transaction scopes cannot start workers.
       await tx.jobs.run([child]);
+      // @ts-expect-error Transaction scopes cannot own worker lifetimes.
+      tx.jobs.start([child]);
       // @ts-expect-error Transaction scopes cannot install storage.
       await tx.jobs.install();
     },

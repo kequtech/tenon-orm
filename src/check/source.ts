@@ -16,12 +16,14 @@ export interface Binding {
 type Part = string | Binding;
 interface Expansion {
   parts: Part[];
-  choices: Map<Choice, boolean>;
+  choices: Map<Choice, boolean | string>;
 }
 export interface QueryVariant {
   readonly text: string;
   readonly parameterTypes: readonly number[];
   readonly uncertainParameters: readonly number[];
+  /** Independent name choices may include pairs the helper's callers never combine. */
+  readonly uncertainIdentifiers?: boolean;
 }
 
 export class Unsupported extends Error {
@@ -285,6 +287,43 @@ export class SourceAnalysis {
     return result;
   }
 
+  private stableParameter(target: ts.Symbol): boolean {
+    const declaration = target.valueDeclaration;
+    if (!declaration || !ts.isParameter(declaration)) return false;
+    if (!this.stableParameters.has(target)) {
+      let written = false;
+      const contains = (node: ts.Node): boolean =>
+        (ts.isIdentifier(node) && symbol(this.project.checker, node) === target) ||
+        !!ts.forEachChild(node, contains);
+      const visit = (candidate: ts.Node): void => {
+        if (
+          ts.isBinaryExpression(candidate) &&
+          candidate.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
+          candidate.operatorToken.kind <= ts.SyntaxKind.LastAssignment &&
+          contains(candidate.left)
+        )
+          written = true;
+        if (
+          (ts.isPrefixUnaryExpression(candidate) || ts.isPostfixUnaryExpression(candidate)) &&
+          [ts.SyntaxKind.PlusPlusToken, ts.SyntaxKind.MinusMinusToken].includes(
+            candidate.operator,
+          ) &&
+          contains(candidate.operand)
+        )
+          written = true;
+        if (
+          (ts.isForOfStatement(candidate) || ts.isForInStatement(candidate)) &&
+          contains(candidate.initializer)
+        )
+          written = true;
+        ts.forEachChild(candidate, visit);
+      };
+      visit(declaration.getSourceFile());
+      this.stableParameters.set(target, !written);
+    }
+    return this.stableParameters.get(target)!;
+  }
+
   private conditional(
     node: ts.ConditionalExpression,
     depth: number,
@@ -305,38 +344,7 @@ export class SourceAnalysis {
     const valueDeclaration = target?.valueDeclaration;
     let stable = !!declaration && constant(declaration);
     if (target && valueDeclaration && ts.isParameter(valueDeclaration)) {
-      if (!this.stableParameters.has(target)) {
-        let written = false;
-        const contains = (node: ts.Node): boolean =>
-          (ts.isIdentifier(node) && symbol(this.project.checker, node) === target) ||
-          !!ts.forEachChild(node, contains);
-        const visit = (candidate: ts.Node): void => {
-          if (
-            ts.isBinaryExpression(candidate) &&
-            candidate.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
-            candidate.operatorToken.kind <= ts.SyntaxKind.LastAssignment &&
-            contains(candidate.left)
-          )
-            written = true;
-          if (
-            (ts.isPrefixUnaryExpression(candidate) || ts.isPostfixUnaryExpression(candidate)) &&
-            [ts.SyntaxKind.PlusPlusToken, ts.SyntaxKind.MinusMinusToken].includes(
-              candidate.operator,
-            ) &&
-            contains(candidate.operand)
-          )
-            written = true;
-          if (
-            (ts.isForOfStatement(candidate) || ts.isForInStatement(candidate)) &&
-            contains(candidate.initializer)
-          )
-            written = true;
-          ts.forEachChild(candidate, visit);
-        };
-        visit(valueDeclaration.getSourceFile());
-        this.stableParameters.set(target, !written);
-      }
-      stable = this.stableParameters.get(target)!;
+      stable = this.stableParameter(target);
     }
     if (target && !stable) {
       const previous = this.unstableConditions.get(target);
@@ -409,12 +417,48 @@ export class SourceAnalysis {
     const node = this.reference(input, depth);
     if (ts.isConditionalExpression(node))
       return this.conditional(node, depth, (branch, depth) => this.identifierName(branch, depth));
-    if (!ts.isStringLiteralLike(node))
+    if (!ts.isStringLiteralLike(node)) {
+      const target = symbol(this.project.checker, node);
+      const declaration = target?.valueDeclaration;
+      if (target && ts.isIdentifier(node) && declaration && ts.isParameter(declaration)) {
+        // The same immutable parameter must select the same name wherever it is reused.
+        if (!this.stableParameter(target))
+          return this.fail(
+            node,
+            'dynamic-binding',
+            'Identifier parameters must not be reassigned.',
+          );
+        const type = this.project.checker.getTypeAtLocation(node);
+        const members = type.isUnion() ? type.types : [type];
+        if (members.length > variantLimit)
+          return this.fail(
+            node,
+            'variant-limit',
+            `The query exceeds the ${variantLimit}-variant budget.`,
+          );
+        if (members.length && members.every((member) => member.isStringLiteral())) {
+          return members.map((member) => {
+            try {
+              return {
+                parts: [quote(member.value)],
+                choices: new Map([[declaration, member.value]]),
+              };
+            } catch {
+              return this.fail(
+                node,
+                'invalid-identifier',
+                'Identifier names must contain 1–63 UTF-8 bytes and no NUL.',
+              );
+            }
+          });
+        }
+      }
       return this.fail(
         input,
         'dynamic-text',
-        'Identifier names require fixed strings, const aliases or conditional choices between them.',
+        'Identifier names require fixed strings, conditional choices or immutable finite string-literal parameters.',
       );
+    }
     try {
       return [{ parts: [quote(node.text)], choices: new Map() }];
     } catch {
@@ -938,7 +982,14 @@ export class SourceAnalysis {
             return `$${bindings.length}`;
           })
           .join('');
-        variants.push(...this.withHints(text, bindings, node));
+        const uncertainIdentifiers =
+          expansion.choices.size > 1 &&
+          [...expansion.choices.values()].some((value) => typeof value === 'string');
+        variants.push(
+          ...this.withHints(text, bindings, node).map((variant) =>
+            uncertainIdentifiers ? { ...variant, uncertainIdentifiers: true } : variant,
+          ),
+        );
         if (variants.length > variantLimit)
           this.fail(node, 'variant-limit', `The query exceeds the ${variantLimit}-variant budget.`);
       }

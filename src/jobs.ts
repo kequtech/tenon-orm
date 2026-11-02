@@ -6,6 +6,7 @@ import type {
   JobOptions as NativeJobOptions,
   JobRecords,
   RunnerOptions,
+  RunnerHandle,
   TransactionalHandlerContext as NativeTransactionalHandlerContext,
   WorkerOptions as NativeWorkerOptions,
 } from '@kequtech/pgclear-jobs';
@@ -20,6 +21,7 @@ export type TransactionalHandlerContext = NativeTransactionalHandlerContext<Tran
 export type TransactionJobs = Pick<JobRecords, keyof JobRecords>;
 export interface DatabaseJobs extends TransactionJobs {
   run(definitions: readonly JobDefinition<unknown>[], options?: RunnerOptions): Promise<void>;
+  start(definitions: readonly JobDefinition<unknown>[], options?: RunnerOptions): RunnerHandle;
 }
 
 export const jobsIntegration = createJobsIntegration<Database, Transaction>({
@@ -56,6 +58,7 @@ export function createJobRecords(scope: Transaction, check: () => void): Transac
       forward(() => records.request(definition, payload, options)),
     sendMany: (definition, inputs) => forward(() => records.sendMany(definition, inputs)),
     get: (id) => forward(() => records.get(id)),
+    getMany: (ids) => forward(() => records.getMany(ids)),
     find: (definition, options) => forward(() => records.find(definition, options)),
     reschedule: (id, runAt) => forward(() => records.reschedule(id, runAt)),
     update: (definition, id, payload) => forward(() => records.update(definition, id, payload)),

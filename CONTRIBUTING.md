@@ -47,8 +47,16 @@ TENON_TEST_PGCLEAR_TARBALL=/absolute/path/pgclear.tgz TENON_TEST_JOBS_TARBALL=/a
 ```
 
 Either candidate can be selected independently. The harness overrides transitive resolution to use
-that artifact; omitted variables use registry dependencies. Before release, verify the published
-dependencies and lockfile, run `npm ci`, and validate without candidate overrides.
+that artifact; omitted variables use registry dependencies. This also validates the real Next.js
+host fixture in a disposable consumer installation; Next/React are test-fixture dependencies only.
+
+Tenon 0.5.0 currently requires the prepared but unpublished pgclear 0.3.5 and Jobs 0.2.1 patches.
+Until they are published, use the local packed-artifact workflow above. Their lockfile entries reserve
+those versions without invented registry URLs or integrity values. Before a future release, publish
+those verified supporting artifacts first, regenerate registry metadata with
+`npm install --package-lock-only --ignore-scripts`, review that only the intended dependency entries
+change, then run `npm ci` and the complete checks without candidate overrides. No registry-only
+clean-install verification is claimed while those required versions remain unpublished.
 
 ### Regenerate the fixture
 
@@ -101,13 +109,13 @@ removes them independently.
 
 ## Documentation
 
-The [README](README.md) is the entry point. It links the first-use guide, task guides, and API/CLI
-reference. The README, all of `docs/`, and [changelog](CHANGELOG.md) ship in the package. This guide
+The [README](README.md) is the entry point. It links seven consumer guides: getting-started, queries, database, types, checking, jobs and
+reference. Keep concepts in their owning guide and exact lookup tables in the reference. The README, all of `docs/`, and [changelog](CHANGELOG.md) ship in the package. This guide
 and `CONSIDERATIONS.md` stay in the repository.
 
 When changing documentation, check examples against actual public imports, schema assumptions,
 input/output types, and execution behavior. Verify relative links and section anchors, including
-links inside the installed package. Use repository URLs for maintainer-only files. Keep API
+links and heading anchors inside the installed package. Use repository URLs for maintainer-only files. Keep API
 contracts in the reference or focused guide and link to them instead of repeating the details in
 every introduction.
 

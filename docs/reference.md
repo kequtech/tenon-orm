@@ -1,336 +1,217 @@
 # API and CLI reference
 
-For a complete first setup, follow [Getting started](human-guide.md). Task guides explain
-[queries](sql.md), [writes](mutations.md), [schema types](schema-types.md),
-[migrations](migrations.md), [schema snapshots](schema-inspection.md), and [connections](connections.md).
-
-## Installation and connection
-
-Requires Node.js 24+, PostgreSQL 16+, and ESM. TypeScript consumers need TypeScript 6+ and Node.js
-development typings. Install `@kequtech/tenon-orm`; pgclear and pgclear-jobs are included as runtime
-dependencies.
-
-```text
-createTenon(config: TenonConfig): Database
-```
-
-Pass one database config directly. Its `connection` holds a PostgreSQL URI, pgclear pool-option
-values, or an application-owned pool. Its optional `onQuery` callback observes runtime queries.
-`ConnectionOptions` aliases pgclear `PoolOptions`; a supplied pool retains application ownership.
-Unknown config keys reject. Connection validation and pool creation wait until the first query,
-transaction, or native-pool access. Closing an unused instance needs no credentials.
-
-`tenon init` generates a named `main` config with plain environment reads and no eager credential
-check. Import it and call `createTenon(main)`. Runtime does not discover files. For multiple databases,
-export one config per database and select the matching export in the CLI with `--database`.
-See [shared configuration](configuration.md) for the complete setup.
-
-The returned `Database` provides:
-
-| Member                            | Contract                                                                                 |
-| --------------------------------- | ---------------------------------------------------------------------------------------- |
-| `query(query, options?)`          | Execute a Tenon `SqlQuery` and apply result/count options                                |
-| `transaction(callback, options?)` | Commit on callback success, roll back on an escaping error; return the callback's result |
-| `jobs`                            | Jobs record operations and worker runner; see [durable jobs](jobs.md)                    |
-| `native`                          | The underlying pgclear pool                                                              |
-| `close({ timeoutMs? }?)`          | Disable the wrapper and close an owned pool; default grace 5,000 ms                      |
-
-`onQuery(event)` observes completed Tenon query calls. It may return void or a promise; it is not
-awaited. Observer failures emit warnings without changing the outcome. `QueryEvent` contains
-`durationMs`, `outcome: 'success' | 'error'`, and optional `label`, `command`, `rowCount`, and
-`errorCode`. SQL and values are excluded. Validation failures before execution are not observed.
-
-See [connection configuration and shutdown](connections.md) for pool settings, TLS, environment
-handling, timeout bounds, and lifecycle examples. Runtime `search_path` is independent of tooling
-`namespace` options.
-
-### Driver updates
-
-The dependency range is `@kequtech/pgclear: ^0.3.4`. Compatible patches may be updated independently;
-see [driver updates](connections.md#update-the-driver). Tenon re-exports `builtin`, `json`, `param`,
-`defaultCodecs`, and `createTemporalCodecs`, with the driver's `Codec`, `CodecRegistry`, `Parameter`,
-`PgArray`, `TemporalConstructors`, and `TemporalInput` types.
-
-## Queries and result modes
-
-`sql<Row>` is a template tag returning `SqlQuery<Row>` with readonly `text` and `values`. It does
-not execute. `Row` describes one selected record; without it, fields are `unknown`. Neither result
-annotations nor generated types validate data during execution.
-
-`db.query` and `tx.query` accept `{ returns?, affectedRows?, label? }`. Unknown options reject.
-A supplied label must be a nonblank string.
-
-| `returns`          | Output             | Allowed returned rows |
-| ------------------ | ------------------ | --------------------- |
-| `native` (default) | `QueryResult<Row>` | Any                   |
-| `many`             | `readonly Row[]`   | Any                   |
-| `oneOrNone`        | `Row \| undefined` | Zero or one           |
-| `one`              | `Row`              | Exactly one           |
-
-`QueryResult` follows pgclear and includes `rows`, `rowCount`, `command`, `commandTag`, and `fields`.
-`rowCount` is `number | null`, independent of `RETURNING`; unsafe integer counts reject. SQL
-`count(*)` is a column value and defaults to string. Row arrays are readonly.
-
-Modes do not add `LIMIT` or `RETURNING`. Returned-row mismatches throw `CardinalityError`; alone,
-that does not undo an autocommitted write. For write bounds that roll back, use `affectedRows`.
-
-`QueryClient` is the query-only interface accepted by either a `Database` or callback `Transaction`.
-Other exported types include `QueryOptions`, `QueryReturnMode`, `QueryOutput<Row, Mode>`,
-`SqlQuery`, `SqlFragment`, and `UnknownRow`.
-
-### Adapting transactional results
-
-For an adapter expecting `{ rows }`, execute its trusted SQL through the callback's `tx`:
-
-```ts
-import { unsafeSql, type QueryClient } from '@kequtech/tenon-orm';
-
-async function queryRows(tx: QueryClient, text: string, values: readonly unknown[]) {
-  const result = await tx.query(unsafeSql(text, values));
-  return { rows: [...result.rows] };
-}
-```
-
-The copy supplies a mutable array if the adapter requires one. Values must already be valid driver
-inputs; external arrays/objects need type-aware `param`, `json`, or text encoding. Await adapter
-work inside the callback. Native pool queries use another checkout and do not join it.
-
-Verify adapted SQL inputs and output representations, including timestamps, against the
-database-wide codecs. Keep atomic commit/rollback tests. Tenon provides no per-query
-codec override, and input encoders are independent of output codecs.
-
-## SQL parameters and identifiers
-
-| API                            | Contract                                                                       |
-| ------------------------------ | ------------------------------------------------------------------------------ |
-| `sql<Row>` template tag        | Bind ordinary values; interpolate Tenon fragments and identifiers structurally |
-| `identifier(...names)`         | Quote components separately, e.g. `"public"."users"`                           |
-| `unsafeSql<Row>(text, values)` | Trusted external SQL with an explicit values array, including `[]`             |
-| `json(value, type?)`           | Encode JSON; default type is jsonb                                             |
-| `param(value, codec, format?)` | Choose an explicit driver parameter type and encoder                           |
-
-Do not quote interpolations or mix manual `$n` placeholders into templates. Plain binds accept null,
-string, finite number, bigint, boolean, valid Date, supported Temporal values, and Uint8Array.
-Undefined, plain objects/arrays, nonfinite numbers, and unsafe integer numbers reject.
-
-Strings, numbers, bigint, Date, and supported Temporal values use server type inference. Date
-encodes in UTC. Cast standalone parameters when PostgreSQL needs type context. Use `json` for JSON
-and `param` for PostgreSQL arrays/custom encodings. Do not mutate bound values before settlement.
-
-Identifier components require 1–63 UTF-8 bytes and no NUL. Choose approved names; quoting is not
-authorization. SQL syntax such as `DESC` belongs in fixed fragments or query alternatives. Never
-concatenate request input into `unsafeSql` text.
-
-A query executes one statement through the extended protocol. Tenon does not expose a prepared
-statement cache or query `name` option. See [writing queries](sql.md) for examples.
-
-## SQL fragments and joins
-
-- `sql.fragment` creates immutable partial SQL with bound values. It has no row type and
-  cannot execute alone. Blank fragments reject.
-- `sql.join(fragments, 'AND' | 'OR' | ',')` requires a nonempty array of fragments. It does not add
-  parentheses or alter precedence.
-- Nested/repeated fragments preserve ordered parameters. Full `sql`/`unsafeSql` queries cannot be
-  nested. Literal `$1` text in SQL strings/comments is not rewritten.
-
-See [composition examples](sql.md#compose-sql-fragments), including the empty-filter case.
-
-## Object-based mutation fragments
-
-```text
-sql.insertValues<Input>(rowOrRows, columns?): SqlFragment
-sql.assignments<Input>(patch, columns?): SqlFragment
-```
-
-These build fragments, not complete statements. Keep table, predicates, expressions, conflict
-behavior, and `RETURNING` in authored SQL.
-
-| Cell                          | Insert          | Assignment      |
-| ----------------------------- | --------------- | --------------- |
-| Missing or undefined          | `DEFAULT`       | Omitted         |
-| Null                          | Bound SQL NULL  | Bound SQL NULL  |
-| Other accepted value          | Bound parameter | Bound parameter |
-| SQL fragment/identifier/query | Rejected        | Rejected        |
-
-Inputs must be plain objects, including null-prototype objects. Only own data properties are read;
-selected accessors reject. Helpers capture fields at construction; mutable bound values must remain
-unchanged until execution settles.
-
-Without `columns`, inserts infer the union of enumerable keys with defined values in first-seen
-order. Assignments use own enumerable keys and omit undefined values. Explicit columns must be
-nonempty, unique, and valid identifiers; they select/order keys and ignore unlisted properties.
-TypeScript checks selected names against known input keys. Selection can discard required values.
-
-A single default-only insert emits `DEFAULT VALUES`. Empty batches reject; multiple default-only
-rows need explicit columns. Empty assignments always reject. There is no expression/default
-sentinel; author `column = DEFAULT` or arithmetic in SQL. The complete query's limit is 65,535
-parameters; Tenon does not split batches. See [writing data](mutations.md).
-
-## Transactions, guarded writes, and errors
-
-```ts
-await db.transaction(async (tx) => {
-  await tx.query(sql`UPDATE public.users SET active = false WHERE id = ${42}`, {
-    affectedRows: { exact: 1 },
-  });
-});
-```
-
-Use `tx` for every participating query and await all work. The callback commits on success, rolls
-back on an escaping error, and its client expires when the callback finishes. Transactions belong
-to one database instance. Calling the root `db` uses the pool, not the callback session.
-
-Use `db.transaction(callback, options?)` to manage transaction boundaries; direct BEGIN/COMMIT/ROLLBACK
-statements are rejected. `tx` provides no nested transaction method. Manual savepoints are supported
-on the callback session.
-
-The optional pgclear `TransactionOptions` are `signal`, `timeoutMs`, `isolation`, `readOnly` and
-`deferrable`. Tenon forwards them through acquisition, execution and commit and preserves original
-driver/aggregate errors. For example, pass `{ isolation: 'serializable', timeoutMs: 5000 }` as the
-second argument. Use `SET LOCAL statement_timeout` when a separate server-side statement limit is
-needed.
-
-A write guard is exactly one of `{ exact: n }` or `{ max: n }`, with a nonnegative safe integer.
-It checks the final INSERT/UPDATE/DELETE/MERGE count, independently of `RETURNING`:
-
-| Call                                | Guard behavior                                                               |
-| ----------------------------------- | ---------------------------------------------------------------------------- |
-| `db.query(query, { affectedRows })` | Wrap in a transaction; roll back the operation on a guard/result/SQL failure |
-| `tx.query(query, { affectedRows })` | Wrap in a savepoint; roll back that operation before rejecting               |
-
-A caught guarded failure permits continued work. An unguarded PostgreSQL error normally leaves the
-transaction aborted; let it escape so the callback rolls back. Tenon serializes whole guarded
-operations within a transaction, including savepoint handling.
-
-Counts exclude extra trigger/cascade and CTE effects and cannot identify the wrong single row.
-Sequence advances and external effects may survive rollback. Tenon does not retry query or
-transaction callbacks. A lost COMMIT acknowledgment can leave the outcome unknown; the application
-owns reconciliation and retry/idempotency policy.
-
-| Error                               | Code and fields                                                                                                                 |
-| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `CardinalityError`                  | `TENON_CARDINALITY_MISMATCH`; `expected` (`one` or `oneOrNone`), `actual` returned rows, optional `label`                       |
-| `AffectedRowsError`                 | `TENON_AFFECTED_ROWS_MISMATCH` or `TENON_AFFECTED_ROWS_UNSUPPORTED`; `expected` constraint, `actual: number \| null`, `command` |
-| Tenon option/composition validation | Ordinary `Error`                                                                                                                |
-| Driver/server failure               | Native details, including driver `PGCLEAR_*` codes or PostgreSQL SQLSTATE                                                       |
-| Work and cleanup both fail          | May be an `AggregateError`                                                                                                      |
-
-Use codes and structured fields rather than matching message text. Retain unexpected failures.
-
-## Generated types and checking
-
-```sh
-tenon generate
-tenon generate --check
-```
-
-Generation uses [shared configuration](configuration.md) for its connection/codecs, output path,
-and namespace. Missing/stale output rejects under `--check` without writing. See
-[schema types and values](schema-types.md) for file guarantees, generated shapes, and value mappings.
-`generateDefinitions({ connection, namespace?, onWarning? }): Promise<string>` returns source text
-without file handling for custom tooling. Database instances expose query execution and lifecycle
-methods; generation is a CLI tool.
-
-### Application aliases
-
-Export aliases such as `UserRow = Database['users']['row']` in a handwritten file. See
-[application aliases](schema-types.md#application-aliases).
-
-### Persistence and domain values
-
-Generated types describe storage representations. Validate JSON, text refinements, and domain
-values at the application boundary; see [the worked example](schema-types.md#persistence-and-domain-values).
-
-### Insert and update inputs
-
-Generated types account for defaults, identity/computed columns, domains, and nullability. See
-[insert/update rules](schema-types.md#insert-and-update-inputs).
-
-## Choosing a validation tool
-
-Use the intended development/test schema and role through shared configuration. TypeScript itself
-needs no connection.
-
-| Tool                           | Question answered                                                              | Main limit                                                      |
-| ------------------------------ | ------------------------------------------------------------------------------ | --------------------------------------------------------------- |
-| `tsc --noEmit`                 | Does application code satisfy TypeScript contracts?                            | Does not inspect SQL/schema                                     |
-| `tenon check [file.ts[:line]]` | Does recoverable SQL contradict declared input/result types?                   | Unsupported sites fail; inconclusive properties remain unproven |
-| `tenon describe query.sql`     | What metadata does PostgreSQL report for finished SQL?                         | Does not compare annotations or bind values                     |
-| `tenon generate --check`       | Does committed output match generation now?                                    | Does not check queries or replace migration status              |
-| Database tests                 | Do exercised queries produce correct rows, effects, permissions, and rollback? | Cover only tested inputs and paths                              |
-
-After schema changes, migrate the test database, regenerate/review declarations, and run typechecks,
-applicable source checks, and database tests. In CI, check generated output without replacing it.
-Source checking and inspection parse/analyze application SQL without executing it; analysis can
-take locks. Neither proves actual bound values or write effects.
-
-## Source-aware checking
-
-`checkQueries(options)` is exported from `@kequtech/tenon-orm/check`, alongside its public types.
-The bundled TypeScript compiler loads only through that path or the check command.
-
-Options are `{ connection, target?, project?, session?, timeouts?, codecs?, readTypes? }`.
-Connection is a URI or pool-option values; connection codecs are inherited unless `codecs` is explicit. The report contains `ok`, `project`, `queries`, `diagnostics`, and available
-inspection `context`. Mismatches, unchecked sites, and no sites fail; unproven findings alone do not.
-Readable output groups equivalent findings per query; JSON retains their variant records. General
-limits on runtime values and result nullability do not generate individual diagnostics. Each query
-result may include its literal runtime `label` from a direct query call with inline options, even
-when the SQL is unchecked.
-See [query checking](query-checking.md) for selection, supported composition, and custom decoders.
-
-## Query inspection
-
-```text
-describeQuery({ connection, query, session?, timeouts?, codecs? }): Promise<QueryDescription>
-```
-
-Connection is a URI or pool-option values; query is finished SQL text or `{ text, parameterTypes? }`. A `SqlQuery` fits
-because it has `text`; values and its row annotation are not checked. The report includes
-`parameters`, `columns`, `rowType`, `issues`, and `context`. It uses a separate session with bounded
-timeouts. See [query inspection](query-inspection.md) for fields and finding codes.
-
-## Native driver access
-
-`db.native` is the actual pgclear pool. Calls bypass Tenon's guards and observations and do not join
-callback transactions. Use `queryClassic` for text; native `query` accepts only pgclear's own SQL
-tag. See [native driver features](connections.md#use-native-driver-features) for session ownership,
-prepared statements, and dedicated notification listeners.
-
-## Troubleshooting
-
-| Symptom                                       | Response                                                                                                                                                     |
-| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Missing shared configuration                  | Run `tenon init` or select an existing config with `--config`. Generation, checking, and inspection require it.                                              |
-| Multiple databases or unknown database export | Select a named config with `--database name`. Use `--config path` when it belongs to another file.                                                           |
-| Missing or empty config connection            | Set the environment variable read by that database's config before using it. Imports alone need no credentials.                                              |
-| `DATABASE_URL is required`                    | Supply the variable for migration commands without config. Tenon does not load `.env` files.                                                                 |
-| `PGCLEAR_ENCODE`                              | Check inputs: objects/arrays need `json`/`param`; direct undefined, unsafe integers, nonfinite numbers, and invalid Dates reject. JSON still rejects bigint. |
-| `CardinalityError`                            | Check the expected row count and predicate. To choose one of several rows, author deterministic `ORDER BY ... LIMIT 1`.                                      |
-| `TENON_AFFECTED_ROWS_MISMATCH`                | The guarded operation rolled back. Inspect `actual` and the predicate; retain the intended bound.                                                            |
-| `TENON_AFFECTED_ROWS_UNSUPPORTED`             | The final command lacks a supported write count. Use guards on INSERT/UPDATE/DELETE/MERGE; result modes check returned rows.                                 |
-| Empty assignments                             | All selected fields were missing/undefined. Skip the update or branch to an expression-only statement.                                                       |
-| Duplicate result columns                      | Alias columns uniquely, especially in joins. The driver rejects duplicate object keys.                                                                       |
-| SQLSTATE `42P18` / `42P08` during inspection  | Add the intended parameter cast or Describe OID hints. Inspection binds no values.                                                                           |
-| Checker reports `unchecked`                   | Follow the diagnostic. Runtime fragments and optional patches can execute correctly yet remain unsupported by source recovery.                               |
-| Missing/stale generated output                | Check schema, namespace, registry, driver version, and path. Regenerate, review, and commit intended output.                                                 |
-| Migration history conflict                    | Restore original applied files. Add new changes in a forward migration. Checksums include down SQL too.                                                      |
-| Tooling lock wait                             | Check concurrent migration/DDL work, use direct or session pooling, and configure server timeouts.                                                           |
-
-After a guarded query rejects, savepoint cleanup has finished. An unguarded server error normally
-aborts a transaction. A timeout or lost connection does not itself establish whether a commit
-happened; review the transaction contract before adding retries.
-
-## Command reference
-
-All commands accept `--config path`. Commands using a database config also accept `--database name`
-to select its export. A file with one config is selected automatically; multiple configs require an
-explicit selection. `generate`, `check`, and `describe` require
-[shared configuration](configuration.md) and use its connection/codecs. Migration and baseline
-commands use config when present and fall back to `DATABASE_URL` only when no config is found.
-`init` creates config without importing application code; `new` and `jobs setup` use the configured
-migration directory without opening a database; `--help` loads no config. Config modules may read
-environment variables, but Tenon loads no `.env` files automatically. Configured paths resolve from
-the config file; CLI path flags resolve from the working directory. Unsupported command flags reject.
+[All guides](../README.md) · [Queries](queries.md) · [Database](database.md) · [Jobs](jobs.md)
+
+[Configuration](#configuration) · [Query API](#query-api) · [Errors](#errors) ·
+[Tools](#tools) · [Jobs](#jobs) · [Commands](#commands)
+
+## Configuration
+
+`createTenon(config: TenonConfig): Database` accepts one database config. Construction is lazy;
+unknown keys reject. [Configuration workflows](database.md#configuration) describe discovery and
+pool ownership. `ConnectionOptions` aliases pgclear PoolOptions.
+
+| Field                | Default / contract                                                            |
+| -------------------- | ----------------------------------------------------------------------------- |
+| connection           | Required at use; URI, pool options or borrowed pool                           |
+| onQuery              | Optional, best-effort runtime query observer                                  |
+| migrations.directory | migrations beside config (programmatic default: working directory)            |
+| migrations.namespace | public; history/lock scope and default generation namespace                   |
+| generate.out         | Required if generate section is present; CLI --out can supply output          |
+| generate.namespace   | migrations.namespace, then public                                             |
+| baseline.connection  | Native libpq URI for pg_dump; falls back to string main connection            |
+| baseline.schemas     | Whole database when omitted; explicit list must be nonempty                   |
+| check.project        | tsconfig.json beside config                                                   |
+| check.readTypes      | Fallback TypeScript expressions for unidentified decoders only                |
+| session              | Inspection overrides: role, searchPath, timeZone                              |
+| timeouts             | Inspection connectMs:3000, statementMs:5000, lockMs:1000; positive integer ms |
+
+Inspection applies these bounded timeouts over runtime startup settings, then explicit session/CLI
+overrides; it does not alter runtime queries or migrations. Programmatic checking/Describe accept
+connection values and codecs but do not borrow application transaction sessions.
+
+`QueryEvent` has durationMs, outcome (`success`/`error`) and optional label, command, rowCount and
+errorCode. It excludes SQL/values. Pre-execution validation failures emit no event; observer
+throws/rejections warn and never change query outcomes.
+
+## Query API
+
+| Member / function                            | Contract                                                                     |
+| -------------------------------------------- | ---------------------------------------------------------------------------- |
+| db.query(query, options?)                    | Execute one Tenon SqlQuery                                                   |
+| db.transaction(callback, options?)           | Return callback result after commit; roll back escaping errors               |
+| db.jobs                                      | Record operations and worker startup                                         |
+| db.native                                    | Exact pgclear pool; initializes lazy connection                              |
+| db.close({timeoutMs?}?)                      | Disable wrapper, close owned pool; default 5000 ms; borrowed pool stays open |
+| tx.query / tx.jobs                           | Operations on the supplied expiring transaction; no runner or close          |
+| sql<Row> tag                                 | Complete statement with separately bound values                              |
+| identifier(...names)                         | Quote approved components; 1–63 UTF-8 bytes each, no NUL                     |
+| unsafeSql<Row>(text, values)                 | Trusted finished SQL and explicit values array                               |
+| sql.fragment tag                             | Nonblank immutable partial SQL, cannot execute alone                         |
+| sql.join(fragments, separator)               | Nonempty fragments; AND, OR or comma; no implicit parentheses                |
+| sql.insertValues<Input>(rowOrRows, columns?) | Column/value fragment; empty batches reject                                  |
+| sql.assignments<Input>(patch, columns?)      | Assignment fragment; empty assignments reject                                |
+
+`QueryClient` is the capability for reusable query functions accepting db or tx. `Transaction` is
+the supplied query/jobs scope. Do not widen either into Database when it owns no lifecycle/pool.
+See [query composition and transactions](queries.md) for actual workflows.
+
+| QueryOptions field | Contract                                                      |
+| ------------------ | ------------------------------------------------------------- |
+| returns            | native (default), many, oneOrNone or one                      |
+| affectedRows       | Exactly one of {exact:n} or {max:n}; nonnegative safe integer |
+| label              | Optional diagnostic/observation label                         |
+
+| returns   | Result                                                | Cardinality |
+| --------- | ----------------------------------------------------- | ----------- |
+| native    | QueryResult<Row> with rows, rowCount, command, fields | Any         |
+| many      | readonly Row[]                                        | Any         |
+| oneOrNone | Row or undefined                                      | Zero or one |
+| one       | Row                                                   | Exactly one |
+
+Modes add no SQL or rollback by themselves. Write guards apply to final INSERT/UPDATE/DELETE/MERGE
+counts, use a root transaction or callback savepoint and roll back before rejecting. Counts exclude
+additional trigger/cascade/CTE effects. `TransactionOptions` forwards pgclear signal, timeoutMs,
+isolation, readOnly and deferrable. Lifetime timeouts include acquisition/execution/commit; callbacks
+are never automatically retried. Close timeout accepts integers 0–2147483647; first valid call wins.
+
+Tenon re-exports builtin, json, param, defaultCodecs, createTemporalCodecs and their value/codec types
+from pgclear. [Types and values](types.md) owns encoding/decoding details. No native pgclear SQL tag
+is re-exported. Use queryClassic for finished SQL passed to a native executor.
+
+## Errors
+
+| Error                            | Code / fields                                                                                         |
+| -------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| CardinalityError                 | TENON_CARDINALITY_MISMATCH; expected:one/oneOrNone, actual, optional label                            |
+| AffectedRowsError                | TENON_AFFECTED_ROWS_MISMATCH / TENON_AFFECTED_ROWS_UNSUPPORTED; expected, actual:number/null, command |
+| Config/composition validation    | Ordinary Error                                                                                        |
+| Driver / server errors           | Original pgclear error / PostgreSQL SQLSTATE                                                          |
+| Concurrent work/cleanup failures | AggregateError preserving original errors                                                             |
+
+`findDriverErrors(error: unknown): readonly DriverError[]` is directly re-exported from pgclear.
+It follows own cause and AggregateError members, root/cause/member order, deduplicates identities,
+skips accessors and handles cycles. It returns evidence about individual operations, not a safe-to-retry
+or transaction-committed classification. [Error workflows](queries.md#errors) explain reconciliation.
+Use structured codes rather than messages, including PGCLEAR_COMMIT_UNKNOWN for uncertain commits.
+
+Common diagnoses: alias duplicate selected columns; choose string for default int8/count output;
+encode JSON/arrays explicitly; branch/skip empty patches; restore immutable applied migrations;
+review unchecked reasons rather than cast them away; configure direct/session pooling for tooling
+locks. Expired transaction handles never become usable again.
+
+## Tools
+
+Programmatic APIs take explicit options and never discover config:
+
+| API                                                                                     | Result / options                                                                               |
+| --------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| generateDefinitions({connection, namespace?, onWarning?})                               | Promise<string>; generated declarations, no filesystem handling                                |
+| describeQuery({connection, query, codecs?, session?, timeouts?})                        | QueryDescription: context, parameters, columns, rowType, issues                                |
+| checkQueries({connection, project?, target?, codecs?, session?, timeouts?, readTypes?}) | CheckReport: ok, project, queries, diagnostics, coverage, optional context; import from /check |
+| inspectSchema({connection, namespace?})                                                 | SchemaSnapshot: formatVersion:1, postgresMajor, namespace, metadata collections, fingerprint   |
+| migrate({connection, directory?, namespace?})                                           | Applied IDs                                                                                    |
+| migrationStatus({connection, directory?, namespace?})                                   | {applied, pending} ID arrays                                                                   |
+| rollback({connection, directory?, namespace?, steps?})                                  | Reverted IDs; steps default 1, positive safe integer                                           |
+| createMigration({name, directory?})                                                     | {id, upPath, downPath} empty pair                                                              |
+| readMigrations(directory?)                                                              | Validated {id, name, up, down?, checksum} records                                              |
+| captureBaseline({connection, directory?, namespace?, schemas?, onWarning?})             | {id, upPath}; native libpq connection, schema-only pg_dump                                     |
+| adoptBaseline({connection, directory?, namespace?})                                     | Newly recorded IDs, without executing baseline SQL                                             |
+| createJobsMigration({directory?})                                                       | {id, upPath, downPath, created}; preserves existing setup pair                                 |
+
+Tool defaults are directory migrations and namespace public. Migration/generation/schema tools
+accept borrowed pools and preserve their ownership. Describe/checking instead use separate sessions
+from connection values. A finished Describe statement can supply parameter OID hints but values are
+never executed. [Checking](checking.md) owns coverage, uncertainty and fingerprint scope;
+[database](database.md#migrations) owns migration locking, file rules and baseline adoption.
+
+## Jobs
+
+Import defineJob/defineWorker and Jobs types/errors from Tenon for ORM transaction typing.
+`defineJob<Payload>({name,...policy})` returns an inert JobSpec. `defineWorker(spec, {handler,
+transactional?, concurrency?})` returns an executable definition. Inline definitions with handlers
+also work. Name is 1–200 nonblank characters. Payload is strict JSON data, not runtime-validated
+against its TypeScript declaration. [Jobs guide](jobs.md) explains workflows and ownership.
+
+| Saved policy       | Default                          |
+| ------------------ | -------------------------------- |
+| maxAttempts        | 3 total, including first; 1–1000 |
+| retryDelayMs       | 1000; 0–86400000                 |
+| retryBackoff       | exponential; or fixed            |
+| retryMaxDelayMs    | 86400000; zero allowed           |
+| retryJitter        | true; half-to-full capped delay  |
+| executionTimeoutMs | 300000 per attempt               |
+
+Worker transactional defaults false; concurrency defaults to runner capacity. These are runtime
+settings, while submitted policy is saved and unchanged by later definition edits. Context includes
+id, attempt, maxAttempts, signal, scheduledFor and tx only for transactional handlers.
+
+| Record operation, on db.jobs or tx.jobs                  | Result / behavior                                                                  |
+| -------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| send(spec,payload,{id?,runAt?,delayMs?}?)                | Independent job; stable ID returns original while retained                         |
+| sendMany(spec,submissions)                               | Up to 1000 entries; inserted records only, duplicates skipped, no guaranteed order |
+| request(spec,payload,{key,runAt?,delayMs?})              | Unstarted head replacement or one coalesced successor                              |
+| get(id) / getMany(ids)                                   | Job<unknown>/null, or found records once in first-requested order; batch max 1000  |
+| find(spec,{key?,states?,limit?,after?}?)                 | Creation-time/UUID cursor order; default 100, max 1000                             |
+| stats(spec)                                              | State counts plus ready, delayed, blocked, total                                   |
+| attempts(id,{limit?}?)                                   | Latest first; number, startedAt, finishedAt, outcome, error; default 100, max 1000 |
+| update(spec,id,payload) / reschedule(id,runAt)           | Pending records only; preserve policy/history/budget                               |
+| cancel(id)                                               | Pending only, including backoff/successor                                          |
+| retry(id)                                                | Fresh linked job from failed record; occupied key/schedule rejects                 |
+| remove(id)                                               | Terminal only; false if absent; attempts cascade                                   |
+| prune(spec,{before,states?,limit?})                      | Bounded terminal cleanup; default completed/cancelled, limit 100, max 1000         |
+| schedule(spec,payload,{cron,timeZone?,key?,requestKey?}) | Durable producer; key defaults empty, timezone UTC                                 |
+| schedules(spec,{limit?}?) / unschedule(spec,key?)        | List by key or remove producer, leaving submitted work                             |
+
+Job fields: id, name, payload, nullable key/blockedBy, state (pending/running/completed/failed/cancelled),
+attempts, saved policy, runAt/createdAt/updatedAt, nullable finishedAt/lastError/scheduleId/scheduledFor/
+retryOf, opaque cursor. Schedule fields: id, name, key, nullable requestKey, payload, policy, cron,
+timeZone, nextRunAt, nullable lastJobId. Keys accept at most 500 characters, including empty.
+Timing accepts either runAt or delayMs, never both. Empty sendMany/getMany perform no SQL.
+
+`previewSchedule({cron,timeZone?},{from?,count?}?)` returns Dates strictly after from; default count 5,
+max 100. Five-field deterministic cron only. Unscheduling does not cancel jobs.
+
+`db.jobs.run(definitions, options?): Promise<void>` is the worker lifetime.
+`db.jobs.start(definitions, options?): RunnerHandle` exposes ready/done using that same runner.
+A closed database rejects run and throws from start before starting work. Neither exists on tx.jobs.
+Definitions must be nonempty, executable and uniquely named. Pool shutdown stays application-owned.
+
+| Runner option      | Default / contract                                           |
+| ------------------ | ------------------------------------------------------------ |
+| signal             | Application-owned shutdown signal                            |
+| onReady            | Awaited once after schema validation, before dispatch        |
+| concurrency        | 1; 1–1000 unfinished handlers, including cancelled callbacks |
+| notifications      | Optional dedicated listener connection; omit for polling     |
+| pollIntervalMs     | 1000; 30000 when notifications enabled                       |
+| recoveryIntervalMs | 1000                                                         |
+| leaseMs            | 30000; min 30, renewed each third                            |
+| shutdownTimeoutMs  | 30000; zero allowed                                          |
+| databaseTimeoutMs  | 10000                                                        |
+| retentionMs        | 604800000; positive safe integer or false; failures retained |
+| onEvent            | Best-effort local observation; not awaited                   |
+| onHandlerError     | Awaited continue/stop policy for escaping handler errors     |
+
+Other millisecond options accept integers 1–2147483647 unless noted. Runner handles reject ready
+on startup failure or pre-ready cancellation (AbortError); done covers final cleanup and later
+failures. Readiness is not ongoing health. [Hosting](jobs.md#hosting) gives complete ownership rules.
+
+Events: attemptStarted, attemptCompleted, attemptFailed (original error and saved retryAt),
+attemptAbandoned (leaseLost/deadlineExceeded/runnerStopped), runnerFailed (final original/aggregate
+error, optional originating attempt). AttemptInfo has id, name, attempt, maxAttempts, scheduledFor.
+Events are local/non-durable; observer failures warn with PGCLEAR_JOBS_OBSERVER_FAILED.
+
+HandlerFailure adds error, signal and transactional to AttemptInfo. Continue preserves normal retry;
+stop rejects before failure bookkeeping. Managed infrastructure failures bypass the hook. A hook
+failure/invalid action aggregates original handler and policy errors. Keep async action literals
+strict with `Promise<HandlerErrorAction>` if necessary. JobError accepts retry:false or retryAt,
+plus standard cause. JobNotFoundError/JobStateError expose jobId.
+
+## Commands
+
+All commands accept `--config path`; configured databases accept `--database export`. Paths on
+flags resolve from the working directory; configured paths resolve beside config. Unsupported flags
+reject. Config modules are trusted Node imports. No command automatically loads `.env`.
 
 ```text
 tenon init [--config path]
@@ -350,41 +231,8 @@ tenon describe <query.sql> [--role name] [--search-path value] [--time-zone valu
   [--connect-timeout-ms 3000] [--statement-timeout-ms 5000] [--lock-timeout-ms 1000]
 ```
 
-| Command                | Output and behavior                                                                     |
-| ---------------------- | --------------------------------------------------------------------------------------- |
-| `init`                 | Creates a minimal TypeScript or JavaScript config, refusing to overwrite existing files |
-| `new`                  | Paths of the new empty up/down pair; fill before applying                               |
-| `jobs setup`           | Paths of concrete Jobs migration files; preserves an existing generated pair            |
-| `migrate` / `rollback` | Completed IDs or “nothing to do”; each file commits independently                       |
-| `status`               | JSON `{ applied, pending }`; validates history                                          |
-| `schema`               | Emits a versioned catalog snapshot and fingerprint; requires shared configuration       |
-| `baseline capture`     | Writes a reviewed schema-only baseline using native `pg_dump`                           |
-| `baseline adopt`       | Records baseline history without executing its SQL                                      |
-| `generate`             | Writes output atomically; `--check` rejects missing/stale output without writing        |
-| `check`                | Diagnostics/counts, or a structured report with `--json`                                |
-| `describe`             | JSON metadata, including unresolved findings                                            |
-
-Successful commands exit 0. Invalid input or a failed operation exits 1. `check` also exits 1 for
-mismatches, unchecked sites, or no sites; unproven findings alone do not fail. `describe` can exit 0
+Status emits JSON applied/pending; schema emits snapshot JSON; Describe emits metadata JSON.
+Generation writes atomically, or compares without writing with --check. Checking emits readable
+findings/counts or JSON. Successful operations exit 0; invalid input/failed operations exit 1. Checking
+also fails mismatches, unchecked or zero sites; unproven alone does not fail. Describe can succeed
 with unresolved findings. There is no migration dry-run command.
-
-Programmatic runner APIs are [documented with migrations](migrations.md#programmatic-api).
-Baseline APIs and prerequisites are in [adoption](adoption-guide.md#baseline-api).
-
-## Jobs
-
-`db.jobs` and `tx.jobs` are available on every database and transaction without additional configuration.
-`db.jobs.run(definitions, options?)` forwards worker lifecycle to pgclear-jobs, including the
-`onReady` startup callback, `onEvent` observation and `onHandlerError` policy. Its returned promise
-represents the full worker lifetime. The `tx.jobs` facade exposes only record operations.
-`defineJob<Payload>({ name, ...policy })` creates a producer specification; `defineWorker(spec, options)`
-binds a handler. Existing inline definitions remain supported. Transaction-bearing definition/context
-types use the ORM transaction. See [durable jobs](jobs.md) for the complete contract and setup.
-
-`tenon jobs setup [--directory migrations] [--config path] [--database export]` writes a concrete
-numbered migration pair without a database connection. Programmatic
-`createJobsMigration({ directory? })` returns `{ id, upPath, downPath, created }`. Repeated setup
-preserves existing files. Schema changes require an application-authored migration.
-
-For business operation identity, atomic follow-ups, external-effect compensation, keyed work and
-shared database ownership, see [reliable application job workflows](job-workflows.md).

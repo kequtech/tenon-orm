@@ -23,6 +23,8 @@ test('definitions and facade access are inert without configuration or Jobs stor
   await db.close();
   await assert.rejects(db.jobs.run([definition], { signal: controller.signal }), /closed/);
   await assert.rejects(db.jobs.sendMany(definition, []), /closed/);
+  await assert.rejects(db.jobs.getMany([]), /closed/);
+  assert.throws(() => db.jobs.start([definition]), /closed/);
   assert.equal(JobError, NativeJobError);
   assert.equal(nativeDefineJob({ name: 'native-inert', handler() {} }).name, 'native-inert');
 });
@@ -66,6 +68,7 @@ test('every record operation and runner reject after close without SQL or acquis
     () => jobs.request(definition, 1, { key: 'one' }),
     () => jobs.sendMany(definition, []),
     () => jobs.get(id),
+    () => jobs.getMany([]),
     () => jobs.find(definition),
     () => jobs.reschedule(id, new Date()),
     () => jobs.update(definition, id, 2),
@@ -124,8 +127,10 @@ test('expired transaction facades reject empty batches before SQL', async (t) =>
       assert.equal('run' in tx.jobs, false);
       assert.equal('install' in tx.jobs, false);
       assert.deepEqual(await tx.jobs.sendMany(definition, []), []);
+      assert.deepEqual(await tx.jobs.getMany([]), []);
     });
     await assert.rejects(captured.jobs.sendMany(definition, []), /transaction has finished/);
+    await assert.rejects(captured.jobs.getMany([]), /transaction has finished/);
     assert.deepEqual(statements, []);
   } finally {
     await db.close();

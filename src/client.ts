@@ -14,11 +14,11 @@ export function createClient(
   onQuery?: (event: QueryEvent) => void | Promise<void>,
 ): QueryClient {
   async function execute(statement: SqlQuery, input?: QueryOptions) {
+    const started = performance.now();
     const options = validateOptions(input);
     assertQuery(statement);
     validateTransactionSql(statement.text, options.label ?? 'Query');
-    const operation = queryOperation(options);
-    const started = performance.now();
+    const operation = queryOperation(options, started);
     let command: string | undefined;
     let rowCount: number | null | undefined;
     let failure: unknown;

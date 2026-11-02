@@ -292,9 +292,15 @@ export class SourceAnalysis {
     if (!declaration || !ts.isParameter(declaration)) return false;
     if (!this.stableParameters.has(target)) {
       let written = false;
-      const contains = (node: ts.Node): boolean =>
-        (ts.isIdentifier(node) && symbol(this.project.checker, node) === target) ||
-        !!ts.forEachChild(node, contains);
+      const contains = (node: ts.Node): boolean => {
+        // Writing obj[parameter] changes the object, not the parameter. Nested assignments
+        // inside member expressions are still checked separately by visit().
+        if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) return false;
+        return (
+          (ts.isIdentifier(node) && symbol(this.project.checker, node) === target) ||
+          !!ts.forEachChild(node, contains)
+        );
+      };
       const visit = (candidate: ts.Node): void => {
         if (
           ts.isBinaryExpression(candidate) &&

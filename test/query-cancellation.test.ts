@@ -41,6 +41,27 @@ test('pre-aborted and zero-timeout queries do not construct a connection', async
   }
 });
 
+test('the query deadline includes synchronous option validation', async () => {
+  const db = createTenon({ connection: { connectionString: undefined } });
+  try {
+    await assert.rejects(
+      db.query(sql`SELECT 1`, {
+        timeoutMs: 5,
+        get label() {
+          const end = performance.now() + 20;
+          while (performance.now() < end) {
+            /* Simulate synchronous application metadata. */
+          }
+          return 'slow-label';
+        },
+      }),
+      { code: 'PGCLEAR_TIMEOUT' },
+    );
+  } finally {
+    await db.close();
+  }
+});
+
 test('query timeouts include pool acquisition for ordinary and guarded writes', async () => {
   const pool = createPool({ connectionString: testConnection, maxConnections: 1 });
   const db = createTenon({ connection: pool });

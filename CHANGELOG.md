@@ -2,6 +2,8 @@
 
 ## 0.5.1
 
+- Include synchronous validation in per-query deadlines. Keep finite identifier parameters checkable
+  when used as object property keys without being reassigned.
 - Forward per-query signal/timeoutMs through ordinary queries and atomic guards, including time spent
   waiting in Tenon's transaction queue. Preserve native cancellation and scope-expiry behavior.
 - Include Jobs 0.3.0 with durable cross-process cancellation through the existing cancel(id) method.

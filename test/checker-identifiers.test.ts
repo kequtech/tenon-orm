@@ -98,3 +98,55 @@ test('open, asserted, mutable, correlated and excessive choices stay unchecked b
     },
   );
 });
+
+test('using a finite parameter as a property key does not reassign the parameter', async () => {
+  await sourceProject(
+    {
+      'queries.ts': `import {sql,identifier} from '@kequtech/tenon-orm';
+    type Catalog = 'pg_class' | 'pg_namespace';
+    export function read(table:Catalog) {
+      const counts:Record<Catalog,number> = {pg_class:0,pg_namespace:0};
+      counts[table]++;
+      counts[table] = 1;
+      for (counts[table] of [2,3]) {}
+      return sql<{total:string}>\`SELECT count(*) AS total FROM \${identifier('pg_catalog',table)}\`;
+    }`,
+    },
+    async (options) => {
+      const report = await checkQueries(options);
+      assert.equal(report.ok, true, JSON.stringify(errors(report)));
+      assert.equal(report.queries[0]!.variants, 2);
+    },
+  );
+});
+
+test('destructuring and loop assignments to finite parameters remain unchecked', async () => {
+  await sourceProject(
+    {
+      'queries.ts': `import {sql,identifier} from '@kequtech/tenon-orm';
+    type Catalog = 'pg_class' | 'pg_namespace';
+    export function array(table:Catalog, source:[Catalog]) {
+      [table] = source; return sql\`SELECT * FROM \${identifier('pg_catalog',table)}\`;
+    }
+    export function object(table:Catalog, source:{table:Catalog}) {
+      ({table} = source); return sql\`SELECT * FROM \${identifier('pg_catalog',table)}\`;
+    }
+    export function renamed(table:Catalog, source:{name:Catalog}) {
+      ({name:table} = source); return sql\`SELECT * FROM \${identifier('pg_catalog',table)}\`;
+    }
+    export function loop(table:Catalog, source:Catalog[]) {
+      for (table of source) {} return sql\`SELECT * FROM \${identifier('pg_catalog',table)}\`;
+    }
+    export function nested(table:Catalog, counts:Record<Catalog,number>) {
+      counts[(table='pg_class')] = 1; return sql\`SELECT * FROM \${identifier('pg_catalog',table)}\`;
+    }`,
+    },
+    async (options) => {
+      const report = await checkQueries({ ...options, connection: 'postgresql://unused' });
+      assert.deepEqual(report.coverage, { total: 5, analysed: 0, unchecked: 5 });
+      assert.ok(
+        report.queries.every((q) => q.diagnostics.some((d) => d.code === 'dynamic-binding')),
+      );
+    },
+  );
+});

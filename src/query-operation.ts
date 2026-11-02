@@ -1,12 +1,13 @@
 import { DriverError, type OperationOptions } from '@kequtech/pgclear';
 
-export function queryOperation(options: OperationOptions) {
+export function queryOperation(options: OperationOptions, startedAt: number) {
   const timeout = options.timeoutMs;
   const controller = timeout === undefined ? undefined : new AbortController();
   const expire = () =>
     controller?.abort(new DriverError('PGCLEAR_TIMEOUT', 'Query deadline expired.'));
-  const end = timeout === undefined ? Infinity : performance.now() + timeout;
-  const timer = timeout === undefined ? undefined : setTimeout(expire, timeout);
+  const end = timeout === undefined ? Infinity : startedAt + timeout;
+  const timer =
+    timeout === undefined ? undefined : setTimeout(expire, Math.max(0, end - performance.now()));
   const signals = [options.signal, controller?.signal].filter((s): s is AbortSignal => !!s);
   const signal = signals.length > 1 ? AbortSignal.any(signals) : signals[0];
   return {

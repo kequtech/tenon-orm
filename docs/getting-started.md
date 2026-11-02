@@ -156,16 +156,63 @@ The generated `.js` type import resolves to the `.d.ts` declaration; it loads no
 database, then check freshness before regeneration could hide drift. Commit migrations and reviewed
 generated declarations together; production uses the built application and committed output.
 
-Test the query against that test database:
+## Test with a dedicated database
 
-```ts
-import assert from 'node:assert/strict';
-// db points at dedicated test storage containing this fixture.
-const user = await userByEmail(db, 'reader@example.test');
-assert.equal(user?.active, false);
+Keep development and test connections separate. Reuse an existing test database, or create a local
+`your_app_test` once with the configured PostgreSQL credentials. The example uses temporary tables,
+rolls back a failed guard, verifies the surrounding transaction remains usable and checks scope expiry.
+Its table is removed automatically; the database remains application-owned.
+
+```sh
+mkdir -p test
+cp node_modules/@kequtech/tenon-orm/examples/testing.ts test/database.test.ts
+export TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/your_app_test
+node --test test/database.test.ts
 ```
 
-Also test rollback and authorization paths for changed workflows. Type annotations are declarations;
-source checks do not prove result nullability, JSON contents or business invariants. The
-[checking guide](checking.md) explains what each tool establishes. Learn [value mappings](types.md#choose-representations)
-before choosing types for bigint, decimal, JSON, arrays or timestamps.
+Read the [complete example](../examples/testing.ts), then test your real query functions, authorization
+and meaningful composition branches with representative fixtures. The sample guard test is a starting
+point, not application coverage. TypeScript annotations and source analysis cannot establish those
+runtime effects.
+
+For the configured application above, a CI job can migrate fresh test storage, check the committed
+generated declarations without rewriting them, typecheck and run database tests:
+
+```yaml
+name: Database checks
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: your_app_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres -d your_app_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/your_app_test
+      TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/your_app_test
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npx tenon migrate
+      - run: npx tenon generate --check
+      - run: npx tsc --noEmit
+      - run: node --test test/database.test.ts
+      - run: npx tenon check src/users.ts
+```
+
+Preserve the application's package manager, migration runner and existing CI choices. Generate and
+commit declarations locally before asking CI to check freshness. The [checking guide](checking.md)
+explains tool limits; learn [value mappings](types.md#choose-representations) before choosing types
+for bigint, decimal, JSON, arrays or timestamps.

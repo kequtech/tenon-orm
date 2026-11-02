@@ -28,6 +28,7 @@ query modules themselves are only read.
 npx tenon check
 npx tenon check src/users.ts
 npx tenon check src/users.ts:23 --json
+npx tenon check --verbose
 ```
 
 Select a project, file or one complete multiline query containing a one-based line. A fragment alone
@@ -53,8 +54,9 @@ json/param calls provide the same OID hints as execution. Opaque Parameters are 
 unproven encoder OIDs; dependent result checks and inference failures remain unproven. Plain
 objects/arrays/undefined contradict ordinary binds. Format/range validity still needs runtime checks.
 
-The readable report groups equivalent findings while retaining distinct columns/parameters/types;
-JSON keeps individual variant diagnostics. It includes source locations, codes and expected/observed
+The default readable report prints mismatches and unchecked findings, then summarizes nonblocking
+unproven findings by reason. --verbose includes their locations/types and groups equivalent variants;
+JSON keeps every individual variant diagnostic. It includes source locations, codes and expected/observed
 types. Coverage counts recognized complete sites as total, analysed and unchecked. Unrelated tags
 are outside the counts. Literal inline query labels are preserved from immediately enclosing Tenon
 query calls; labels hidden by variables/wrappers/spreads are not guessed. Exception policy and label
@@ -131,6 +133,72 @@ The budget is 16 complete variants per query, including optional fields and para
 and 32 composition references. Loops, escaping/mutable fragment lists, runtime joins and arbitrary
 function-body analysis remain unsupported. Unknown source is never replaced with invented SQL.
 Review newly analysed sites and stale exceptions when upgrading the checker, against the same schema.
+
+## Work with an unchecked query
+
+A statement-bodied helper can be valid at runtime while remaining outside source recovery. Assume
+public.posts has integer id, text title/owner_id and boolean is_public columns:
+
+```ts
+import { sql, type QueryClient } from '@kequtech/tenon-orm';
+type PostSummary = { id: number; title: string };
+
+function audience(viewerId: string) {
+  return sql.fragment`(is_public OR owner_id = ${viewerId})`;
+}
+
+export function visiblePosts(client: QueryClient, viewerId: string) {
+  return client.query(
+    sql<PostSummary>`SELECT id, title FROM public.posts
+    WHERE ${audience(viewerId)} ORDER BY id`,
+    { returns: 'many', label: 'posts.visible' },
+  );
+}
+```
+
+The dynamic-fragment finding means the helper body was not interpreted. It does not mean PostgreSQL
+rejected the SQL. If the helper adds no useful reuse, the smallest rewrite is a const predicate inside
+visiblePosts, interpolated at the same location:
+
+```ts
+const predicate = sql.fragment`(is_public OR owner_id = ${viewerId})`;
+```
+
+This preserves the authorization predicate. Keep a shared business helper when it improves the
+application; do not distort authorization to satisfy recovery. In either form, test a public post,
+the viewer's private post and another viewer's private post against dedicated storage. Assert the
+first two are returned and the third is excluded. Test real rows and effects rather than SQL text.
+
+For a deliberately retained helper, a small application script can permit one labelled site/reason
+while failing unexpected or stale exceptions. After importing checkQueries from the /check entry:
+
+```ts
+import { resolve } from 'node:path';
+import { checkQueries } from '@kequtech/tenon-orm/check';
+
+const report = await checkQueries({
+  connection: process.env.DATABASE_URL!,
+  project: 'tsconfig.json',
+});
+const sites = report.queries.filter(
+  (q) => q.file === resolve('src/posts.ts') && q.label === 'posts.visible',
+);
+const waived = new Set(
+  sites.length === 1
+    ? sites[0]!.diagnostics.filter((d) => d.kind === 'unchecked' && d.code === 'dynamic-fragment')
+    : [],
+);
+// Reason: shared audience helper; covered by test/posts-visibility.test.ts.
+const failures = report.diagnostics.filter((d) => d.kind !== 'unproven' && !waived.has(d));
+console.log(JSON.stringify(report, null, 2)); // Preserve the actual coverage, including unchecked sites.
+if (!waived.size || !report.coverage.total || failures.length) process.exitCode = 1;
+```
+
+Use this script as the CI SQL-check step for src/posts.ts while the exception exists; keep ordinary
+checker targets for other query modules. Duplicate labels, a moved query,
+a newly analysed helper or a changed reason invalidate it. Mismatches and project/inspection failures
+remain failures. Review the exception and its behavior test when upgrading; remove it once ordinary
+checking covers the site. Keep broader policy application-owned.
 
 ## Describe
 

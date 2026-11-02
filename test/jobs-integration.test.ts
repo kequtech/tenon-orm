@@ -153,6 +153,44 @@ test('bulk inspection, keyed schedules and readiness handles retain the ORM scop
   assert.equal((await pool.queryClassic('SELECT 1')).rows.length, 1);
 });
 
+test('running cancellation retains ORM guards, rollback, observation and scope expiry', async (t) => {
+  const app = await table();
+  const events: QueryEvent[] = [];
+  const observed = createTenon({
+    connection: pool,
+    onQuery(event) {
+      events.push(event);
+    },
+  });
+  t.after(() => observed.close());
+  let scope: Transaction | undefined;
+  let signal: AbortSignal | undefined;
+  const definition = defineJob({
+    name: name(),
+    transactional: true,
+    async handler(_value: number, context) {
+      scope = context.tx;
+      await context.tx.query(sql`INSERT INTO ${app} VALUES (1)`, {
+        affectedRows: { exact: 1 },
+        label: 'cancel.write',
+      });
+      signal = context.signal;
+      await delay(60000, undefined, { signal: context.signal });
+    },
+  });
+  const job = await observed.jobs.send(definition, 1);
+  start(t, definition, { leaseMs: 600 }, observed);
+  await until(() => signal !== undefined);
+  const request = await db.transaction((tx) => tx.jobs.cancel(job.id));
+  assert.equal(request.state, 'running');
+  assert.ok(request.cancelRequestedAt instanceof Date);
+  await until(async () => (await db.jobs.get(job.id))?.state === 'cancelled');
+  assert.equal(signal!.aborted, true);
+  assert.deepEqual(await db.query(sql`SELECT value FROM ${app}`, { returns: 'many' }), []);
+  assert.ok(events.some((event) => event.label === 'cancel.write' && event.outcome === 'success'));
+  await assert.rejects(scope!.query(sql`SELECT 1`), /finished/);
+});
+
 test('transaction submissions commit or roll back with app writes and notify only after commit', async (t) => {
   const app = await table();
   const child = defineJob({ name: name(), handler(_payload: number) {} });

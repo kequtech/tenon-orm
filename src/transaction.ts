@@ -1,4 +1,6 @@
 import type { Pool, Transaction, TransactionOptions } from '@kequtech/pgclear';
+import type { QueryOperation } from './query-operation.js';
+import { queryTurn } from './query-operation.js';
 import type { QueryExecutor, QueryResult } from './connection.js';
 import { executeSql } from './connection.js';
 
@@ -20,21 +22,20 @@ export function withTransaction<T>(
         input: readonly unknown[],
         readResult: (result: QueryResult) => R,
         guarded: boolean,
+        queryOperation?: QueryOperation,
       ): Promise<R> => {
         try {
           checkActive();
         } catch (error) {
           return Promise.reject(error);
         }
-        const operation = pending.then(() => {
+        const operation = queryTurn(pending, queryOperation?.options()?.signal).then(() => {
+          queryOperation?.check();
           const execute = async (scope: Transaction) =>
-            readResult(await executeSql(scope, text, input));
+            readResult(await executeSql(scope, text, input, queryOperation?.options()));
           return guarded ? transaction.savepoint(execute) : execute(transaction);
         });
-        pending = operation.then(
-          () => {},
-          () => {},
-        );
+        pending = Promise.allSettled([pending, operation]).then(() => {});
         return operation;
       };
       try {

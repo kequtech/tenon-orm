@@ -38,6 +38,7 @@ source queries with PostgreSQL metadata; database tests establish actual behavio
 The [pgclear driver](https://github.com/kequtech/pgclear) and
 [Jobs engine](https://github.com/kequtech/pgclear-jobs) are included. Jobs supports transactional
 submissions and durable background work; installing storage and starting workers are explicit.
+The TypeScript compiler is installed for checking and loaded only when checking.
 A server reuses one database instance and closes it after its requests and workers stop.
 
 | Task                                                         | Guide                                      |
@@ -51,10 +52,13 @@ A server reuses one database instance and closes it after its requests and worke
 | Look up signatures, defaults, errors and commands            | [Reference](docs/reference.md)             |
 
 Tenon documents the application-facing workflow. The included libraries own their detailed
-[driver contracts](https://github.com/kequtech/pgclear/blob/main/README.md) and
-[queue contracts](https://github.com/kequtech/pgclear-jobs/blob/main/README.md); both also work standalone.
+[driver contracts](https://github.com/kequtech/pgclear/blob/17fae30540cbc41ce2c776645437c6d265e2de96/README.md) and
+[queue contracts](https://github.com/kequtech/pgclear-jobs/blob/9c9267b0f3a3678fc13e8c3a773715055a6dc4d1/README.md); both also work standalone.
 
-The guides and [changelog](CHANGELOG.md) ship with the package. Read the installed version's docs.
+The guides and [changelog](CHANGELOG.md) ship with the package. `npx tenon docs` prints the exact
+installed versions and local guide paths for all three packages; `--json` makes those paths scriptable.
+Resolution follows Tenon's dependencies, including isolated pnpm layouts. Read those files for the
+contracts your application actually uses. Cross-package contract links use reviewed source revisions.
 Maintainer instructions are in
 [CONTRIBUTING.md](https://github.com/kequtech/tenon-orm/blob/main/CONTRIBUTING.md).
 

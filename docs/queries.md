@@ -197,6 +197,27 @@ row. Sequence advances and external effects can survive rollback. Result-cardina
 do not undo autocommitted writes; use an affected-row guard or explicit transaction for rollback.
 Tenon never automatically retries callbacks.
 
+## Cancel a query
+
+```ts
+const user = await db.query(sql<UserSummary>`SELECT id, email FROM public.users WHERE id = ${id}`, {
+  returns: 'oneOrNone',
+  signal: request.signal,
+  timeoutMs: 5000,
+});
+```
+
+Pass an existing request/operation signal when available. Both options work on db.query and tx.query,
+including affected-row guards. timeoutMs starts when query is called and includes waiting for a
+connection or earlier transaction queries; zero expires immediately. The earliest transaction,
+connection or query deadline wins. Cleanup may outlast that deadline.
+
+A queued cancellation prevents dispatch and leaves earlier operations alone. Active cancellation
+follows pgclear's connection-retirement rules and can invalidate the enclosing transaction; catch
+it at the transaction boundary rather than continuing through an expired tx. Guarded writes roll
+back before rejection when rollback is confirmed. Driver errors and uncertain outcomes stay intact;
+use reconciliation rather than retrying an uncertain write automatically.
+
 ## Errors
 
 Use structured codes and fields, not message matching. `CardinalityError` describes returned-row
@@ -219,4 +240,4 @@ try {
 
 The helper is re-exported unchanged. A rejected commit does not prove rollback; retain stable IDs and reconcile before repeating effects or deleting objects a committed row
 may reference. Exact operation outcomes and traversal behavior belong to the driver's
-[error guide](https://github.com/kequtech/pgclear/blob/main/docs/errors.md).
+[error guide](https://github.com/kequtech/pgclear/blob/17fae30540cbc41ce2c776645437c6d265e2de96/docs/errors.md).

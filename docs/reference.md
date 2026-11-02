@@ -56,11 +56,13 @@ throws/rejections warn and never change query outcomes.
 the supplied query/jobs scope. Do not widen either into Database when it owns no lifecycle/pool.
 See [query composition and transactions](queries.md) for actual workflows.
 
-| QueryOptions field | Contract                                                      |
-| ------------------ | ------------------------------------------------------------- |
-| returns            | native (default), many, oneOrNone or one                      |
-| affectedRows       | Exactly one of {exact:n} or {max:n}; nonnegative safe integer |
-| label              | Optional diagnostic/observation label                         |
+| QueryOptions field | Contract                                                          |
+| ------------------ | ----------------------------------------------------------------- |
+| returns            | native (default), many, oneOrNone or one                          |
+| affectedRows       | Exactly one of {exact:n} or {max:n}; nonnegative safe integer     |
+| signal             | Optional AbortSignal for this query                               |
+| timeoutMs          | Integer 0–2147483647 ms from invocation; zero expires immediately |
+| label              | Optional diagnostic/observation label                             |
 
 | returns   | Result                                                | Cardinality |
 | --------- | ----------------------------------------------------- | ----------- |
@@ -91,7 +93,7 @@ is re-exported. Use queryClassic for finished SQL passed to a native executor.
 
 `findDriverErrors(error)` is directly re-exported from pgclear. It returns original driver errors
 through causes/aggregates, preserving operation evidence. The driver's
-[error guide](https://github.com/kequtech/pgclear/blob/main/docs/errors.md) owns traversal, outcomes,
+[error guide](https://github.com/kequtech/pgclear/blob/17fae30540cbc41ce2c776645437c6d265e2de96/docs/errors.md) owns traversal, outcomes,
 cancellation and recovery. Tenon's [error workflow](queries.md#errors) shows it at the ORM boundary.
 
 Common diagnoses: alias duplicate selected columns; choose string for default int8/count output;
@@ -129,7 +131,7 @@ never executed. [Checking](checking.md) owns coverage, uncertainty and fingerpri
 Tenon re-exports defineJob/defineWorker with ORM Transaction types. JobSpec, saved policy,
 record/schedule types, RunnerOptions/RunnerHandle and original engine errors come from pgclear-jobs.
 The [Tenon walkthrough](jobs.md) shows setup, submissions and handlers; the
-[engine reference](https://github.com/kequtech/pgclear-jobs/blob/main/docs/reference.md) owns exact
+[engine reference](https://github.com/kequtech/pgclear-jobs/blob/9c9267b0f3a3678fc13e8c3a773715055a6dc4d1/docs/reference.md) owns exact
 queue signatures, fields, defaults, events and errors. Those guides ship with the dependency.
 
 | Tenon surface                       | Binding                                                                                           |
@@ -148,17 +150,18 @@ handlers commit independently of their supplied tx.
 
 Tenon applies its query guards/result modes/onQuery to ORM execution. The engine owns claims,
 leases, retries, schedules, observation and shutdown. db.close does not await workers; applications
-supervise and await them first. See Jobs' [hosting](https://github.com/kequtech/pgclear-jobs/blob/main/docs/hosting.md)
-and [storage](https://github.com/kequtech/pgclear-jobs/blob/main/docs/storage.md) guides for detailed
+supervise and await them first. See Jobs' [hosting](https://github.com/kequtech/pgclear-jobs/blob/9c9267b0f3a3678fc13e8c3a773715055a6dc4d1/docs/hosting.md)
+and [storage](https://github.com/kequtech/pgclear-jobs/blob/9c9267b0f3a3678fc13e8c3a773715055a6dc4d1/docs/storage.md) guides for detailed
 lifecycle, upgrades and grants.
 
 ## Commands
 
-All commands accept `--config path`; configured databases accept `--database export`. Paths on
+Commands other than docs accept `--config path`; configured databases accept `--database export`. Paths on
 flags resolve from the working directory; configured paths resolve beside config. Unsupported flags
 reject. Config modules are trusted Node imports. No command automatically loads `.env`.
 
 ```text
+tenon docs [--json]
 tenon init [--config path]
 tenon new <name> [--directory migrations]
 tenon jobs setup [--directory migrations]
@@ -169,14 +172,14 @@ tenon status [--directory migrations] [--namespace public]
 tenon rollback [--directory migrations] [--namespace public] [--steps 1]
 tenon baseline capture [--directory migrations] [--namespace public] [--schema name ...] [--connection native-uri]
 tenon baseline adopt [--directory migrations] [--namespace public]
-tenon check [file.ts[:line]] [--project tsconfig.json] [--json]
+tenon check [file.ts[:line]] [--project tsconfig.json] [--json] [--verbose]
   [--role name] [--search-path value] [--time-zone value]
   [--connect-timeout-ms 3000] [--statement-timeout-ms 5000] [--lock-timeout-ms 1000]
 tenon describe <query.sql> [--role name] [--search-path value] [--time-zone value]
   [--connect-timeout-ms 3000] [--statement-timeout-ms 5000] [--lock-timeout-ms 1000]
 ```
 
-Status emits JSON applied/pending; schema emits snapshot JSON; Describe emits metadata JSON.
+docs resolves installed documentation without configuration or a database. Status emits JSON applied/pending; schema emits snapshot JSON; Describe emits metadata JSON.
 Generation writes atomically, or compares without writing with --check. Checking emits readable
 findings/counts or JSON. Successful operations exit 0; invalid input/failed operations exit 1. Checking
 also fails mismatches, unchecked or zero sites; unproven alone does not fail. Describe can succeed

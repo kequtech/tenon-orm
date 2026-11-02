@@ -4,7 +4,7 @@
 
 Tenon includes pgclear-jobs and binds its handlers to ORM transactions. Use Tenon imports when
 handlers need sql, query guards or onQuery observation. The queue engine also works directly with
-pgclear; it owns the detailed [Jobs reference](https://github.com/kequtech/pgclear-jobs/blob/main/docs/reference.md).
+pgclear; it owns the detailed [Jobs reference](https://github.com/kequtech/pgclear-jobs/blob/9c9267b0f3a3678fc13e8c3a773715055a6dc4d1/docs/reference.md).
 The matching guides ship in the installed pgclear-jobs package.
 
 ## Install storage
@@ -22,13 +22,19 @@ workers. Transaction facades expose only record operations.
 Jobs uses one pgclear_jobs schema per database. Tenon's migrations.namespace selects its own
 history/search path, not queue isolation. Existing storage needs deliberate migration ownership.
 
-### Upgrading from Jobs 0.2.0
+### Upgrade existing storage
 
-Jobs 0.2.1 and later require storage version 2. Stop old producers/workers and apply a **new** application
-migration with jobsUpgrade.up from `@kequtech/pgclear-jobs/migrations`; keep the original pair unchanged.
-Then restart with the matching package. Setup never upgrades/reset storage implicitly. The
-[storage guide](https://github.com/kequtech/pgclear-jobs/blob/main/docs/storage.md) owns upgrade/reversal
-steps and tested runtime grants; its SQL example ships with Jobs.
+Jobs 0.3.0 requires storage version 3. For a version-2 installation (Jobs 0.2.1/0.2.2), create a new
+application migration containing jobsCancellationUpgrade.up/down from
+`@kequtech/pgclear-jobs/migrations`. A version-1 installation first needs jobsUpgrade (1 → 2), then
+the cancellation pair (2 → 3). Keep all saved setup/upgrade migrations unchanged.
+
+If an application script imports Jobs SQL directly, declare `@kequtech/pgclear-jobs@0.3.0` as a direct
+dependency with its package manager; transitive imports are unavailable under isolated layouts.
+`npx tenon docs` locates the matching installed [storage guide](https://github.com/kequtech/pgclear-jobs/blob/9c9267b0f3a3678fc13e8c3a773715055a6dc4d1/docs/storage.md),
+which includes a file-writing example and reversal restrictions. Stop old producers/workers, review
+and apply the new SQL through the existing runner, then restart matching packages. Setup remains
+fresh-install generation; upgrades are occasional application-authored migrations.
 
 ## Define a contract and bind its worker
 
@@ -83,9 +89,18 @@ send creates independent work. request coalesces under a durable definition/key;
 uses that same execution key while schedule key identifies the producer. Started work retains its
 retries, with one coalesced successor. getMany avoids per-row lookups; find defaults to 100 and needs
 cursor pagination for complete projections. Job history is operational state, so persist business
-results separately. The Jobs [reference](https://github.com/kequtech/pgclear-jobs/blob/main/docs/reference.md)
-and [reliability guide](https://github.com/kequtech/pgclear-jobs/blob/main/docs/reliability.md) define
+results separately. The Jobs [reference](https://github.com/kequtech/pgclear-jobs/blob/9c9267b0f3a3678fc13e8c3a773715055a6dc4d1/docs/reference.md)
+and [reliability guide](https://github.com/kequtech/pgclear-jobs/blob/9c9267b0f3a3678fc13e8c3a773715055a6dc4d1/docs/reliability.md) define
 payload validation, timing, keys, pagination, retention and cancellation.
+
+## Cancel work
+
+`await db.jobs.cancel(jobId)` cancels pending work immediately or records a running job's cancellation
+request. The worker aborts the handler's existing signal after its next heartbeat; handlers should
+pass that signal to external dependencies. The returned running record exposes cancelRequestedAt.
+The call does not wait for the handler to stop. Managed writes roll back when cancellation wins;
+already committed completion remains completed. The Jobs reliability guide owns detailed cancellation
+and successor rules. Cancelling a job does not unschedule its producer or cancel another job.
 
 ## Run and close
 
@@ -97,13 +112,14 @@ run runs continuously and returns its lifetime promise. When the application hos
 signal, pass it as `{ signal: shutdownSignal }`. One host signal can serve all runners; the engine
 handles draining active work. Await the runner before closing the database.
 
-For readiness, start forwards the engine's ready/done handle; supervise done immediately.
+Readiness confirms storage validation and the readiness hook, not notification connectivity or ongoing
+health. For readiness, start forwards the engine's ready/done handle; supervise done immediately.
 Tenon owns neither process signals nor worker restart policy, and db.close does not
 stop workers. Supplied pools remain application-owned. The ORM
 [HTTP example](../examples/jobs-host.ts) demonstrates readiness and ordered cleanup with a real ORM
 query; the [worker entry](../examples/jobs-worker.ts) shows ORM bindings for a separate worker process.
 
-Jobs owns the generic [hosting guide and Next host](https://github.com/kequtech/pgclear-jobs/blob/main/docs/hosting.md).
+Jobs owns the generic [hosting guide and Next host](https://github.com/kequtech/pgclear-jobs/blob/9c9267b0f3a3678fc13e8c3a773715055a6dc4d1/docs/hosting.md).
 Copy its process host when a framework controls process exit, and supply your ORM worker entry.
 Detailed readiness, hook, cancellation and process behavior belongs there. Tenon forwards RunnerOptions
 without reproducing the engine's lifecycle or error classification.

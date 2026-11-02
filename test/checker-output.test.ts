@@ -44,7 +44,7 @@ test('readable output groups equivalent variants while retaining detailed JSON f
     },
   ]);
   const before = JSON.stringify(input);
-  const output = formatCheckReport(input);
+  const output = formatCheckReport(input, { verbose: true });
   assert.equal(output.split('\n').filter((line) => line.includes(finding.code)).length, 1);
   assert.match(output, /\[variants 1, 2\]/);
   assert.match(output, /0 definite mismatches, 1 unproven findings/);
@@ -74,6 +74,7 @@ test('grouping preserves separate columns, types, parameters, kinds, locations a
       ],
       [{ ...finding, code: 'typescript-error', kind: 'mismatch' }],
     ),
+    { verbose: true },
   );
   assert.equal(output.split('\n').filter((line) => line.includes(finding.code)).length, 9);
   assert.match(output, /2 definite mismatches, 8 unproven findings/);
@@ -83,4 +84,35 @@ test('a clean report has a compact summary and one statement of general limits',
   const output = formatCheckReport({ ...report([{ ...query, diagnostics: [] }]), ok: true });
   assert.equal(output.trim().split('\n').length, 2);
   assert.match(output, /1 queries, 1 analysed, 0 unchecked; 0 definite mismatches/);
+});
+
+test('default output summarizes nonblocking reasons without suppressing failures or changing JSON', () => {
+  const input = report([
+    {
+      ...query,
+      diagnostics: [
+        finding,
+        { ...finding, line: 8 },
+        {
+          ...finding,
+          kind: 'unchecked',
+          code: 'dynamic-fragments',
+          message: 'Use fixed branches or test runtime composition.',
+        },
+        {
+          ...finding,
+          kind: 'mismatch',
+          code: 'result-type-mismatch',
+          message: 'Definite type mismatch',
+        },
+      ],
+    },
+  ]);
+  const before = JSON.stringify(input);
+  const output = formatCheckReport(input);
+  assert.match(output, /result-refinement-unproven: 2 findings/);
+  assert.doesNotMatch(output, /A result needs refinement/);
+  assert.match(output, /queries.ts:3:10 \[unchecked\] dynamic-fragments/);
+  assert.match(output, /queries.ts:3:10 \[mismatch\] result-type-mismatch/);
+  assert.equal(JSON.stringify(input), before);
 });

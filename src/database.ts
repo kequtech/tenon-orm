@@ -62,11 +62,16 @@ export function createTenon(config: TenonConfig): Database {
     return connection;
   }
 
-  const query: QueryExecutor = (text, input, readResult, guarded) => {
+  const query: QueryExecutor = (text, input, readResult, guarded, operation) => {
     checkOpen();
     const { pool } = currentConnection();
-    if (guarded) return withTransaction(pool, (query) => query(text, input, readResult, false));
-    return executeSql(pool, text, input).then(readResult);
+    if (guarded)
+      return withTransaction(
+        pool,
+        (query) => query(text, input, readResult, false, operation),
+        operation?.options(),
+      );
+    return executeSql(pool, text, input, operation?.options()).then(readResult);
   };
 
   let jobs: DatabaseJobs | undefined;

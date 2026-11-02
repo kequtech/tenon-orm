@@ -2,9 +2,17 @@
 
 ## 0.5.1
 
+- Forward per-query signal/timeoutMs through ordinary queries and atomic guards, including time spent
+  waiting in Tenon's transaction queue. Preserve native cancellation and scope-expiry behavior.
+- Include Jobs 0.3.0 with durable cross-process cancellation through the existing cancel(id) method.
+  Existing version-2 storage needs a new jobsCancellationUpgrade migration; version 1 first needs
+  jobsUpgrade. Stop old producers/workers before migrating. No upgrade command or automatic DDL.
+- Add offline tenon docs paths for the actual installed dependencies. Summarize nonblocking checker
+  findings by reason; --verbose and --json retain detail. Ship an executable database-test example.
+
 - Simplify the introductory query and remove unnecessary casts from worker examples.
 - Keep basic worker usage to one call; explain shared host shutdown signals in the hosting guidance.
-- Include the pgclear 0.3.6 and pgclear-jobs 0.2.2 documentation patches.
+- Include the pgclear 0.3.6 documentation patch.
 
 ## 0.5.0
 
@@ -32,7 +40,7 @@
 - Add schedule `requestKey` through Jobs 0.2.1 so scheduled/manual/startup requests share the same
   durable key. **Upgrade action:** existing Jobs storage version 1 requires a new app migration
   containing `jobsUpgrade.up` from `@kequtech/pgclear-jobs/migrations`, after stopping old producers
-  and workers. Never rewrite the original setup SQL or reset storage; see [Jobs upgrades](docs/jobs.md#upgrading-from-jobs-020).
+  and workers. Never rewrite the original setup SQL or reset storage; see [Jobs upgrades](docs/jobs.md#upgrade-existing-storage).
 - Directly re-export pgclear 0.3.5's `findDriverErrors` for original-error traversal without a
   transaction-outcome guess or retry wrapper.
 - Recover immutable finite string-literal identifier parameters in source checks, including imported

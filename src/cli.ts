@@ -18,8 +18,10 @@ import { describeQuery } from './describe.js';
 import { migrate, migrationStatus, rollback } from './migrations.js';
 import { createMigration } from './migrations/files.js';
 import { createJobsMigration } from './jobs-migration.js';
+import { installedDocumentation } from './documentation.js';
 
 const help = `tenon init [--config path] (create config without a database)
+tenon docs [--json] (paths to the installed Tenon, driver and Jobs documentation)
 tenon migrate|status|rollback [--directory migrations] [--namespace public]
 tenon baseline capture|adopt [--directory migrations] [--namespace public]
 baseline capture: [--schema name ...] [--connection native-uri] (default: whole database schema)
@@ -28,13 +30,13 @@ tenon jobs setup [--directory migrations] (generate Jobs migration files without
 tenon generate [--out path] [--namespace public] [--check] [--config path]
 tenon schema [--namespace public] (versioned catalog snapshot and fingerprint as JSON)
 tenon describe <query.sql> [--role name] [--search-path schemas] [--time-zone zone]
-tenon check [file.ts[:line]] [--project tsconfig.json] [--json]
+tenon check [file.ts[:line]] [--project tsconfig.json] [--json] [--verbose]
 generate/schema/check/describe require tenon.config.ts, .mts, .js or .mjs, or --config path.
 describe: [--connect-timeout-ms 3000] [--statement-timeout-ms 5000] [--lock-timeout-ms 1000]
 describe emits JSON metadata; it does not execute the query or verify result annotations.
 check compares source contracts; mismatches, unchecked sites and no sites fail. Unproven types are notes.
 rollback: --steps 1
-All commands accept --config path. Database commands accept --database <export> to select a named config.
+Commands other than docs accept --config path. Database commands accept --database <export> to select a named config.
 Multiple database exports require --database. Migration commands fall back to DATABASE_URL only without config.
 `;
 
@@ -91,6 +93,7 @@ async function main(): Promise<void> {
       help: { type: 'boolean', default: false },
       project: { type: 'string' },
       json: { type: 'boolean', default: false },
+      verbose: { type: 'boolean', default: false },
       ...describeFlags,
     },
   });
@@ -100,6 +103,24 @@ async function main(): Promise<void> {
   }
 
   const [command, argument] = positionals;
+  if (command === 'docs') {
+    if (positionals.length !== 1)
+      throw new Error('Use docs [--json] for installed documentation paths.');
+    for (const token of tokens)
+      if (token.kind === 'option' && !['help', 'json'].includes(token.name))
+        throw new Error(`--${token.name} is not supported by docs.`);
+    const docs = await installedDocumentation();
+    process.stdout.write(
+      values.json
+        ? JSON.stringify(docs, null, 2) + '\n'
+        : docs
+            .map((doc) => `${doc.name}@${doc.version}\n  ${doc.readme}\n  ${doc.guides}/`)
+            .join('\n') + '\n',
+    );
+    return;
+  }
+  if (values.verbose && command !== 'check')
+    throw new Error('--verbose is only supported by check.');
   for (const name of ['out', 'directory', 'project'] as const) {
     if (values[name] !== undefined) validatePath(values[name], `--${name}`);
   }
@@ -127,6 +148,7 @@ async function main(): Promise<void> {
   if (command === 'check') {
     allowed.add('project');
     allowed.add('json');
+    allowed.add('verbose');
   }
   if (command === 'describe' || command === 'check') {
     for (const name of Object.keys(describeFlags)) allowed.add(name);
@@ -240,7 +262,7 @@ async function main(): Promise<void> {
       ...(values.project === undefined ? {} : { project: values.project }),
     });
     if (values.json) process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
-    else process.stdout.write(formatCheckReport(report));
+    else process.stdout.write(formatCheckReport(report, { verbose: values.verbose }));
     if (!report.ok) process.exitCode = 1;
     return;
   }

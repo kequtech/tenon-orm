@@ -5,9 +5,11 @@ import {
   type QueryResult as DriverResult,
   type Executor,
   type InputValue,
+  type OperationOptions,
 } from '@kequtech/pgclear';
 import type { UnknownRow } from './query.js';
 import { plainObject } from './validation.js';
+import type { QueryOperation } from './query-operation.js';
 
 export type ConnectionOptions = PoolOptions;
 /** Connection settings and executable credentials/codecs, without a live pool. */
@@ -26,6 +28,7 @@ export type QueryExecutor = <T>(
   input: readonly unknown[],
   readResult: (result: QueryResult) => T,
   guarded: boolean,
+  operation?: QueryOperation,
 ) => Promise<T>;
 
 export function isPool(connection: unknown): connection is Pool {
@@ -53,6 +56,7 @@ export function executeSql(
   connection: Executor,
   text: string,
   input: readonly unknown[] = [],
+  options?: OperationOptions,
 ): Promise<QueryResult> {
-  return connection.queryClassic(text, input as readonly InputValue[]);
+  return connection.queryClassic(text, input as readonly InputValue[], options);
 }

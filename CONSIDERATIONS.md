@@ -39,6 +39,10 @@ extended-protocol execution, encoding/decoding, session ownership, transaction o
 recovery, and bounded shutdown. Tenon owns composition, result modes, query observations, and atomic
 affected-row guards.
 
+Per-query signals and deadlines cover Tenon's own policy queue before delegating to pgclear.
+A queued cancellation cannot dispatch later or interrupt the operation ahead of it. Active cancellation
+retains the driver's transaction/connection retirement semantics.
+
 Whole guarded operations are serialized inside callback transactions so another write cannot enter
 the operation's savepoint. A guard failure rolls back before rejection. This policy belongs above
 the driver rather than inside its protocol machinery.

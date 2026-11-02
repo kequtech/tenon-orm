@@ -113,8 +113,8 @@ When adapting an ORM query to a consumer expecting driver results, use
 rather than pretending it is a full database with lifetime/pool methods.
 
 Listeners own dedicated connections and close separately. Reuse connection values, not pool-only
-options, when calling native listen. The driver's [connection](https://github.com/kequtech/pgclear/blob/main/docs/connections.md)
-and [notification](https://github.com/kequtech/pgclear/blob/main/docs/notifications.md) guides own
+options, when calling native listen. The driver's [connection](https://github.com/kequtech/pgclear/blob/17fae30540cbc41ce2c776645437c6d265e2de96/docs/connections.md)
+and [notification](https://github.com/kequtech/pgclear/blob/17fae30540cbc41ce2c776645437c6d265e2de96/docs/notifications.md) guides own
 native configuration, registration/reconnect and shared-listener examples. Tenon adds no listener
 or streaming wrapper.
 

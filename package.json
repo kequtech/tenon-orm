@@ -73,7 +73,7 @@
   },
   "dependencies": {
     "@kequtech/pgclear": "^0.3.6",
-    "@kequtech/pgclear-jobs": "^0.2.2",
+    "@kequtech/pgclear-jobs": "^0.3.0",
     "typescript": "~6.0.2"
   }
 }

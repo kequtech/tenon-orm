@@ -38,6 +38,20 @@ import type { User } from './fixtures/models.js';
 import { echoValues } from './fixtures/queries.js';
 import { checkQueries, type CheckReport } from '../src/check.js';
 
+async function queryCancellationContracts(db: Database, signal: AbortSignal) {
+  const row: { id: number } | undefined = await db.query(sql<{ id: number }>`SELECT 1 AS id`, {
+    returns: 'oneOrNone',
+    signal,
+    timeoutMs: 1000,
+  });
+  await db.transaction((tx) => tx.query(sql`SELECT 1`, { signal, timeoutMs: 100 }));
+  // @ts-expect-error Per-query timeouts use milliseconds, not duration strings.
+  await db.query(sql`SELECT 1`, { timeoutMs: '1s' });
+  // @ts-expect-error AbortController is not an AbortSignal.
+  await db.query(sql`SELECT 1`, { signal: new AbortController() });
+  return row;
+}
+
 async function checkingContracts(connection: string) {
   const report: CheckReport = await checkQueries({
     connection,

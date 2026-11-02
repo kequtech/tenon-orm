@@ -78,6 +78,7 @@ test('the packed package preserves API contracts and consumes generated .d.ts sc
       'docs/reference.md',
       'examples/jobs-worker.ts',
       'examples/jobs-host.ts',
+      'examples/testing.ts',
     ]) {
       assert.ok(paths.includes(required), `Package is missing ${required}`);
     }
@@ -134,7 +135,7 @@ test('the packed package preserves API contracts and consumes generated .d.ts sc
     assert.equal(metadata.license, 'ISC');
     assert.deepEqual(metadata.dependencies, {
       '@kequtech/pgclear': '^0.3.6',
-      '@kequtech/pgclear-jobs': '^0.2.2',
+      '@kequtech/pgclear-jobs': '^0.3.0',
       typescript: '~6.0.2',
     });
     assert.equal(metadata.peerDependencies, undefined);
@@ -150,6 +151,30 @@ test('the packed package preserves API contracts and consumes generated .d.ts sc
       cwd: consumer,
     });
     assert.ok(help.stdout.trim(), 'Installed CLI must run without a database');
+    const documentation = await run(join(consumer, 'node_modules/.bin/tenon'), ['docs', '--json'], {
+      cwd: consumer,
+    });
+    const guides = JSON.parse(documentation.stdout) as {
+      name: string;
+      version: string;
+      readme: string;
+      guides: string;
+    }[];
+    assert.deepEqual(
+      guides.map((g) => g.name),
+      ['@kequtech/tenon-orm', '@kequtech/pgclear', '@kequtech/pgclear-jobs'],
+    );
+    for (const guide of guides) {
+      await access(guide.readme);
+      await access(guide.guides);
+      assert.ok(guide.readme.startsWith(consumer));
+    }
+    const testingExample = join(consumer, 'database.test.ts');
+    await cp(join(installed, 'examples/testing.ts'), testingExample);
+    await run(process.execPath, ['--test', testingExample], {
+      cwd: consumer,
+      env: { ...process.env, TEST_DATABASE_URL: testConnection },
+    });
     // Reuse the complete positive/negative API contracts, but resolve Tenon through
     // its installed package exports instead of repository source. Generated definitions remain
     // ordinary committed application files, as they would in a real consumer.

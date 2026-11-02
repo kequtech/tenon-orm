@@ -4,7 +4,7 @@
 
 Tenon generates declarations from PostgreSQL storage. You still choose each query's projection and
 validate application values. The driver owns conversion; use its
-[value guide](https://github.com/kequtech/pgclear/blob/main/docs/values.md) for complete encoders,
+[value guide](https://github.com/kequtech/pgclear/blob/17fae30540cbc41ce2c776645437c6d265e2de96/docs/values.md) for complete encoders,
 arrays, temporal behavior and codec metadata. That guide also ships with pgclear.
 
 ## Generate and check

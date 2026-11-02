@@ -50,7 +50,7 @@ Either candidate can be selected independently. The harness overrides transitive
 that artifact; omitted variables use registry dependencies. Jobs owns the real Next.js host fixture
 and its native worker tests. Tenon keeps the ORM worker entry and guarded HTTP-host integration checks.
 
-Tenon 0.5.1 currently requires the prepared but unpublished pgclear 0.3.6 and Jobs 0.2.2 patches.
+Tenon 0.5.1 currently requires the prepared but unpublished pgclear 0.3.6 and Jobs 0.3.0 changes.
 Until they are published, use the local packed-artifact workflow above. Their lockfile entries reserve
 those versions without invented registry URLs or integrity values. Before a future release, publish
 those verified supporting artifacts first, regenerate registry metadata with

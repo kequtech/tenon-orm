@@ -780,7 +780,7 @@ export class SourceAnalysis {
         return this.fail(
           node,
           'dynamic-fragment',
-          'The fragment or identifier has no recoverable source initializer; arbitrary function calls and mutable composition are unchecked.',
+          'The fragment or identifier has no recoverable source initializer; arbitrary function calls and mutable composition are unchecked. Use a fixed const fragment or explicit branches when equivalent; otherwise retain the composition and test its runtime alternatives.',
         );
       return this.expression(resolved, depth + 1);
     }

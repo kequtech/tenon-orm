@@ -7,6 +7,8 @@ import { CardinalityError } from './errors.js';
 
 export type QueryReturnMode = 'native' | 'many' | 'oneOrNone' | 'one';
 export interface QueryOptions {
+  readonly signal?: AbortSignal;
+  readonly timeoutMs?: number;
   readonly returns?: QueryReturnMode;
   readonly affectedRows?: AffectedRowsConstraint;
   /** Optional diagnostic label. No SQL or input values are sent to observers. */
@@ -25,7 +27,7 @@ export function validateOptions(
 ): Readonly<QueryOptions & { returns: QueryReturnMode }> {
   const config = options === undefined ? {} : plainObject(options, 'Query options');
   for (const key of Object.keys(config)) {
-    if (!['returns', 'affectedRows', 'label'].includes(key))
+    if (!['returns', 'affectedRows', 'label', 'signal', 'timeoutMs'].includes(key))
       throw new Error(`Unknown query option: ${key}`);
   }
   const returns = config.returns ?? 'native';
@@ -36,12 +38,25 @@ export function validateOptions(
     throw new Error('Query returns must be native, many, oneOrNone, or one.');
   }
   const affectedRows = validateAffectedRows(config.affectedRows);
+  if (config.signal !== undefined && !(config.signal instanceof AbortSignal))
+    throw new Error('Query signal must be an AbortSignal.');
+  const timeoutMs = config.timeoutMs;
+  if (
+    timeoutMs !== undefined &&
+    (typeof timeoutMs !== 'number' ||
+      !Number.isInteger(timeoutMs) ||
+      timeoutMs < 0 ||
+      timeoutMs > 2147483647)
+  )
+    throw new Error('Query timeoutMs must be an integer from 0 to 2147483647 milliseconds.');
   const label = config.label;
   if (label !== undefined && (typeof label !== 'string' || !label.trim())) {
     throw new Error('Query label must be a nonempty string.');
   }
   return Object.freeze({
     returns: returns as QueryReturnMode,
+    ...(config.signal !== undefined && { signal: config.signal as AbortSignal }),
+    ...(timeoutMs !== undefined && { timeoutMs: timeoutMs as number }),
     ...(affectedRows && { affectedRows }),
     ...(typeof label === 'string' && { label }),
   });

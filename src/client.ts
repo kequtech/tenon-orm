@@ -5,6 +5,7 @@ import { queryOutput, validateOptions } from './query-options.js';
 import type { SqlQuery } from './query.js';
 import { assertQuery } from './query.js';
 import { validateTransactionSql } from './transaction-sql.js';
+import { queryOperation } from './query-operation.js';
 import type { QueryClient, QueryEvent } from './types.js';
 
 /** All public execution shares validation, atomic checks, and result handling. */
@@ -16,12 +17,14 @@ export function createClient(
     const options = validateOptions(input);
     assertQuery(statement);
     validateTransactionSql(statement.text, options.label ?? 'Query');
+    const operation = queryOperation(options);
     const started = performance.now();
     let command: string | undefined;
     let rowCount: number | null | undefined;
     let failure: unknown;
     let succeeded = false;
     try {
+      operation.check();
       const value = await query(
         statement.text,
         statement.values,
@@ -32,6 +35,7 @@ export function createClient(
           return queryOutput(options, result);
         },
         options.affectedRows !== undefined,
+        operation,
       );
       succeeded = true;
       return value;
@@ -39,6 +43,7 @@ export function createClient(
       failure = error;
       throw error;
     } finally {
+      operation.close();
       if (onQuery) {
         const code =
           failure && typeof failure === 'object' && 'code' in failure ? failure.code : undefined;

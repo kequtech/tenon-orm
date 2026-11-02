@@ -53,7 +53,7 @@ A server reuses one database instance and closes it after its requests and worke
 
 Tenon documents the application-facing workflow. The included libraries own their detailed
 [driver contracts](https://github.com/kequtech/pgclear/blob/17fae30540cbc41ce2c776645437c6d265e2de96/README.md) and
-[queue contracts](https://github.com/kequtech/pgclear-jobs/blob/521a1370abd9f3c7cf4baeaef68737cf2cabbee4/README.md); both also work standalone.
+[queue contracts](https://github.com/kequtech/pgclear-jobs/blob/b3a9a2f62f98f8ebef02b4af1709ceac76547590/README.md); both also work standalone.
 
 The guides and [changelog](CHANGELOG.md) ship with the package. `npx tenon docs` prints the exact
 installed versions and local guide paths for all three packages; `--json` makes those paths scriptable.

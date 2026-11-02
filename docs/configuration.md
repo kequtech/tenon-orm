@@ -170,6 +170,7 @@ path flags resolve from the working directory and override the corresponding con
 | ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
 | `connection`           | PostgreSQL URI or pgclear pool options, including TLS, password callbacks, startup parameters, and codecs. Required when the database is used.  |
 | `onQuery`              | Optional observer for completed runtime queries. CLI tooling and native calls do not invoke it.                                                 |
+| `jobs`                 | Enable Jobs record operations and workers; defaults to false. Storage setup and worker startup remain explicit.                                 |
 | `migrations.directory` | Migration files; defaults to `migrations` beside the config.                                                                                    |
 | `migrations.namespace` | Migration/history schema; defaults to `public`. Also supplies the generation namespace unless overridden.                                       |
 | `generate.out`         | Required when `generate` is present. Otherwise supply `--out`.                                                                                  |

@@ -84,7 +84,7 @@ contract under a new format version. See [snapshot scope](docs/schema-inspection
 Review the installed driver's changelog, configuration, and representation changes. Retain runtime,
 Describe, generation, Unicode, recovery, shutdown, and packed-consumer regressions. Run
 `npm run check`, inspect the packed artifact, and verify PostgreSQL 16/18 CI. See
-[CONTRIBUTING.md](CONTRIBUTING.md#test-an-unpublished-driver-candidate) for candidate artifacts.
+[CONTRIBUTING.md](CONTRIBUTING.md#test-local-dependency-candidates) for candidate artifacts.
 
 After a registry or driver change, regenerate/review types. CLI tools share the configured registry;
 programmatic inspection/checking inherit `connection.codecs` or accept an explicit registry. Referenced application types must resolve in each compilation context. A

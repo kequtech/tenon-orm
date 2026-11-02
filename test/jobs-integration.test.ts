@@ -19,6 +19,7 @@ import {
   createMigration,
   createTenon,
   defineJob,
+  defineWorker,
   identifier,
   JobError,
   migrate,
@@ -31,6 +32,7 @@ import type {
   JobDefinition,
   QueryEvent,
   RunnerOptions,
+  RunnerEvent,
   Transaction,
   TransactionalHandlerContext,
 } from '../src/index.js';
@@ -279,6 +281,102 @@ test('handler writes, child submissions and completion are atomic across retries
   }
 });
 
+test('producer specifications bind ORM workers and report retries only after rollback and bookkeeping', async (t) => {
+  const app = await table();
+  const specification = defineJob<{ value: number }>({
+    name: name(),
+    maxAttempts: 2,
+    retryDelayMs: 0,
+    retryJitter: false,
+  });
+  const original = new Error('retry the original failure');
+  const events: RunnerEvent[] = [];
+  let policyCalls = 0;
+  const def = defineWorker(specification, {
+    transactional: true,
+    async handler({ value }, { tx, attempt }) {
+      await tx.query(sql`INSERT INTO ${app} VALUES (${value})`);
+      if (attempt === 1) throw original;
+    },
+  });
+  let id = '';
+  await db.transaction(async (tx) => {
+    id = (await tx.jobs.send(specification, { value: 7 })).id;
+  });
+  const { stop, running } = start(t, def, {
+    async onHandlerError(failure) {
+      policyCalls++;
+      assert.equal(failure.error, original);
+      assert.equal(failure.id, id);
+      assert.equal(failure.attempt, 1);
+      assert.equal(failure.transactional, true);
+      assert.equal('payload' in failure, false);
+      // An exclusive lock proves rollback released the handler's table lock before policy runs.
+      await db.transaction(async (tx) => {
+        await tx.query(sql`LOCK TABLE ${app} IN ACCESS EXCLUSIVE MODE NOWAIT`);
+        assert.deepEqual(await tx.query(sql`SELECT * FROM ${app}`, { returns: 'many' }), []);
+      });
+      return 'continue' as const;
+    },
+    onEvent(event) {
+      events.push(event);
+    },
+  });
+  await until(() => events.some((event) => event.type === 'attemptCompleted'));
+  stop.abort();
+  await running;
+  assert.equal(policyCalls, 1);
+  assert.deepEqual(
+    events.map((event) => event.type),
+    ['attemptStarted', 'attemptFailed', 'attemptStarted', 'attemptCompleted'],
+  );
+  const failed = events.find((event) => event.type === 'attemptFailed')!;
+  assert.equal(failed.error, original);
+  assert.ok(failed.retryAt instanceof Date);
+  assert.equal((await db.jobs.get(id))?.state, 'completed');
+  assert.deepEqual(await db.query(sql`SELECT * FROM ${app}`, { returns: 'many' }), [{ value: 7 }]);
+  assert.ok(events.every((event) => !('payload' in event)));
+});
+
+test('an independent transaction error can stop the runner without losing error identity', async () => {
+  const original = new DriverError('PGCLEAR_COMMIT_UNKNOWN', 'Independent commit response lost.');
+  const specification = defineJob<number>({ name: name() });
+  const events: RunnerEvent[] = [];
+  const def = defineWorker(specification, {
+    async handler(value) {
+      // An application-owned transaction's error remains an ordinary handler error until policy decides.
+      await db.transaction(async () => {
+        void value;
+        throw original;
+      });
+    },
+  });
+  const job = await db.jobs.send(specification, 1);
+  await assert.rejects(
+    db.jobs.run([def], {
+      onEvent(event) {
+        events.push(event);
+      },
+      onHandlerError(failure) {
+        assert.equal(failure.error, original);
+        assert.equal(failure.transactional, false);
+        return 'stop';
+      },
+    }),
+    (error) => error === original,
+  );
+  assert.equal((await db.jobs.get(job.id))?.state, 'running');
+  assert.equal((await db.jobs.attempts(job.id))[0]?.outcome, null);
+  assert.deepEqual(
+    events.map((event) => event.type),
+    ['attemptStarted', 'runnerFailed'],
+  );
+  const failed = events.find((event) => event.type === 'runnerFailed')!;
+  assert.equal(failed.error, original);
+  assert.equal(failed.attempt?.id, job.id);
+  assert.equal((await pool.queryClassic('SELECT 1')).rows.length, 1);
+});
+
 test('distinct jobs for one business request retain one durable result and follow-up after pruning', async (t) => {
   const requests = identifier(namespace, `requests_${name().replaceAll('-', '')}`);
   const notes = identifier(namespace, `notes_${name().replaceAll('-', '')}`);
@@ -512,10 +610,19 @@ for (const delivered of [false, true]) {
       });
       const job = await db.jobs.send(def, 1);
       const stop = new AbortController();
-      const outcome = worker.jobs.run([def], { signal: stop.signal, shutdownTimeoutMs: 0 }).then(
-        () => null,
-        (error: unknown) => error,
-      );
+      const events: RunnerEvent[] = [];
+      const outcome = worker.jobs
+        .run([def], {
+          signal: stop.signal,
+          shutdownTimeoutMs: 0,
+          onEvent(event) {
+            events.push(event);
+          },
+        })
+        .then(
+          () => null,
+          (error: unknown) => error,
+        );
       try {
         await until(() => proxy.buffered(delivered ? 'responses' : 'requests') > 0);
         if (delivered) await until(async () => (await db.jobs.get(job.id))?.state === 'completed');
@@ -523,6 +630,13 @@ for (const delivered of [false, true]) {
         const error = await outcome;
         assert.ok(error instanceof DriverError);
         assert.equal(error.code, 'PGCLEAR_COMMIT_UNKNOWN');
+        assert.equal(
+          events.some((event) => event.type === 'attemptCompleted'),
+          false,
+        );
+        const failed = events.find((event) => event.type === 'runnerFailed');
+        assert.equal(failed?.error, error);
+        assert.equal(failed?.attempt?.id, job.id);
         assert.equal(calls, 1);
         assert.deepEqual(
           await db.query(sql`SELECT * FROM ${app}`, { returns: 'many' }),

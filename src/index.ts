@@ -10,7 +10,7 @@ export type {
   TransactionOptions,
 } from '@kequtech/pgclear';
 
-export { defineJob } from './jobs.js';
+export { defineJob, defineWorker } from './jobs.js';
 export { createJobsMigration } from './jobs-migration.js';
 export type { CreateJobsMigrationOptions, CreatedJobsMigration } from './jobs-migration.js';
 export type {
@@ -18,11 +18,20 @@ export type {
   TransactionJobs,
   JobDefinition,
   JobOptions,
+  WorkerOptions,
   TransactionalHandlerContext,
 } from './jobs.js';
 export { JobError, JobNotFoundError, JobStateError, previewSchedule } from '@kequtech/pgclear-jobs';
 export type {
   ExecutionPolicy,
+  JobSpec,
+  JobSpecOptions,
+  AttemptInfo,
+  HandlerFailure,
+  HandlerErrorAction,
+  AttemptAbandonReason,
+  RunnerEvent,
+  RunnerHooks,
   HandlerContext,
   JobErrorOptions,
   RunnerOptions,

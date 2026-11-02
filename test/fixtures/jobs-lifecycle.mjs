@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import { execFile, spawn } from 'node:child_process';
+import { once } from 'node:events';
+import { promisify } from 'node:util';
 import { randomUUID } from 'node:crypto';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -13,6 +16,50 @@ import {
   migrate,
   sql,
 } from '@kequtech/tenon-orm';
+
+const run = promisify(execFile);
+async function until(check) {
+  const end = performance.now() + 8000;
+  while (!(await check())) {
+    if (performance.now() > end) throw new Error('Installed Jobs workflow timed out.');
+    await delay(10);
+  }
+}
+
+async function checkHost(connection, db) {
+  const child = spawn(process.execPath, ['jobs-host.ts'], {
+    env: { ...process.env, DATABASE_URL: connection, PORT: '0' },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  const exited = once(child, 'exit');
+  void exited.catch(() => {});
+  let output = '',
+    errors = '',
+    address;
+  child.stdout.on('data', (data) => {
+    output += data;
+  });
+  child.stderr.on('data', (data) => {
+    errors += data;
+  });
+  try {
+    await until(async () => {
+      assert.equal(child.exitCode, null, errors);
+      if (!output.includes('\n')) return false;
+      address = JSON.parse(output).listening;
+      return (await fetch(address)).status === 200;
+    });
+    const query = defineJob({ name: 'example:query' });
+    const job = await db.jobs.send(query, { value: 42 });
+    await until(async () => (await db.jobs.get(job.id))?.state === 'completed');
+    child.kill('SIGTERM');
+    await until(() => child.exitCode !== null || child.signalCode !== null);
+    assert.deepEqual(await exited, [0, null], errors);
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    await exited;
+  }
+}
 
 const connection = process.env.TENON_TEST_DATABASE_URL;
 const control = createPool({ connectionString: connection });
@@ -31,6 +78,13 @@ try {
   const url = new URL(connection);
   url.pathname = `/${database}`;
   pool = createPool({ connectionString: url.toString(), maxConnections: 4 });
+  await assert.rejects(
+    run(process.execPath, ['jobs-host.ts'], {
+      env: { ...process.env, DATABASE_URL: url.toString(), PORT: '0' },
+      timeout: 5000,
+    }),
+    { code: 1 },
+  );
   const files = await createMigration({ directory, name: 'app' });
   await writeFile(
     files.upPath,
@@ -82,11 +136,7 @@ try {
     },
   });
   void running.catch(() => {});
-  const end = performance.now() + 8000;
-  while ((await db.jobs.get(job.id)).state !== 'completed') {
-    if (performance.now() > end) throw new Error('Packed Jobs workflow did not complete.');
-    await delay(10);
-  }
+  await until(async () => (await db.jobs.get(job.id)).state === 'completed');
   stop.abort();
   await running;
   assert.equal(ready, true);
@@ -101,6 +151,7 @@ try {
   assert.equal((await db.jobs.get(cancelled.id)).state, 'cancelled');
   assert.equal((await pool.queryClassic('SELECT 1')).rows.length, 1);
   assert.deepEqual(await migrate({ connection: pool, directory }), []);
+  await checkHost(url.toString(), db);
   console.log('Installed Jobs lifecycle passed.');
 } finally {
   stop.abort();

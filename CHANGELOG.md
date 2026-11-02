@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.11
+
+- Expose Jobs 0.2 producer specifications and `defineWorker` with ORM-typed transactions; existing
+  inline definitions remain supported.
+- Forward typed runner lifecycle events and original-error policies. Observers cannot change
+  outcomes; applications can explicitly escalate handler errors without losing their identity.
+- Include a compact HTTP readiness/worker host example, checked through the installed package.
+- Jobs storage is unchanged; no queue schema migration is required for these APIs.
+
 ## 0.4.10
 
 - Add opt-in `db.jobs` and transactional `tx.jobs`, with ORM-typed definitions and startup

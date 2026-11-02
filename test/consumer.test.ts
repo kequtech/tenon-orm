@@ -77,6 +77,7 @@ test('the packed package preserves API contracts and consumes generated .d.ts sc
       'docs/query-inspection.md',
       'docs/query-checking.md',
       'docs/mutations.md',
+      'examples/jobs-host.ts',
     ]) {
       assert.ok(paths.includes(required), `Package is missing ${required}`);
     }
@@ -84,6 +85,7 @@ test('the packed package preserves API contracts and consumes generated .d.ts sc
       assert.ok(
         ['LICENSE', 'README.md', 'CHANGELOG.md', 'package.json'].includes(path) ||
           /^docs\/(?:[\w-]+\/)*[\w-]+\.md$/.test(path) ||
+          /^examples\/[\w-]+\.ts$/.test(path) ||
           /^dist\/(?:[\w-]+\/)*[\w-]+\.(?:js|d\.ts)$/.test(path),
         `Unexpected package content: ${path}`,
       );
@@ -142,7 +144,7 @@ test('the packed package preserves API contracts and consumes generated .d.ts sc
     assert.equal(metadata.license, 'ISC');
     assert.deepEqual(metadata.dependencies, {
       '@kequtech/pgclear': '^0.3.4',
-      '@kequtech/pgclear-jobs': '^0.1.1',
+      '@kequtech/pgclear-jobs': '^0.2.0',
       typescript: '~6.0.2',
     });
     assert.equal(metadata.peerDependencies, undefined);
@@ -163,6 +165,7 @@ test('the packed package preserves API contracts and consumes generated .d.ts sc
     // ordinary committed application files, as they would in a real consumer.
     for (const filename of [
       'type-contracts.ts',
+      'jobs-types.ts',
       'fixtures/queries.ts',
       'fixtures/generated-schema.ts',
       'fixtures/models.ts',
@@ -236,7 +239,13 @@ test('the packed package preserves API contracts and consumes generated .d.ts sc
           moduleResolution: 'NodeNext',
           types: ['node'],
         },
-        files: ['type-contracts.ts', 'copies.ts', 'checked.ts'],
+        files: [
+          'type-contracts.ts',
+          'jobs-types.ts',
+          'copies.ts',
+          'checked.ts',
+          'node_modules/@kequtech/tenon-orm/examples/jobs-host.ts',
+        ],
       }),
     );
     await assertTestDatabase(pool);
@@ -469,6 +478,10 @@ ${result.stderr ?? ''}`);
     `,
       ],
       { cwd: production, env: { ...process.env, TENON_TEST_DATABASE_URL: testConnection } },
+    );
+    await cp(
+      join(production, 'node_modules/@kequtech/tenon-orm/examples/jobs-host.ts'),
+      join(production, 'jobs-host.ts'),
     );
     await writeFile(
       join(production, 'jobs-lifecycle.mjs'),

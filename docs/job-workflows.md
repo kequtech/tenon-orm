@@ -77,7 +77,8 @@ lost. Tenon preserves `PGCLEAR_COMMIT_UNKNOWN` and aggregate cleanup errors. Inf
 from opening, committing or cleaning up a Jobs-managed transaction reject the runner. Confirmed
 handler exceptions follow normal retry policy after rollback. Errors from an independent transaction
 inside a nontransactional handler also follow that handler's retry policy, so it may run again after
-an independent commit.
+an independent commit. Use the runner's `onHandlerError` policy to inspect the original error and
+explicitly stop when application supervision should handle it; see [Jobs error policy](https://github.com/kequtech/pgclear-jobs/blob/main/docs/api.md#observation-and-error-policy).
 
 Keep stable operation IDs and storage keys outside the transaction. Reconcile uncertain outcomes
 through a healthy connection to the authoritative database before retrying or compensating. In

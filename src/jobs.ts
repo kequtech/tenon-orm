@@ -7,12 +7,14 @@ import type {
   JobRecords,
   RunnerOptions,
   TransactionalHandlerContext as NativeTransactionalHandlerContext,
+  WorkerOptions as NativeWorkerOptions,
 } from '@kequtech/pgclear-jobs';
 import { unsafeSql } from './query.js';
 import type { Database, Transaction } from './types.js';
 
 export type JobDefinition<Payload> = NativeJobDefinition<Payload, Transaction>;
 export type JobOptions<Payload> = NativeJobOptions<Payload, Transaction>;
+export type WorkerOptions<Payload> = NativeWorkerOptions<Payload, Transaction>;
 export type TransactionalHandlerContext = NativeTransactionalHandlerContext<Transaction>;
 /** Only record operations are available inside a transaction. */
 export type TransactionJobs = Pick<JobRecords, keyof JobRecords>;
@@ -33,6 +35,8 @@ export const jobsIntegration = createJobsIntegration<Database, Transaction>({
 });
 
 export const defineJob: JobsApi<Database, Transaction>['defineJob'] = jobsIntegration.defineJob;
+export const defineWorker: JobsApi<Database, Transaction>['defineWorker'] =
+  jobsIntegration.defineWorker;
 
 /** Check each operation, including operations such as an empty batch that execute no SQL. */
 export function createJobRecords(scope: Transaction, check: () => void): TransactionJobs {

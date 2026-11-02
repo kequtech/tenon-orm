@@ -116,4 +116,7 @@ Use the included Jobs facade for durable background work. Read [durable jobs](jo
 `jobs: true`, generate storage with `tenon jobs setup`, and apply the reviewed SQL through the
 existing migration runner. Use `tx.jobs` for atomic submissions and the handler's supplied ORM
 transaction for atomic writes. Supervise `db.jobs.run` and await shutdown before closing the database.
+Share handler-free `defineJob<Payload>` specifications with producers and bind handlers using
+`defineWorker`. Use `onEvent` for local monitoring and `onHandlerError` for explicit original-error
+escalation. See the [small worker host](../examples/jobs-host.ts).
 Jobs owns worker reliability; future schema changes use application-authored migrations.

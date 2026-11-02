@@ -16,5 +16,5 @@
     },
     "lib": ["ES2024"]
   },
-  "include": ["src/**/*.ts", "test/**/*.ts"]
+  "include": ["src/**/*.ts", "test/**/*.ts", "examples/*.ts"]
 }

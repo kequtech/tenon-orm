@@ -375,9 +375,11 @@ Baseline APIs and prerequisites are in [adoption](adoption-guide.md#baseline-api
 
 Set `jobs: true` in `TenonConfig` to enable `db.jobs`/`tx.jobs` operations; default false.
 `db.jobs.run(definitions, options?)` forwards worker lifecycle to pgclear-jobs, including the
-`onReady` startup callback. Its returned promise represents the full worker lifetime. The `tx.jobs`
-facade exposes only record operations. `defineJob` and transaction-bearing definition/context types use the ORM
-transaction. See [durable jobs](jobs.md) for the complete contract and setup.
+`onReady` startup callback, `onEvent` observation and `onHandlerError` policy. Its returned promise
+represents the full worker lifetime. The `tx.jobs` facade exposes only record operations.
+`defineJob<Payload>({ name, ...policy })` creates a producer specification; `defineWorker(spec, options)`
+binds a handler. Existing inline definitions remain supported. Transaction-bearing definition/context
+types use the ORM transaction. See [durable jobs](jobs.md) for the complete contract and setup.
 
 `tenon jobs setup [--directory migrations] [--config path] [--database export]` writes a concrete
 numbered migration pair without a database connection. Programmatic

@@ -3,7 +3,7 @@
 [All guides](../README.md) · [Types](types.md) · [Reference](reference.md)
 
 [Choose a check](#choose-a-check) · [Source checking](#source-checking) ·
-[Supported composition](#supported-composition) · [Describe](#describe) ·
+[Supported composition](#supported-composition) · [Unchecked queries](#work-with-an-unchecked-query) · [Describe](#describe) ·
 [Schema checkpoints](#schema-checkpoints) · [Behavior tests](#behavior-tests)
 
 ## Choose a check
@@ -41,6 +41,20 @@ unions and path mappings. It requires strictNullChecks and reports selected-file
 | mismatch  | Fix a definite SQL/input/result contradiction                                           | Yes            |
 | unchecked | Resolve unsupported recovery/inspection, or retain visible scoped exceptions plus tests | Yes            |
 | unproven  | Validate the part metadata cannot establish                                             | No             |
+
+### Diagnose a finding
+
+Target one query with `npx tenon check src/posts.ts:23 --verbose`:
+
+| Code                                 | Next step                                                                                |
+| ------------------------------------ | ---------------------------------------------------------------------------------------- |
+| `result-type-mismatch`               | Compare selected columns with `sql<Row>`; a table row does not describe every projection |
+| `parameter-type-mismatch`            | Check input representations; encode JSON/arrays explicitly                               |
+| `dynamic-fragment` / `mutable-array` | Compare construction with the supported forms below; test retained exceptions            |
+| `variant-limit`                      | Reduce independent alternatives or split materially different queries                    |
+| PostgreSQL error code                | Verify the schema/role and use `tenon describe` on a finished statement                  |
+
+Unproven findings are nonblocking; `--verbose` explains the remaining boundary to test.
 
 No recognized sites also fails. An analysed site may still have mismatches. Each variant must fit
 at least one declared result-union member; missing required properties fail, extra selected columns
@@ -102,9 +116,42 @@ and column choices depend on each other, use explicit branches sharing a stable 
 separate concrete queries. If independent name combinations produce missing-table/column errors, the query remains unchecked
 with identifier-correlation-unresolved rather than reporting an invented pairing as a mismatch.
 
-Small const-arrow factories returning one sql.fragment template can interpolate only required
-SqlFragment parameters. Calls substitute recovered arguments; defaults, rest/destructuring,
-generics, statement bodies and scalar factory parameters stay unsupported. No helper code executes.
+### Reuse a predicate helper
+
+Simple helpers can take scalar or fragment arguments:
+
+```ts
+function audience(viewerId: string) {
+  return sql.fragment`(is_public OR owner_id = ${viewerId})`;
+}
+export function visiblePosts(viewerId: string) {
+  return sql<{ id: number }>`SELECT id FROM public.posts WHERE ${audience(viewerId)}`;
+}
+```
+
+Function declarations and const arrows/function expressions may return one sql.fragment template,
+directly or as their body's sole statement. Interpolations must be direct required parameters;
+substitution preserves actual bind types, encoder hints and fragment choices across imports.
+Defaults, optional/rest/destructured parameters, generics, async/generators, reassignment, captured
+interpolations, extra statements and computed interpolations remain unsupported. No helper executes.
+
+### Build an optional predicate list
+
+```ts
+export function filteredPosts(ownerId: string, status?: string) {
+  const predicates = [sql.fragment`owner_id = ${ownerId}`];
+  if (status) predicates.push(sql.fragment`status = ${status}`);
+  return sql<{ id: number; title: string }>`SELECT id, title FROM public.posts
+    WHERE ${sql.join(predicates, 'AND')}`;
+}
+```
+
+A local const array may use standalone pushes, including nested if/else and multiple arguments.
+Construction and joining must stay in one block before further mutations. Order and stable guard
+choices are preserved; every recovered list must be nonempty. Aliases, escapes, closure access,
+other mutations, spread pushes, loops and early exits remain unchecked. The budgets below still apply.
+
+### Expand object writes
 
 Object expansion needs an explicit finite shape:
 
@@ -130,13 +177,13 @@ is unchecked. Keep intended omission and validate empty patches rather than cast
 to silence a diagnostic.
 
 The budget is 16 complete variants per query, including optional fields and parameter OID choices,
-and 32 composition references. Loops, escaping/mutable fragment lists, runtime joins and arbitrary
+and 32 composition references. Loops, escaping fragment lists, unrecognized list mutations, runtime joins and arbitrary
 function-body analysis remain unsupported. Unknown source is never replaced with invented SQL.
 Review newly analysed sites and stale exceptions when upgrading the checker, against the same schema.
 
 ## Work with an unchecked query
 
-A statement-bodied helper can be valid at runtime while remaining outside source recovery. Assume
+A multi-statement helper can be valid at runtime while remaining outside source recovery. Assume
 public.posts has integer id, text title/owner_id and boolean is_public columns:
 
 ```ts
@@ -144,7 +191,8 @@ import { sql, type QueryClient } from '@kequtech/tenon-orm';
 type PostSummary = { id: number; title: string };
 
 function audience(viewerId: string) {
-  return sql.fragment`(is_public OR owner_id = ${viewerId})`;
+  const predicate = sql.fragment`(is_public OR owner_id = ${viewerId})`;
+  return predicate;
 }
 
 export function visiblePosts(client: QueryClient, viewerId: string) {
@@ -156,18 +204,11 @@ export function visiblePosts(client: QueryClient, viewerId: string) {
 }
 ```
 
-The dynamic-fragment finding means the helper body was not interpreted. It does not mean PostgreSQL
-rejected the SQL. If the helper adds no useful reuse, the smallest rewrite is a const predicate inside
-visiblePosts, interpolated at the same location:
-
-```ts
-const predicate = sql.fragment`(is_public OR owner_id = ${viewerId})`;
-```
-
-This preserves the authorization predicate. Keep a shared business helper when it improves the
-application; do not distort authorization to satisfy recovery. In either form, test a public post,
-the viewer's private post and another viewer's private post against dedicated storage. Assert the
-first two are returned and the third is excluded. Test real rows and effects rather than SQL text.
+The finding means this multi-statement body was not recovered, not that PostgreSQL rejected it.
+Here, returning the template directly makes the shared helper checkable. Retain useful application
+logic when it needs more statements, with a scoped exception and behavior tests. Test a public post,
+the viewer's private post and another viewer's private post; assert the first two are returned and
+the third is excluded. Test real rows and effects rather than SQL text.
 
 For a deliberately retained helper, a small application script can permit one labelled site/reason
 while failing unexpected or stale exceptions. After importing checkQueries from the /check entry:

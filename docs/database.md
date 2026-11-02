@@ -148,7 +148,7 @@ Run `generate` after migrations commit; it cannot see an uncommitted schema on a
 
 For Jobs, `tenon jobs setup` creates offline installation SQL. It does not migrate storage on startup
 or upgrade existing installations. [Jobs storage](jobs.md#install-storage) covers the explicit
-version-1-to-2 upgrade and permissions.
+application-owned upgrades and permissions.
 
 ## Adopt an existing schema
 
@@ -156,8 +156,15 @@ First replace query workflows without changing schema/migration ownership. Ident
 old ORM supplied—defaults, timestamps, hooks, IDs, validation and transaction boundaries—and retain
 needed behavior in application code, constraints or SQL. Verify rows, permissions and rollback.
 
-To transfer migration ownership, bring all databases to one reviewed checkpoint and stop the old
-runner. The runners do not share locks. Capture a trusted replay of its final schema:
+To transfer migration ownership:
+
+1. Bring targets to the old runner's final checkpoint; stop it and freeze schema changes. The runners
+   do not share locks.
+2. Capture, review and commit one baseline; verify an independent disposable replay.
+3. Compare each target with that frozen reference, including the separate security/history checks below.
+4. Adopt matching targets, apply later migrations and test application workflows on adopted/fresh storage.
+
+Capture the checkpoint into an empty Tenon migration directory:
 
 ```sh
 npx tenon baseline capture --namespace app --schema app --connection "$DATABASE_URL"
@@ -187,8 +194,17 @@ executing its SQL. It does not compare the live schema
 with the baseline. Matching repeated adoption is harmless; conflicting history fails. A new database
 instead runs `migrate` to execute the baseline normally, followed by later changes.
 
-For a schema guard, [versioned snapshots](checking.md#schema-checkpoints) provide metadata independent
-of codec/generator formatting. Keep expected references from an immutable disposable replay, and
-verify functions, security and migration history separately. Never establish the expected checkpoint
-from whichever live database happens to be configured. Keep old references until a replacement
-is verified. Test matching adoption, refusal after drift and representative fresh-replay workflows.
+The [adoption example](../examples/adopt-baseline.ts) compares a frozen
+[schema checkpoint](checking.md#schema-checkpoints) before adoption, then applies pending migrations:
+
+```sh
+# Generate once from the reviewed disposable replay, before later migrations; commit this reference.
+npx tenon schema --namespace app --config ./replay.config.ts > baseline-checkpoint.json
+cp node_modules/@kequtech/tenon-orm/examples/adopt-baseline.ts ./adopt-baseline.ts
+DATABASE_URL="$TARGET_DATABASE_URL" node adopt-baseline.ts baseline-checkpoint.json migrations
+```
+
+Keep DDL frozen across comparison/adoption. The fingerprint omits functions, security and migration
+history; verify those separately before running the example. Never derive the reference from the
+target. Use this script once at handover, ordinary migrate thereafter. Test drift refusal and real
+application workflows on adopted and fresh databases. Keep old references until replacements are verified.

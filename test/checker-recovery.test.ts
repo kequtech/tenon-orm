@@ -266,13 +266,14 @@ test('factory arguments retain correlated branches within a call and independent
   );
 });
 
-test('factory support stays bounded to const arrow templates interpolating fragment parameters', async () => {
+test('factory support stays bounded to single-return templates interpolating direct parameters', async () => {
   const functions = [
-    'const f = (value: SqlFragment) => { return sql.fragment`${value}`; };',
+    'const f = (value: SqlFragment) => { const extra = 1; return sql.fragment`${value}`; };',
     'const f = (value: SqlFragment = sql.fragment`1`) => sql.fragment`${value}`;',
     'const f = (value?: SqlFragment) => sql.fragment`${value}`;',
     'const f = (...values: SqlFragment[]) => sql.fragment`${values[0]}`;',
     'let f = (value: SqlFragment) => sql.fragment`${value}`;',
+    'function f(value: SqlFragment) { return sql.fragment`${value}`; } f = (value) => sql.fragment`false`;',
     'const f = <T extends SqlFragment>(value: T) => sql.fragment`${value}`;',
     'const f = (value: SqlFragment): SqlFragment => sql.fragment`${f(value)}`;',
     'const captured = sql.fragment`1`; const f = (value: SqlFragment) => sql.fragment`${captured} ${value}`;',

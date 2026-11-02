@@ -4,7 +4,7 @@
 
 Tenon includes pgclear-jobs and binds its handlers to ORM transactions. Use Tenon imports when
 handlers need sql, query guards or onQuery observation. The queue engine also works directly with
-pgclear; it owns the detailed [Jobs reference](https://github.com/kequtech/pgclear-jobs/blob/25a01a15a6ff28fbbdda6e30e79606b686a26a35/docs/reference.md).
+pgclear; it owns the detailed [Jobs reference](https://github.com/kequtech/pgclear-jobs/blob/8c50ae294abaf1d70d8e43e4601455e0703f0fee/docs/reference.md).
 The matching guides ship in the installed pgclear-jobs package.
 
 ## Install storage
@@ -29,7 +29,7 @@ current installation/removal SQL. Compare it with the application's saved Jobs s
 any necessary changes as a new application migration. Keep historical files unchanged and preserve
 queued work. Stop old producers/workers, apply the reviewed changes, then restart matching packages.
 
-`npx tenon docs` locates the matching installed [storage guide](https://github.com/kequtech/pgclear-jobs/blob/25a01a15a6ff28fbbdda6e30e79606b686a26a35/docs/storage.md).
+`npx tenon docs` locates the matching installed [storage guide](https://github.com/kequtech/pgclear-jobs/blob/8c50ae294abaf1d70d8e43e4601455e0703f0fee/docs/storage.md).
 Setup generates the initial pair only. Existing-storage changes remain application-owned; there is
 no upgrade command or exported upgrade migration. If a script imports Jobs SQL directly, declare
 the matching pgclear-jobs package as a direct dependency with the application's package manager.
@@ -83,12 +83,13 @@ await db.jobs.schedule(
 const records = await db.jobs.getMany(jobIds);
 ```
 
-send creates independent work. request coalesces under a durable definition/key; scheduled requestKey
-uses that same execution key while schedule key identifies the producer. Started work retains its
-retries, with one coalesced successor. getMany avoids per-row lookups; find defaults to 100 and needs
-cursor pagination for complete projections. Job history is operational state, so persist business
-results separately. The Jobs [reference](https://github.com/kequtech/pgclear-jobs/blob/25a01a15a6ff28fbbdda6e30e79606b686a26a35/docs/reference.md)
-and [reliability guide](https://github.com/kequtech/pgclear-jobs/blob/25a01a15a6ff28fbbdda6e30e79606b686a26a35/docs/reliability.md) define
+send creates independent work. request coalesces under a durable definition/key; an unstarted head's
+payload is replaced, while started work retains its retries and one blocked successor. The Jobs
+reference below provides the request behavior table and timing rules. Scheduled requestKey uses
+that execution key; schedule key identifies the producer. getMany avoids per-row lookups; find defaults
+to 100 and needs cursor pagination for complete projections. Job history is operational state, so persist business
+results separately. The Jobs [reference](https://github.com/kequtech/pgclear-jobs/blob/8c50ae294abaf1d70d8e43e4601455e0703f0fee/docs/reference.md)
+and [reliability guide](https://github.com/kequtech/pgclear-jobs/blob/8c50ae294abaf1d70d8e43e4601455e0703f0fee/docs/reliability.md) define
 payload validation, timing, keys, pagination, retention and cancellation.
 
 ## Cancel work
@@ -117,7 +118,7 @@ stop workers. Supplied pools remain application-owned. The ORM
 [HTTP example](../examples/jobs-host.ts) demonstrates readiness and ordered cleanup with a real ORM
 query; the [worker entry](../examples/jobs-worker.ts) shows ORM bindings for a separate worker process.
 
-Jobs owns the generic [hosting guide and Next host](https://github.com/kequtech/pgclear-jobs/blob/25a01a15a6ff28fbbdda6e30e79606b686a26a35/docs/hosting.md).
+Jobs owns the generic [hosting guide and Next host](https://github.com/kequtech/pgclear-jobs/blob/8c50ae294abaf1d70d8e43e4601455e0703f0fee/docs/hosting.md).
 Copy its process host when a framework controls process exit, and supply your ORM worker entry.
 Detailed readiness, hook, cancellation and process behavior belongs there. Tenon forwards RunnerOptions
 without reproducing the engine's lifecycle or error classification.
@@ -127,3 +128,7 @@ onQuery observation. Claims/heartbeats/maintenance use pgclear directly. Keep ex
 long transactions, persist durable operation/results/follow-ups deliberately and reconcile uncertain
 commits before repeating effects. These cross-application patterns are documented in Jobs' reliability
 guide. Error objects and engine events are forwarded unchanged.
+
+For stalled work, correlate get/getMany, stats and attempts with onEvent by job ID. The Jobs
+[troubleshooting table](https://github.com/kequtech/pgclear-jobs/blob/8c50ae294abaf1d70d8e43e4601455e0703f0fee/docs/hosting.md#troubleshoot-progress)
+covers pending work, cancellation, lease loss, deadlines and shutdown grace.

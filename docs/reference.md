@@ -131,7 +131,7 @@ never executed. [Checking](checking.md) owns coverage, uncertainty and fingerpri
 Tenon re-exports defineJob/defineWorker with ORM Transaction types. JobSpec, saved policy,
 record/schedule types, RunnerOptions/RunnerHandle and original engine errors come from pgclear-jobs.
 The [Tenon walkthrough](jobs.md) shows setup, submissions and handlers; the
-[engine reference](https://github.com/kequtech/pgclear-jobs/blob/25a01a15a6ff28fbbdda6e30e79606b686a26a35/docs/reference.md) owns exact
+[engine reference](https://github.com/kequtech/pgclear-jobs/blob/8c50ae294abaf1d70d8e43e4601455e0703f0fee/docs/reference.md) owns exact
 queue signatures, fields, defaults, events and errors. Those guides ship with the dependency.
 
 | Tenon surface                       | Binding                                                                                           |
@@ -150,8 +150,8 @@ handlers commit independently of their supplied tx.
 
 Tenon applies its query guards/result modes/onQuery to ORM execution. The engine owns claims,
 leases, retries, schedules, observation and shutdown. db.close does not await workers; applications
-supervise and await them first. See Jobs' [hosting](https://github.com/kequtech/pgclear-jobs/blob/25a01a15a6ff28fbbdda6e30e79606b686a26a35/docs/hosting.md)
-and [storage](https://github.com/kequtech/pgclear-jobs/blob/25a01a15a6ff28fbbdda6e30e79606b686a26a35/docs/storage.md) guides for detailed
+supervise and await them first. See Jobs' [hosting](https://github.com/kequtech/pgclear-jobs/blob/8c50ae294abaf1d70d8e43e4601455e0703f0fee/docs/hosting.md)
+and [storage](https://github.com/kequtech/pgclear-jobs/blob/8c50ae294abaf1d70d8e43e4601455e0703f0fee/docs/storage.md) guides for detailed
 lifecycle, upgrades and grants.
 
 ## Commands

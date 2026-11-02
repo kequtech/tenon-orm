@@ -98,6 +98,17 @@ export const main = {
 } satisfies TenonConfig;
 ```
 
+Input encoders do not require result-registry changes. Common JSON and array binds:
+
+```ts
+import { builtin, json, param, sql } from '@kequtech/tenon-orm';
+const statement = sql`SELECT ${json({ enabled: true })} AS settings,
+  ${param([1, 2, 3], builtin.int4Array)} AS ids`;
+```
+
+Keep default numeric strings for exact decimals; Number can lose precision. Bigint reads need an
+application JSON-serialization policy. Date reads have millisecond precision and reject infinity.
+
 Regenerate/review declarations after codec changes. Tenon re-exports driver helpers without owning
 another codec registry. Custom text.typescript declarations are trusted metadata; unidentified
 decoders warn and become unknown. Default enum decoding preserves catalog label unions, even after

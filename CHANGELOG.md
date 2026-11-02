@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.2
+
+- Recover single-return fragment helpers with scalar and fragment arguments, including imported
+  function declarations and const functions. Preserve actual argument bind types and encoder hints.
+- Check block-local predicate arrays built with bounded conditional push calls. Keep escaping lists,
+  loops, hidden writes and unsupported control flow unchecked; retain variant/depth budgets.
+- Document checker diagnostics and codec recipes; add a runnable guarded baseline-adoption example
+  and links to Jobs request behavior and worker troubleshooting guidance.
+
 ## 0.5.1
 
 - Include synchronous validation in per-query deadlines. Keep finite identifier parameters checkable

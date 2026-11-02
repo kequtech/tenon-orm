@@ -67,8 +67,8 @@ function constant(declaration: ts.VariableDeclaration): boolean {
 export class SourceAnalysis {
   readonly issues: CheckDiagnostic[] = [];
   private readonly immutableArrays = new Set<ts.Symbol>();
-  private readonly stableParameters = new Map<ts.Symbol, boolean>();
-  private readonly unstableConditions = new Map<ts.Symbol, ts.ConditionalExpression>();
+  private readonly stableBindings = new Map<ts.Symbol, boolean>();
+  private readonly unstableConditions = new Map<ts.Symbol, ts.Node>();
   constructor(
     readonly project: Project,
     private readonly libraries: ReadonlyMap<string, ts.Symbol>,
@@ -287,10 +287,174 @@ export class SourceAnalysis {
     return result;
   }
 
-  private stableParameter(target: ts.Symbol): boolean {
+  private appendJoined(
+    left: readonly Expansion[],
+    right: readonly Expansion[],
+    separator: string,
+    at: ts.Node,
+  ): Expansion[] {
+    const result: Expansion[] = [];
+    for (const before of left) {
+      result.push(
+        ...this.combine(
+          [before],
+          right.map((after) => ({
+            ...after,
+            parts:
+              before.parts.length && after.parts.length ? [separator, ...after.parts] : after.parts,
+          })),
+          at,
+        ),
+      );
+      if (result.length > variantLimit)
+        this.fail(at, 'variant-limit', `The query exceeds the ${variantLimit}-variant budget.`);
+    }
+    return result;
+  }
+
+  private joined(
+    fragments: readonly ts.Expression[],
+    separator: string,
+    depth: number,
+  ): Expansion[] {
+    let variants: Expansion[] = [{ parts: [], choices: new Map() }];
+    for (const fragment of fragments) {
+      const type = this.project.checker.getTypeAtLocation(fragment);
+      if (
+        !(type.isUnion() ? type.types : [type]).every((part) => part.getProperty('__tenonFragment'))
+      )
+        return this.fail(
+          fragment,
+          'join-fragment-unresolved',
+          'sql.join requires recoverable SqlFragment values.',
+        );
+      variants = this.appendJoined(
+        variants,
+        this.expression(fragment, depth + 1),
+        separator,
+        fragment,
+      );
+    }
+    return variants;
+  }
+
+  /** A block-local list with only standalone pushes, optionally nested in if/else blocks. */
+  private localJoin(
+    input: ts.Expression,
+    call: ts.CallExpression,
+    separator: string,
+    depth: number,
+  ): Expansion[] {
+    const node = unwrap(input);
+    const declaration = variable(this.project.checker, node);
+    const reject = (at: ts.Node): never =>
+      this.fail(
+        at,
+        'mutable-array',
+        'Recoverable predicate lists must stay in one local block, use only standalone push calls before sql.join, and never escape or enter loops.',
+      );
+    if (
+      !declaration ||
+      !constant(declaration) ||
+      !declaration.initializer ||
+      !ts.isArrayLiteralExpression(unwrap(declaration.initializer))
+    )
+      return reject(input);
+    const statement = declaration.parent.parent;
+    if (!ts.isVariableStatement(statement) || !ts.isBlock(statement.parent)) return reject(input);
+    const block = statement.parent;
+    const target = symbol(this.project.checker, node)!;
+    const inBlock = (at: ts.Node): ts.Statement | undefined => {
+      let current = at;
+      while (current.parent !== block) {
+        if (!current.parent || ts.isFunctionLike(current) || ts.isClassLike(current))
+          return undefined;
+        current = current.parent;
+      }
+      return ts.isStatement(current) ? current : undefined;
+    };
+    const use = inBlock(call);
+    const start = block.statements.indexOf(statement);
+    const end = use ? block.statements.indexOf(use) : -1;
+    if (end <= start) return reject(call);
+    const pushes = new Set<ts.CallExpression>();
+    const referencesList = (at: ts.Node): boolean =>
+      (ts.isIdentifier(at) && symbol(this.project.checker, at) === target) ||
+      !!ts.forEachChild(at, referencesList);
+    const sequence = (statements: readonly ts.Statement[], level: number): Expansion[] => {
+      if (level > 32)
+        return this.fail(call, 'composition-depth', 'List composition exceeds the depth limit.');
+      let variants: Expansion[] = [{ parts: [], choices: new Map() }];
+      for (const step of statements) {
+        let additions: Expansion[] = [{ parts: [], choices: new Map() }];
+        if (ts.isBlock(step)) additions = sequence(step.statements, level + 1);
+        else if (ts.isIfStatement(step)) {
+          const whenTrue = () => sequence([step.thenStatement], level + 1);
+          const whenFalse = () =>
+            step.elseStatement
+              ? sequence([step.elseStatement], level + 1)
+              : [{ parts: [], choices: new Map() }];
+          if (referencesList(step))
+            additions = this.branches(step, step.expression, whenTrue, whenFalse);
+          else {
+            whenTrue();
+            whenFalse();
+          }
+        } else if (ts.isExpressionStatement(step)) {
+          const expression = unwrap(step.expression);
+          if (
+            ts.isCallExpression(expression) &&
+            ts.isPropertyAccessExpression(expression.expression) &&
+            symbol(this.project.checker, unwrap(expression.expression.expression)) === target &&
+            expression.expression.name.text === 'push'
+          ) {
+            if (expression.arguments.some(ts.isSpreadElement)) return reject(expression);
+            pushes.add(expression);
+            additions = this.joined(expression.arguments, separator, depth + level);
+          }
+        } else if (
+          !ts.isVariableStatement(step) &&
+          !ts.isFunctionDeclaration(step) &&
+          !ts.isEmptyStatement(step)
+        )
+          return reject(step);
+        variants = this.appendJoined(variants, additions, separator, step);
+      }
+      return variants;
+    };
+    const initial = this.joined(this.array(declaration.initializer), separator, depth);
+    const additions = sequence(block.statements.slice(start + 1, end), 0);
+    // Inspect every reference, including closures and uses after this join. No aliases or hidden writes.
+    const visit = (reference: ts.Node): void => {
+      if (
+        ts.isIdentifier(reference) &&
+        reference !== declaration.name &&
+        symbol(this.project.checker, reference) === target
+      ) {
+        let value: ts.Node = reference;
+        while (ts.isExpression(value.parent) && unwrap(value.parent) === reference)
+          value = value.parent;
+        const parent = value.parent;
+        const invocation = ts.isPropertyAccessExpression(parent) ? parent.parent : undefined;
+        const push = invocation && ts.isCallExpression(invocation) && pushes.has(invocation);
+        const join =
+          ts.isCallExpression(parent) &&
+          parent.arguments[0] === value &&
+          this.role(parent.expression) === 'sql.join' &&
+          inBlock(parent) &&
+          block.statements.indexOf(inBlock(parent)!) >= end;
+        if (!push && !join) reject(reference);
+      }
+      ts.forEachChild(reference, visit);
+    };
+    visit(block);
+    return this.appendJoined(initial, additions, separator, call);
+  }
+
+  private stableBinding(target: ts.Symbol): boolean {
     const declaration = target.valueDeclaration;
-    if (!declaration || !ts.isParameter(declaration)) return false;
-    if (!this.stableParameters.has(target)) {
+    if (!declaration) return false;
+    if (!this.stableBindings.has(target)) {
       let written = false;
       const contains = (node: ts.Node): boolean => {
         // Writing obj[parameter] changes the object, not the parameter. Nested assignments
@@ -325,9 +489,9 @@ export class SourceAnalysis {
         ts.forEachChild(candidate, visit);
       };
       visit(declaration.getSourceFile());
-      this.stableParameters.set(target, !written);
+      this.stableBindings.set(target, !written);
     }
-    return this.stableParameters.get(target)!;
+    return this.stableBindings.get(target)!;
   }
 
   private conditional(
@@ -336,7 +500,21 @@ export class SourceAnalysis {
     expand: (input: ts.Expression, depth: number) => Expansion[] = (input, depth) =>
       this.expression(input, depth),
   ): Expansion[] {
-    let condition = unwrap(node.condition);
+    return this.branches(
+      node,
+      node.condition,
+      () => expand(node.whenTrue, depth + 1),
+      () => expand(node.whenFalse, depth + 1),
+    );
+  }
+
+  private branches(
+    node: ts.Node,
+    input: ts.Expression,
+    whenTrue: () => Expansion[],
+    whenFalse: () => Expansion[],
+  ): Expansion[] {
+    let condition = unwrap(input);
     let negated = false;
     while (
       ts.isPrefixUnaryExpression(condition) &&
@@ -350,7 +528,7 @@ export class SourceAnalysis {
     const valueDeclaration = target?.valueDeclaration;
     let stable = !!declaration && constant(declaration);
     if (target && valueDeclaration && ts.isParameter(valueDeclaration)) {
-      stable = this.stableParameter(target);
+      stable = this.stableBinding(target);
     }
     if (target && !stable) {
       const previous = this.unstableConditions.get(target);
@@ -358,18 +536,18 @@ export class SourceAnalysis {
         return this.fail(
           node,
           'branch-correlation-unresolved',
-          'Several ternaries share a mutable condition; the checker cannot establish their complete variant set.',
+          'Several branches share a mutable condition; the checker cannot establish their complete variant set.',
         );
       this.unstableConditions.set(target, node);
     }
     const choice: Choice = target && stable ? target : node;
     const variants: Expansion[] = [];
     for (const [branch, selected] of [
-      [node.whenTrue, true],
-      [node.whenFalse, false],
+      [whenTrue, true],
+      [whenFalse, false],
     ] as const) {
       try {
-        for (const expansion of expand(branch, depth + 1)) {
+        for (const expansion of branch()) {
           const value = negated ? !selected : selected;
           if (expansion.choices.has(choice) && expansion.choices.get(choice) !== value) continue;
           variants.push({
@@ -407,7 +585,7 @@ export class SourceAnalysis {
         return this.fail(
           span.expression,
           'dynamic-fragment',
-          'Fragment factory templates may interpolate only their fragment parameters.',
+          'Fragment factory templates may interpolate only their direct parameters.',
         );
       variants = this.combine(
         variants,
@@ -428,7 +606,7 @@ export class SourceAnalysis {
       const declaration = target?.valueDeclaration;
       if (target && ts.isIdentifier(node) && declaration && ts.isParameter(declaration)) {
         // The same immutable parameter must select the same name wherever it is reused.
-        if (!this.stableParameter(target))
+        if (!this.stableBinding(target))
           return this.fail(
             node,
             'dynamic-binding',
@@ -476,21 +654,46 @@ export class SourceAnalysis {
     }
   }
 
-  /** A const arrow returning one template; substitute fragment arguments without interpreting a body. */
+  /** Substitute direct parameters into a single-return template; never execute helper code. */
   private fragmentFactory(call: ts.CallExpression, depth: number): Expansion[] | undefined {
-    const declaration = variable(this.project.checker, unwrap(call.expression));
-    if (!declaration || !constant(declaration) || !declaration.initializer) return undefined;
-    const fn = unwrap(declaration.initializer);
+    const target = symbol(this.project.checker, unwrap(call.expression));
+    const declaration = target?.valueDeclaration;
+    let fn: ts.ArrowFunction | ts.FunctionExpression | ts.FunctionDeclaration;
+    if (declaration && ts.isFunctionDeclaration(declaration) && this.stableBinding(target!))
+      fn = declaration;
+    else if (
+      declaration &&
+      ts.isVariableDeclaration(declaration) &&
+      constant(declaration) &&
+      declaration.initializer
+    ) {
+      const initializer = unwrap(declaration.initializer);
+      if (!ts.isArrowFunction(initializer) && !ts.isFunctionExpression(initializer))
+        return undefined;
+      fn = initializer;
+    } else return undefined;
     if (
-      !ts.isArrowFunction(fn) ||
-      fn.modifiers?.length ||
+      fn.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.AsyncKeyword) ||
+      ('asteriskToken' in fn && fn.asteriskToken) ||
       fn.typeParameters?.length ||
-      ts.isBlock(fn.body) ||
+      !fn.body ||
       fn.parameters.length !== call.arguments.length ||
       call.arguments.some(ts.isSpreadElement)
     )
       return undefined;
-    const body = unwrap(fn.body);
+    let returned: ts.Expression;
+    if (ts.isBlock(fn.body)) {
+      const statement = fn.body.statements[0];
+      if (
+        fn.body.statements.length !== 1 ||
+        !statement ||
+        !ts.isReturnStatement(statement) ||
+        !statement.expression
+      )
+        return undefined;
+      returned = statement.expression;
+    } else returned = fn.body;
+    const body = unwrap(returned);
     if (
       !ts.isTaggedTemplateExpression(body) ||
       this.role(body.tag) !== 'sql.fragment' ||
@@ -505,13 +708,7 @@ export class SourceAnalysis {
       return undefined;
     const argumentsByParameter = new Map<ts.Symbol, readonly Expansion[]>();
     for (const [index, parameter] of fn.parameters.entries()) {
-      const type = this.project.checker.getTypeAtLocation(parameter.name);
-      if (
-        !(type.isUnion() ? type.types : [type]).every((member) =>
-          member.getProperty('__tenonFragment'),
-        )
-      )
-        return undefined;
+      if (!this.stableBinding(symbol(this.project.checker, parameter.name)!)) return undefined;
       argumentsByParameter.set(
         symbol(this.project.checker, parameter.name)!,
         this.expression(call.arguments[index]!, depth + 1),
@@ -750,25 +947,17 @@ export class SourceAnalysis {
         if (!['AND', 'OR', ','].includes(selected))
           return this.fail(node, 'invalid-separator', 'sql.join separators are AND, OR, or comma.');
         const separator = joinSeparator(selected);
-        const fragments = this.array(node.arguments[0]);
-        if (!fragments.length)
-          return this.fail(node, 'empty-join', 'sql.join requires a nonempty list.');
-        let variants: Expansion[] = [{ parts: [], choices: new Map() }];
-        for (const [index, fragment] of fragments.entries()) {
-          const type = this.project.checker.getTypeAtLocation(fragment);
-          if (
-            !(type.isUnion() ? type.types : [type]).every((part) =>
-              part.getProperty('__tenonFragment'),
-            )
-          )
-            return this.fail(
-              fragment,
-              'join-fragment-unresolved',
-              'sql.join requires recoverable SqlFragment values.',
-            );
-          if (index) for (const variant of variants) variant.parts.push(separator);
-          variants = this.combine(variants, this.expression(fragment, depth + 1), fragment);
+        let fragments: readonly ts.Expression[] | undefined;
+        try {
+          fragments = this.array(node.arguments[0]);
+        } catch (error) {
+          if (!(error instanceof Unsupported) || error.code !== 'mutable-array') throw error;
         }
+        const variants = fragments
+          ? this.joined(fragments, separator, depth)
+          : this.localJoin(node.arguments[0], node, separator, depth);
+        if (variants.some((variant) => !variant.parts.length))
+          return this.fail(node, 'empty-join', 'sql.join requires a nonempty list.');
         return variants;
       }
     }

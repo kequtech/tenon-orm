@@ -30,7 +30,6 @@ function closeTimeout(options: CloseOptions | undefined): number {
 export function createTenon(config: TenonConfig): Database {
   configObject(config);
   const onQuery = config.onQuery;
-  const jobsEnabled = config.jobs === true;
   let connection: ReturnType<typeof createConnection> | undefined;
   let closing: Promise<void> | undefined;
 
@@ -40,18 +39,13 @@ export function createTenon(config: TenonConfig): Database {
     }
   }
 
-  function checkJobs() {
-    checkOpen();
-    if (!jobsEnabled) throw new Error('Jobs are disabled. Set jobs: true in the Tenon config.');
-  }
-
   function transactionClient(query: QueryExecutor, checkActive: () => void): Transaction {
     let jobs: TransactionJobs | undefined;
     const tx: Transaction = {
       ...createClient(query, onQuery),
       get jobs() {
         return (jobs ??= createJobRecords(tx, () => {
-          checkJobs();
+          checkOpen();
           checkActive();
         }));
       },
@@ -80,10 +74,10 @@ export function createTenon(config: TenonConfig): Database {
     ...createClient(query, onQuery),
     get jobs() {
       return (jobs ??= {
-        ...createJobRecords(db, checkJobs),
+        ...createJobRecords(db, checkOpen),
         run(definitions, options) {
           try {
-            checkJobs();
+            checkOpen();
             return jobsIntegration.runJobs(db, definitions, options);
           } catch (error) {
             return Promise.reject(error);

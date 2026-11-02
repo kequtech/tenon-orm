@@ -1,12 +1,12 @@
 # Durable jobs
 
-Tenon includes `@kequtech/pgclear-jobs`. Enable its facade with `jobs: true`. This example assumes
+Tenon includes `@kequtech/pgclear-jobs` through `db.jobs` and `tx.jobs`. This example assumes
 a `projects` table with text `id`, text `status` and timestamp `refreshed_at` columns:
 
 ```ts
 import { createTenon, defineJob, defineWorker, sql } from '@kequtech/tenon-orm';
 
-const db = createTenon({ connection: process.env.DATABASE_URL, jobs: true });
+const db = createTenon({ connection: process.env.DATABASE_URL });
 const refreshProject = defineJob<{ projectId: string }>({ name: 'refresh-project' });
 const refreshWorker = defineWorker(refreshProject, {
   transactional: true,
@@ -22,9 +22,8 @@ await db.transaction(async (tx) => {
 });
 ```
 
-Imports, definitions and facade access are inert. Jobs defaults to disabled; disabled operations
-reject before SQL without affecting an existing transaction. Enabling Jobs installs no storage and
-starts no workers.
+Imports, definitions and facade access are inert. Storage setup and worker startup are explicit;
+creating a database instance does neither.
 
 Put the `JobSpec<Payload>` returned by handler-free `defineJob` in a shared producer contract;
 bind its handler with `defineWorker` in the worker process. Submissions snapshot the specification's
@@ -54,7 +53,7 @@ Jobs uses one fixed `pgclear_jobs` schema per physical database. The runner's na
 application history and search path, not a separate queue schema; setup does not accept `--namespace`.
 Applications sharing a database should choose one owner for its setup migration and runtime grants.
 If storage already exists, account for it in application history before applying the creation SQL.
-The down migration removes Jobs storage and its data; disabling Jobs does not remove anything.
+The down migration removes Jobs storage and its data.
 
 ## Record operations and transactions
 

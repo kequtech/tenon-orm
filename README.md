@@ -12,7 +12,8 @@ npm install @kequtech/tenon-orm
 
 Requires Node.js 24+, PostgreSQL 16+, and ESM. TypeScript applications need TypeScript 6+ and Node.js
 typings. The PostgreSQL driver, [pgclear](https://github.com/kequtech/pgclear), and the
-[Jobs engine](https://github.com/kequtech/pgclear-jobs) are included. Jobs operations are opt-in.
+[Jobs engine](https://github.com/kequtech/pgclear-jobs) are included. Jobs storage setup and worker
+startup are explicit.
 
 ## Query with SQL
 

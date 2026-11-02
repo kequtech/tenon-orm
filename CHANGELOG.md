@@ -2,6 +2,9 @@
 
 ## 0.4.11
 
+- Remove the `jobs` configuration flag. `db.jobs` and `tx.jobs` are always available; remove
+  `jobs: true` or `jobs: false` from existing configs, since unknown options reject. Storage setup
+  and worker startup remain explicit.
 - Expose Jobs 0.2 producer specifications and `defineWorker` with ORM-typed transactions; existing
   inline definitions remain supported.
 - Forward typed runner lifecycle events and original-error policies. Observers cannot change

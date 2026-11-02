@@ -66,7 +66,7 @@ before(async () => {
   url.pathname = `/${temporaryDatabase}`;
   jobsConnection = url.toString();
   pool = createPool({ connectionString: jobsConnection, maxConnections: 6 });
-  db = createTenon({ connection: pool, jobs: true });
+  db = createTenon({ connection: pool });
   directory = await mkdtemp(join(tmpdir(), 'tenon-jobs-integration-'));
   const app = await createMigration({ name: 'application', directory });
   await writeFile(app.upPath, 'CREATE TABLE migration_marker (value integer);');
@@ -164,7 +164,6 @@ test('handlers retain savepoint recovery, guarded concurrency, return modes and 
   const observations: QueryEvent[] = [];
   const observed = createTenon({
     connection: pool,
-    jobs: true,
     onQuery: (event) => {
       observations.push(event);
     },
@@ -598,7 +597,7 @@ for (const delivered of [false, true]) {
           return typeof value === 'function' ? value.bind(target) : value;
         },
       });
-      const worker = createTenon({ connection: shared, jobs: true });
+      const worker = createTenon({ connection: shared });
       let calls = 0;
       const def = defineJob({
         name: name(),
@@ -679,7 +678,7 @@ test(
         return typeof value === 'function' ? value.bind(target) : value;
       },
     });
-    const worker = createTenon({ connection: shared, jobs: true });
+    const worker = createTenon({ connection: shared });
     let signal: AbortSignal | undefined;
     const def = defineJob({
       name: name(),

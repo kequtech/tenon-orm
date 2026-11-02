@@ -85,7 +85,7 @@ test('jobs setup CLI uses configured directory and selected database without cre
     const config = join(root, 'tenon.config.mjs');
     await writeFile(
       config,
-      `export const main = {connection: undefined, jobs: true, migrations: {directory: 'app'}}; export const other = {connection: undefined, migrations: {directory: 'other'}};`,
+      `export const main = {connection: undefined, migrations: {directory: 'app'}}; export const other = {connection: undefined, migrations: {directory: 'other'}};`,
     );
     const cli = fileURLToPath(new URL('../src/cli.js', import.meta.url));
     const env = { ...process.env };

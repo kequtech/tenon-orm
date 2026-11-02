@@ -425,7 +425,7 @@ ${result.stderr ?? ''}`);
       const jobs = await import('@kequtech/pgclear-jobs');
       assert.equal(JobError, jobs.JobError);
       const def = defineJob({name:'packed', handler() {}});
-      const inert = createTenon({connection: undefined, jobs: true});
+      const inert = createTenon({connection: undefined});
       await inert.jobs.run([def], {signal: AbortSignal.abort()});
       await inert.close();
       const db = createTenon({ connection: 'postgresql://unused' });

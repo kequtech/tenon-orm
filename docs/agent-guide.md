@@ -112,8 +112,8 @@ calls bypass Tenon's guards/observations and need explicit resource ownership; s
 
 ## Jobs
 
-Use the included Jobs facade for durable background work. Read [durable jobs](jobs.md), enable
-`jobs: true`, generate storage with `tenon jobs setup`, and apply the reviewed SQL through the
+Use the included Jobs facade for durable background work. Read [durable jobs](jobs.md), generate
+storage with `tenon jobs setup`, and apply the reviewed SQL through the
 existing migration runner. Use `tx.jobs` for atomic submissions and the handler's supplied ORM
 transaction for atomic writes. Supervise `db.jobs.run` and await shutdown before closing the database.
 Share handler-free `defineJob<Payload>` specifications with producers and bind handlers using

@@ -31,7 +31,7 @@ The returned `Database` provides:
 | --------------------------------- | ---------------------------------------------------------------------------------------- |
 | `query(query, options?)`          | Execute a Tenon `SqlQuery` and apply result/count options                                |
 | `transaction(callback, options?)` | Commit on callback success, roll back on an escaping error; return the callback's result |
-| `jobs`                            | Opt-in Jobs record operations and worker runner; see [durable jobs](jobs.md)             |
+| `jobs`                            | Jobs record operations and worker runner; see [durable jobs](jobs.md)                    |
 | `native`                          | The underlying pgclear pool                                                              |
 | `close({ timeoutMs? }?)`          | Disable the wrapper and close an owned pool; default grace 5,000 ms                      |
 
@@ -373,7 +373,7 @@ Baseline APIs and prerequisites are in [adoption](adoption-guide.md#baseline-api
 
 ## Jobs
 
-Set `jobs: true` in `TenonConfig` to enable `db.jobs`/`tx.jobs` operations; default false.
+`db.jobs` and `tx.jobs` are available on every database and transaction without additional configuration.
 `db.jobs.run(definitions, options?)` forwards worker lifecycle to pgclear-jobs, including the
 `onReady` startup callback, `onEvent` observation and `onHandlerError` policy. Its returned promise
 represents the full worker lifetime. The `tx.jobs` facade exposes only record operations.

@@ -94,7 +94,7 @@ try {
   await createJobsMigration({ directory });
   assert.deepEqual(await migrate({ connection: pool, directory }), ['0001', '0002']);
   assert.equal((await createJobsMigration({ directory })).created, false);
-  db = createTenon({ connection: pool, jobs: true });
+  db = createTenon({ connection: pool });
   const child = defineJob({ name: 'child', handler() {} });
   let attempts = 0;
   const refresh = defineJob({

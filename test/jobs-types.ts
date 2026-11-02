@@ -15,7 +15,7 @@ import type {
   TransactionalHandlerContext,
 } from '../src/index.js';
 
-// Compile-only consumer contracts; disabled instances retain the same facade types.
+// Compile-only consumer contracts for the default Jobs facade.
 async function contracts(pool: Pool) {
   const db = createTenon({ connection: pool });
   const specification: JobSpec<{ id: number }> = defineJob<{ id: number }>({ name: 'shared' });

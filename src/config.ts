@@ -7,8 +7,6 @@ import type { InspectionSession, InspectionTimeouts } from './inspection/types.j
 export interface TenonConfig {
   /** Environment values may be absent during builds; database use validates them. */
   readonly connection: ConnectionConfig | Pool | undefined;
-  /** Enable Jobs operations. Does not install storage or start workers; default false. */
-  readonly jobs?: boolean;
   /** Observe runtime queries; native driver calls and CLI tooling do not invoke this callback. */
   readonly onQuery?: (event: QueryEvent) => void | Promise<void>;
   readonly generate?: {

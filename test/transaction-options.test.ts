@@ -157,7 +157,7 @@ test('abort during active SQL cancels the statement, cleans up and leaves the po
 
 for (const interruption of ['abort', 'timeout'] as const) {
   test(`${interruption} during a callback wait expires the captured ORM transaction`, async () => {
-    const db = createTenon({ connection: testConnection, jobs: true });
+    const db = createTenon({ connection: testConnection });
     const controller = new AbortController();
     const release = Promise.withResolvers<void>();
     let captured: Transaction | undefined;

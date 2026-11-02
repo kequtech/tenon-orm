@@ -120,5 +120,5 @@ appear as `pending`.
 application request/result state for a business UI. Queue history pruning releases job-ID
 deduplication; application result records should survive it.
 
-See [the Jobs guide](jobs.md) for enablement, setup, runner supervision and ORM observation, and the
+See [the Jobs guide](jobs.md) for setup, runner supervision and ORM observation, and the
 [Jobs API](https://github.com/kequtech/pgclear-jobs/blob/main/docs/api.md) for exact record semantics.

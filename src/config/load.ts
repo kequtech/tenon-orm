@@ -156,7 +156,6 @@ export async function loadConfig(
   const timeouts = timeoutOptions(config.timeouts === undefined ? {} : config.timeouts);
   return {
     connection: config.connection as TenonConfig['connection'],
-    ...(config.jobs !== undefined && { jobs: config.jobs as boolean }),
     ...(config.onQuery !== undefined && {
       onQuery: config.onQuery as NonNullable<TenonConfig['onQuery']>,
     }),

@@ -253,6 +253,8 @@ test('invalid, ambiguous and failing configurations reject without generating or
       'export default null;',
       'export default {connection: ""};',
       'export default {connection: "postgresql://unused", unknown: true};',
+      'export default {connection: "postgresql://unused", jobs: true};',
+      'export default {connection: "postgresql://unused", jobs: false};',
       'export default {connection: {acquire() {}, close() {}}};',
       'export default {connection: "postgresql://unused", generate: {out: ""}};',
       'export default {connection: "postgresql://unused", generate: {out: "schema.ts", check: true}};',

@@ -6,7 +6,7 @@ const connection = process.env.DATABASE_URL;
 if (!connection) throw new Error('DATABASE_URL is required.');
 const port = Number(process.env.PORT ?? 3000);
 if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('Invalid PORT.');
-const db = createTenon({ connection, jobs: true });
+const db = createTenon({ connection });
 const stop = new AbortController();
 const shutdown = () => stop.abort();
 process.once('SIGINT', shutdown);

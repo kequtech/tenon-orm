@@ -1,14 +1,14 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { defineJob as nativeDefineJob, JobError as NativeJobError } from '@kequtech/pgclear-jobs';
-import { createTenon, defineJob, defineWorker, JobError, sql } from '../src/index.js';
+import { createTenon, defineJob, defineWorker, JobError } from '../src/index.js';
 import { mockDriver, result } from './helpers/driver.js';
 
 const definition = defineJob({ name: 'inert', handler(_payload: number) {} });
 const id = '00000000-0000-4000-8000-000000000001';
 
 test('definitions and facade access are inert without configuration or Jobs storage', async () => {
-  const db = createTenon({ connection: undefined, jobs: true });
+  const db = createTenon({ connection: undefined });
   assert.equal(db.jobs, db.jobs);
   const controller = new AbortController();
   controller.abort();
@@ -28,7 +28,7 @@ test('definitions and facade access are inert without configuration or Jobs stor
 });
 
 test('producer contracts and worker bindings remain inert and validate before pool access', async () => {
-  const db = createTenon({ connection: undefined, jobs: true });
+  const db = createTenon({ connection: undefined });
   const specification = defineJob<{ id: number }>({ name: 'producer-only', maxAttempts: 5 });
   const worker = defineWorker(specification, {
     transactional: true,
@@ -52,7 +52,7 @@ test('producer contracts and worker bindings remain inert and validate before po
   }
 });
 
-test('every disabled record operation and runner reject without SQL or acquisition', async (t) => {
+test('every record operation and runner reject after close without SQL or acquisition', async (t) => {
   const statements: string[] = [];
   const driver = mockDriver(t, async (text) => {
     statements.push(text);
@@ -60,6 +60,7 @@ test('every disabled record operation and runner reject without SQL or acquisiti
   });
   const db = createTenon({ connection: driver.sql });
   const jobs = db.jobs;
+  await db.close();
   const calls = [
     () => jobs.send(definition, 1),
     () => jobs.request(definition, 1, { key: 'one' }),
@@ -79,24 +80,18 @@ test('every disabled record operation and runner reject without SQL or acquisiti
     () => jobs.unschedule(definition),
     () => jobs.run([definition]),
   ];
-  for (const call of calls) await assert.rejects(call(), /Jobs are disabled/);
+  for (const call of calls) await assert.rejects(call(), /closed/);
   assert.deepEqual(statements, []);
   assert.equal(driver.reserve.mock.callCount(), 0);
-  await db.transaction(async (tx) => {
-    assert.equal('run' in tx.jobs, false);
-    assert.equal('install' in tx.jobs, false);
-    await assert.rejects(tx.jobs.send(definition, 1), /Jobs are disabled/);
-    await assert.rejects(tx.jobs.sendMany(definition, []), /Jobs are disabled/);
-    await tx.query(sql`SELECT 1`);
-  });
-  assert.deepEqual(statements, ['SELECT 1']);
-  await db.close();
 });
 
-test('invalid Jobs configuration is rejected before opening a database', () => {
-  for (const jobs of [null, 'true', 1, {}]) {
-    // @ts-expect-error Runtime config validation also protects JavaScript consumers.
-    assert.throws(() => createTenon({ connection: undefined, jobs }), /jobs must be a boolean/);
+test('the removed Jobs option is rejected as unknown before opening a database', () => {
+  for (const jobs of [true, false]) {
+    assert.throws(
+      // @ts-expect-error Jobs requires no configuration option.
+      () => createTenon({ connection: undefined, jobs }),
+      /Unknown Tenon config option: jobs/,
+    );
   }
 });
 
@@ -105,7 +100,7 @@ test('worker startup preserves original driver failures and leaves its borrowed 
   const driver = mockDriver(t, async () => {
     throw failure;
   });
-  const db = createTenon({ connection: driver.sql, jobs: true });
+  const db = createTenon({ connection: driver.sql });
   await assert.rejects(
     db.jobs.run([definition], { databaseTimeoutMs: 100 }),
     (error) => error === failure,
@@ -121,11 +116,13 @@ test('expired transaction facades reject empty batches before SQL', async (t) =>
     statements.push(text);
     return result(text);
   });
-  const db = createTenon({ connection: driver.sql, jobs: true });
+  const db = createTenon({ connection: driver.sql });
   let captured!: import('../src/index.js').Transaction;
   try {
     await db.transaction(async (tx) => {
       captured = tx;
+      assert.equal('run' in tx.jobs, false);
+      assert.equal('install' in tx.jobs, false);
       assert.deepEqual(await tx.jobs.sendMany(definition, []), []);
     });
     await assert.rejects(captured.jobs.sendMany(definition, []), /transaction has finished/);

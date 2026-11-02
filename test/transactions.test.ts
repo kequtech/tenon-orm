@@ -60,7 +60,7 @@ for (const boundary of ['COMMIT', 'ROLLBACK'])
         return value as T;
       },
     );
-    const db = createTenon({ connection: driver.sql, jobs: true });
+    const db = createTenon({ connection: driver.sql });
     let escaped!: Transaction;
     const pending = db.transaction(async (tx) => {
       escaped = tx;

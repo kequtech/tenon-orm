@@ -140,8 +140,25 @@ manifest/lockfile versions and published registry dependencies, without candidat
 
 Publishing requires an explicit request. The package is `@kequtech/tenon-orm`.
 
-`npm run benchmark` measures sequential queries, whole transactions, guarded writes, and batching on
-a warm single-connection pool. Local timings do not establish production throughput.
+## Benchmarks
+
+`npm run benchmark -- --samples 500 --repetitions 5` measures warm, direct, single-connection queries,
+whole transactions, guards and batching. Cases rotate between repetitions; SQL construction, setup
+and warmup are excluded. Final row checks validate the effects. Transactions include BEGIN/COMMIT.
+
+[November 2 results](notes/benchmark-2026-11-02.json): Tenon 0.5.2, pgclear 0.3.6, Node 24.4.1 and
+PostgreSQL 16.15 on the local Threadripper/WSL2 host. Median per-repetition p50 latency, milliseconds:
+
+| Pattern                 | Native pgclear | Tenon | Tenon with write guards |
+| ----------------------- | -------------: | ----: | ----------------------: |
+| One update              |          0.334 | 0.378 |                   0.859 |
+| Three-query transaction |          1.494 | 1.485 |                   5.808 |
+
+The guard adds a transaction for a root write and savepoints for guarded writes inside a transaction.
+Native/Tenon ranges overlap; tiny wrapper differences are not established by these medians. Ten
+separate inserts in one transaction took 3.130 ms versus 0.814 ms as one batch. Temporary tables
+exclude ordinary table durability costs. These are local observations, not production capacity.
+The saved report includes ranges, p95s, client CPU, versions, revision and executed-code hashes.
 
 ## Consumer experiments and package identity
 

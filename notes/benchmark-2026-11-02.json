@@ -1,0 +1,1203 @@
+{
+  "recordedAt": "2026-11-02T16:13:44.731Z",
+  "revision": "02e2734feaa7e82af264d2ab675e2841b1b1f55c",
+  "workingTreeDirty": true,
+  "harnessSha256": "74dda5e9704ce21cef09c0bf88ccadc5d6cae05d08a6217984482c5a82a94c5d",
+  "versions": {
+    "tenon": "0.5.2",
+    "pgclear": "0.3.6"
+  },
+  "codeSha256": {
+    "tenon": "405e39daaf9d8cedcae670b67edabce530746946f86b76c8412ce19775c95950",
+    "pgclear": "a7bcf87c8d3537fea8650239313c5050671765c0f603294e9af14c69136ba3bc"
+  },
+  "node": "v24.4.1",
+  "postgres": "16.15 (Ubuntu 16.15-0ubuntu0.24.04.1)",
+  "machine": {
+    "platform": "linux",
+    "release": "6.6.87.2-microsoft-standard-WSL2",
+    "cpu": "AMD Ryzen Threadripper 3970X 32-Core Processor"
+  },
+  "config": {
+    "samples": 500,
+    "repetitions": 5,
+    "warmup": 50,
+    "maxConnections": 1,
+    "transport": "direct"
+  },
+  "notes": [
+    "Sequential direct local measurements on a warm single-connection pool; unnamed extended queries.",
+    "Each sample measures one query or whole transaction, including acquisition, BEGIN and COMMIT.",
+    "Queries/fragments are constructed before timing. Warmup, setup, code hashing and final row assertions are excluded.",
+    "Temporary tables do not represent durable business-table writes or production capacity.",
+    "Summaries are medians/ranges across repetitions, not pooled latency distributions. CPU excludes PostgreSQL."
+  ],
+  "measurements": [
+    {
+      "case": "pgclear: unprepared query",
+      "repetition": 0,
+      "operations": 500,
+      "elapsedMs": 269.26790700000004,
+      "operationsPerSecond": 1856.886717658484,
+      "latencyMs": {
+        "min": 0.25639699999999266,
+        "median": 0.4993350000000305,
+        "p95": 0.8451870000000099,
+        "max": 1.9489810000000034
+      },
+      "clientCpuMs": 235.107
+    },
+    {
+      "case": "tenon: query",
+      "repetition": 0,
+      "operations": 500,
+      "elapsedMs": 243.57044899999994,
+      "operationsPerSecond": 2052.794179477824,
+      "latencyMs": {
+        "min": 0.26426199999991695,
+        "median": 0.45116300000006504,
+        "p95": 0.7675100000000157,
+        "max": 1.6841640000000098
+      },
+      "clientCpuMs": 156.15
+    },
+    {
+      "case": "tenon: guarded write",
+      "repetition": 0,
+      "operations": 500,
+      "elapsedMs": 677.333002,
+      "operationsPerSecond": 738.1893374804141,
+      "latencyMs": {
+        "min": 0.7649059999998826,
+        "median": 1.3020460000000185,
+        "p95": 1.8304740000000947,
+        "max": 4.260954999999967
+      },
+      "clientCpuMs": 504.405
+    },
+    {
+      "case": "pgclear: empty transaction",
+      "repetition": 0,
+      "operations": 500,
+      "elapsedMs": 304.4575520000001,
+      "operationsPerSecond": 1642.2650603194754,
+      "latencyMs": {
+        "min": 0.3944209999999657,
+        "median": 0.5512940000000981,
+        "p95": 0.8473650000000816,
+        "max": 6.634546999999884
+      },
+      "clientCpuMs": 275.075
+    },
+    {
+      "case": "tenon: empty transaction",
+      "repetition": 0,
+      "operations": 500,
+      "elapsedMs": 295.68279499999994,
+      "operationsPerSecond": 1691.0013313422585,
+      "latencyMs": {
+        "min": 0.39300200000025143,
+        "median": 0.5533000000000357,
+        "p95": 0.7969780000003084,
+        "max": 3.715772999999899
+      },
+      "clientCpuMs": 245.058
+    },
+    {
+      "case": "pgclear: one-query transaction",
+      "repetition": 0,
+      "operations": 500,
+      "elapsedMs": 544.66131,
+      "operationsPerSecond": 918.0016843862106,
+      "latencyMs": {
+        "min": 0.663340000000062,
+        "median": 1.044984999999997,
+        "p95": 1.4406490000001213,
+        "max": 3.1181160000001
+      },
+      "clientCpuMs": 359.299
+    },
+    {
+      "case": "tenon: one-query transaction",
+      "repetition": 0,
+      "operations": 500,
+      "elapsedMs": 482.53479700000025,
+      "operationsPerSecond": 1036.1947016227302,
+      "latencyMs": {
+        "min": 0.6165030000001934,
+        "median": 0.9045960000003106,
+        "p95": 1.333252000000357,
+        "max": 3.4168789999998808
+      },
+      "clientCpuMs": 323.723
+    },
+    {
+      "case": "pgclear: three-query transaction",
+      "repetition": 0,
+      "operations": 500,
+      "elapsedMs": 787.6675770000002,
+      "operationsPerSecond": 634.7855549727673,
+      "latencyMs": {
+        "min": 0.9842939999998634,
+        "median": 1.4943560000001526,
+        "p95": 2.035472999999911,
+        "max": 12.039323999999851
+      },
+      "clientCpuMs": 551.666
+    },
+    {
+      "case": "tenon: three-query transaction",
+      "repetition": 0,
+      "operations": 500,
+      "elapsedMs": 782.7825080000002,
+      "operationsPerSecond": 638.7470272904973,
+      "latencyMs": {
+        "min": 0.9429909999998927,
+        "median": 1.5250550000000658,
+        "p95": 2.0242749999997613,
+        "max": 3.7673789999998917
+      },
+      "clientCpuMs": 536.156
+    },
+    {
+      "case": "tenon: three-query transaction with write guards",
+      "repetition": 0,
+      "operations": 500,
+      "elapsedMs": 2961.509170000001,
+      "operationsPerSecond": 168.8328386975752,
+      "latencyMs": {
+        "min": 4.168390999999247,
+        "median": 5.879998999999771,
+        "p95": 7.166359000000739,
+        "max": 9.959404000000177
+      },
+      "clientCpuMs": 954.319
+    },
+    {
+      "case": "tenon: ten separate inserts in one transaction",
+      "repetition": 0,
+      "operations": 500,
+      "elapsedMs": 1549.0848050000004,
+      "operationsPerSecond": 322.77122491043986,
+      "latencyMs": {
+        "min": 2.1627239999997983,
+        "median": 2.9800739999991492,
+        "p95": 4.119383999999627,
+        "max": 14.182604999999967
+      },
+      "clientCpuMs": 1018.132
+    },
+    {
+      "case": "tenon: one batch of ten inserts in one transaction",
+      "repetition": 0,
+      "operations": 500,
+      "elapsedMs": 424.21168899999975,
+      "operationsPerSecond": 1178.6568191429544,
+      "latencyMs": {
+        "min": 0.5764910000016243,
+        "median": 0.8079900000011548,
+        "p95": 1.1857540000000881,
+        "max": 2.800844999999754
+      },
+      "clientCpuMs": 286.975
+    },
+    {
+      "case": "tenon: query",
+      "repetition": 1,
+      "operations": 500,
+      "elapsedMs": 169.21457199999895,
+      "operationsPerSecond": 2954.828263844813,
+      "latencyMs": {
+        "min": 0.2184240000005957,
+        "median": 0.3155770000012126,
+        "p95": 0.5058749999989232,
+        "max": 0.7280250000003434
+      },
+      "clientCpuMs": 93.974
+    },
+    {
+      "case": "tenon: guarded write",
+      "repetition": 1,
+      "operations": 500,
+      "elapsedMs": 449.0486770000007,
+      "operationsPerSecond": 1113.465033101521,
+      "latencyMs": {
+        "min": 0.5607469999995374,
+        "median": 0.8324689999990369,
+        "p95": 1.1769580000000133,
+        "max": 11.926445999999487
+      },
+      "clientCpuMs": 320.005
+    },
+    {
+      "case": "pgclear: empty transaction",
+      "repetition": 1,
+      "operations": 500,
+      "elapsedMs": 238.4042330000011,
+      "operationsPerSecond": 2097.2781972373687,
+      "latencyMs": {
+        "min": 0.33609699999942677,
+        "median": 0.45988799999940966,
+        "p95": 0.6352779999997438,
+        "max": 1.1034280000003491
+      },
+      "clientCpuMs": 176.926
+    },
+    {
+      "case": "tenon: empty transaction",
+      "repetition": 1,
+      "operations": 500,
+      "elapsedMs": 220.27225399999952,
+      "operationsPerSecond": 2269.918207674041,
+      "latencyMs": {
+        "min": 0.32683600000018487,
+        "median": 0.4214540000011766,
+        "p95": 0.5394200000009732,
+        "max": 3.814806000000317
+      },
+      "clientCpuMs": 166.807
+    },
+    {
+      "case": "pgclear: one-query transaction",
+      "repetition": 1,
+      "operations": 500,
+      "elapsedMs": 443.5590579999989,
+      "operationsPerSecond": 1127.245607956903,
+      "latencyMs": {
+        "min": 0.6327340000007098,
+        "median": 0.8494010000013077,
+        "p95": 1.1508730000005016,
+        "max": 6.688360999998622
+      },
+      "clientCpuMs": 311.632
+    },
+    {
+      "case": "tenon: one-query transaction",
+      "repetition": 1,
+      "operations": 500,
+      "elapsedMs": 406.95023199999923,
+      "operationsPerSecond": 1228.651468123505,
+      "latencyMs": {
+        "min": 0.5517650000001595,
+        "median": 0.7834819999989122,
+        "p95": 1.0479689999992843,
+        "max": 5.303105999999389
+      },
+      "clientCpuMs": 262.21
+    },
+    {
+      "case": "pgclear: three-query transaction",
+      "repetition": 1,
+      "operations": 500,
+      "elapsedMs": 693.9968879999997,
+      "operationsPerSecond": 720.4643257708675,
+      "latencyMs": {
+        "min": 0.8815410000006523,
+        "median": 1.3617469999990135,
+        "p95": 1.7487839999994321,
+        "max": 6.302379999999175
+      },
+      "clientCpuMs": 407.826
+    },
+    {
+      "case": "tenon: three-query transaction",
+      "repetition": 1,
+      "operations": 500,
+      "elapsedMs": 756.3309470000004,
+      "operationsPerSecond": 661.086263868031,
+      "latencyMs": {
+        "min": 1.021058999998786,
+        "median": 1.4760389999992185,
+        "p95": 1.8642519999993965,
+        "max": 5.987273000000641
+      },
+      "clientCpuMs": 484.975
+    },
+    {
+      "case": "tenon: three-query transaction with write guards",
+      "repetition": 1,
+      "operations": 500,
+      "elapsedMs": 3150.7430860000004,
+      "operationsPerSecond": 158.6927230664087,
+      "latencyMs": {
+        "min": 4.5098870000001625,
+        "median": 6.096795999997994,
+        "p95": 7.630696000000171,
+        "max": 18.360984999999346
+      },
+      "clientCpuMs": 1113.751
+    },
+    {
+      "case": "tenon: ten separate inserts in one transaction",
+      "repetition": 1,
+      "operations": 500,
+      "elapsedMs": 1611.8833239999985,
+      "operationsPerSecond": 310.1961491599875,
+      "latencyMs": {
+        "min": 2.272346000001562,
+        "median": 3.1303079999997863,
+        "p95": 4.075314999998227,
+        "max": 10.058875999999145
+      },
+      "clientCpuMs": 995.912
+    },
+    {
+      "case": "tenon: one batch of ten inserts in one transaction",
+      "repetition": 1,
+      "operations": 500,
+      "elapsedMs": 480.06660900000134,
+      "operationsPerSecond": 1041.522135941762,
+      "latencyMs": {
+        "min": 0.5615699999980279,
+        "median": 0.8844349999999395,
+        "p95": 1.1929500000005646,
+        "max": 28.450347000001784
+      },
+      "clientCpuMs": 379.547
+    },
+    {
+      "case": "pgclear: unprepared query",
+      "repetition": 1,
+      "operations": 500,
+      "elapsedMs": 159.5133679999999,
+      "operationsPerSecond": 3134.5335269956827,
+      "latencyMs": {
+        "min": 0.20960199999899487,
+        "median": 0.29740099999980885,
+        "p95": 0.49610699999902863,
+        "max": 0.8107319999980973
+      },
+      "clientCpuMs": 78.237
+    },
+    {
+      "case": "tenon: guarded write",
+      "repetition": 2,
+      "operations": 500,
+      "elapsedMs": 421.46726000000126,
+      "operationsPerSecond": 1186.3317686882688,
+      "latencyMs": {
+        "min": 0.5329960000017309,
+        "median": 0.8192129999988538,
+        "p95": 1.098508999999467,
+        "max": 3.224307000000408
+      },
+      "clientCpuMs": 258.96
+    },
+    {
+      "case": "pgclear: empty transaction",
+      "repetition": 2,
+      "operations": 500,
+      "elapsedMs": 221.70174699999916,
+      "operationsPerSecond": 2255.2821832297145,
+      "latencyMs": {
+        "min": 0.32189500000094995,
+        "median": 0.430726999999024,
+        "p95": 0.5829039999989618,
+        "max": 0.899478999999701
+      },
+      "clientCpuMs": 152.701
+    },
+    {
+      "case": "tenon: empty transaction",
+      "repetition": 2,
+      "operations": 500,
+      "elapsedMs": 245.56947800000125,
+      "operationsPerSecond": 2036.0836536859742,
+      "latencyMs": {
+        "min": 0.3325460000014573,
+        "median": 0.45839600000181235,
+        "p95": 0.6867420000016864,
+        "max": 5.830890000001091
+      },
+      "clientCpuMs": 184.603
+    },
+    {
+      "case": "pgclear: one-query transaction",
+      "repetition": 2,
+      "operations": 500,
+      "elapsedMs": 456.69941299999846,
+      "operationsPerSecond": 1094.8120049368265,
+      "latencyMs": {
+        "min": 0.5203930000025139,
+        "median": 0.8872379999993427,
+        "p95": 1.1907160000009753,
+        "max": 5.850144
+      },
+      "clientCpuMs": 285.26
+    },
+    {
+      "case": "tenon: one-query transaction",
+      "repetition": 2,
+      "operations": 500,
+      "elapsedMs": 473.57244499999797,
+      "operationsPerSecond": 1055.8046720813795,
+      "latencyMs": {
+        "min": 0.5355290000006789,
+        "median": 0.9276869999994233,
+        "p95": 1.2579340000011143,
+        "max": 1.4934829999983776
+      },
+      "clientCpuMs": 283.613
+    },
+    {
+      "case": "pgclear: three-query transaction",
+      "repetition": 2,
+      "operations": 500,
+      "elapsedMs": 738.9703490000029,
+      "operationsPerSecond": 676.6171344717893,
+      "latencyMs": {
+        "min": 0.9996260000007169,
+        "median": 1.4503320000003441,
+        "p95": 1.8671719999983907,
+        "max": 6.474888999997347
+      },
+      "clientCpuMs": 430.945
+    },
+    {
+      "case": "tenon: three-query transaction",
+      "repetition": 2,
+      "operations": 500,
+      "elapsedMs": 769.352383999998,
+      "operationsPerSecond": 649.8972517644156,
+      "latencyMs": {
+        "min": 0.9315089999981865,
+        "median": 1.5323839999982738,
+        "p95": 1.992099999999482,
+        "max": 5.089466000001266
+      },
+      "clientCpuMs": 461.624
+    },
+    {
+      "case": "tenon: three-query transaction with write guards",
+      "repetition": 2,
+      "operations": 500,
+      "elapsedMs": 2924.279918,
+      "operationsPerSecond": 170.98226367534764,
+      "latencyMs": {
+        "min": 3.952212000000145,
+        "median": 5.807765999998082,
+        "p95": 6.987568000000465,
+        "max": 11.360290000000532
+      },
+      "clientCpuMs": 952.227
+    },
+    {
+      "case": "tenon: ten separate inserts in one transaction",
+      "repetition": 2,
+      "operations": 500,
+      "elapsedMs": 1517.5551840000007,
+      "operationsPerSecond": 329.47731013121415,
+      "latencyMs": {
+        "min": 2.1580699999976787,
+        "median": 2.973058999999921,
+        "p95": 3.7838640000009036,
+        "max": 7.767033999996784
+      },
+      "clientCpuMs": 909.963
+    },
+    {
+      "case": "tenon: one batch of ten inserts in one transaction",
+      "repetition": 2,
+      "operations": 500,
+      "elapsedMs": 487.25720100000035,
+      "operationsPerSecond": 1026.152099905035,
+      "latencyMs": {
+        "min": 0.6202520000006189,
+        "median": 0.9503709999989951,
+        "p95": 1.2585420000032173,
+        "max": 1.5189840000020922
+      },
+      "clientCpuMs": 298.056
+    },
+    {
+      "case": "pgclear: unprepared query",
+      "repetition": 2,
+      "operations": 500,
+      "elapsedMs": 183.426109,
+      "operationsPerSecond": 2725.8932914506736,
+      "latencyMs": {
+        "min": 0.22202099999776692,
+        "median": 0.33410100000037346,
+        "p95": 0.5367399999995541,
+        "max": 4.141684999998688
+      },
+      "clientCpuMs": 97.386
+    },
+    {
+      "case": "tenon: query",
+      "repetition": 2,
+      "operations": 500,
+      "elapsedMs": 209.3815429999995,
+      "operationsPerSecond": 2387.9850766024833,
+      "latencyMs": {
+        "min": 0.21762800000215066,
+        "median": 0.39189099999930477,
+        "p95": 0.6463449999973818,
+        "max": 0.8747709999988729
+      },
+      "clientCpuMs": 103.366
+    },
+    {
+      "case": "pgclear: empty transaction",
+      "repetition": 3,
+      "operations": 500,
+      "elapsedMs": 242.9721129999998,
+      "operationsPerSecond": 2057.849330223343,
+      "latencyMs": {
+        "min": 0.3461590000006254,
+        "median": 0.47705499999938183,
+        "p95": 0.6041289999993751,
+        "max": 0.834460999998555
+      },
+      "clientCpuMs": 165.065
+    },
+    {
+      "case": "tenon: empty transaction",
+      "repetition": 3,
+      "operations": 500,
+      "elapsedMs": 241.27045100000032,
+      "operationsPerSecond": 2072.36318383638,
+      "latencyMs": {
+        "min": 0.34481099999902654,
+        "median": 0.47116600000299513,
+        "p95": 0.6367360000003828,
+        "max": 0.8925389999967592
+      },
+      "clientCpuMs": 167.151
+    },
+    {
+      "case": "pgclear: one-query transaction",
+      "repetition": 3,
+      "operations": 500,
+      "elapsedMs": 446.568468999998,
+      "operationsPerSecond": 1119.6491349235905,
+      "latencyMs": {
+        "min": 0.5393659999972442,
+        "median": 0.8420770000011544,
+        "p95": 1.2086049999998068,
+        "max": 7.261890000001586
+      },
+      "clientCpuMs": 271.016
+    },
+    {
+      "case": "tenon: one-query transaction",
+      "repetition": 3,
+      "operations": 500,
+      "elapsedMs": 468.40202999999747,
+      "operationsPerSecond": 1067.4590799702612,
+      "latencyMs": {
+        "min": 0.5467710000011721,
+        "median": 0.8997889999991457,
+        "p95": 1.2333550000003015,
+        "max": 7.130041000000347
+      },
+      "clientCpuMs": 292.453
+    },
+    {
+      "case": "pgclear: three-query transaction",
+      "repetition": 3,
+      "operations": 500,
+      "elapsedMs": 777.8264740000013,
+      "operationsPerSecond": 642.8168964585784,
+      "latencyMs": {
+        "min": 0.9059880000022531,
+        "median": 1.5294160000012198,
+        "p95": 2.1039119999986724,
+        "max": 6.205531999999948
+      },
+      "clientCpuMs": 453.646
+    },
+    {
+      "case": "tenon: three-query transaction",
+      "repetition": 3,
+      "operations": 500,
+      "elapsedMs": 800.2314809999989,
+      "operationsPerSecond": 624.8192077812054,
+      "latencyMs": {
+        "min": 0.9065970000010566,
+        "median": 1.4847519999966607,
+        "p95": 1.9697660000019823,
+        "max": 45.61613899999793
+      },
+      "clientCpuMs": 523.418
+    },
+    {
+      "case": "tenon: three-query transaction with write guards",
+      "repetition": 3,
+      "operations": 500,
+      "elapsedMs": 2787.0227099999975,
+      "operationsPerSecond": 179.40291559375217,
+      "latencyMs": {
+        "min": 4.071529000000737,
+        "median": 5.491045999995549,
+        "p95": 6.506677999997919,
+        "max": 12.49855899999966
+      },
+      "clientCpuMs": 938.901
+    },
+    {
+      "case": "tenon: ten separate inserts in one transaction",
+      "repetition": 3,
+      "operations": 500,
+      "elapsedMs": 1664.3014389999953,
+      "operationsPerSecond": 300.4263460232467,
+      "latencyMs": {
+        "min": 2.0591779999958817,
+        "median": 3.334073999998509,
+        "p95": 4.117243000000599,
+        "max": 8.400359999999637
+      },
+      "clientCpuMs": 1026.756
+    },
+    {
+      "case": "tenon: one batch of ten inserts in one transaction",
+      "repetition": 3,
+      "operations": 500,
+      "elapsedMs": 423.4747070000012,
+      "operationsPerSecond": 1180.7080605642843,
+      "latencyMs": {
+        "min": 0.5265510000026552,
+        "median": 0.81012699999701,
+        "p95": 1.1520939999973052,
+        "max": 4.6846369999984745
+      },
+      "clientCpuMs": 271.54
+    },
+    {
+      "case": "pgclear: unprepared query",
+      "repetition": 3,
+      "operations": 500,
+      "elapsedMs": 162.5047889999987,
+      "operationsPerSecond": 3076.83240030547,
+      "latencyMs": {
+        "min": 0.20799800000531832,
+        "median": 0.29986900000221794,
+        "p95": 0.4994650000007823,
+        "max": 0.7863719999950263
+      },
+      "clientCpuMs": 78.535
+    },
+    {
+      "case": "tenon: query",
+      "repetition": 3,
+      "operations": 500,
+      "elapsedMs": 207.4339970000001,
+      "operationsPerSecond": 2410.4052721888193,
+      "latencyMs": {
+        "min": 0.23159599999780767,
+        "median": 0.37840200000209734,
+        "p95": 0.6578819999995176,
+        "max": 0.9502540000030422
+      },
+      "clientCpuMs": 99.263
+    },
+    {
+      "case": "tenon: guarded write",
+      "repetition": 3,
+      "operations": 500,
+      "elapsedMs": 504.38368900000205,
+      "operationsPerSecond": 991.3088208528447,
+      "latencyMs": {
+        "min": 0.5442519999996875,
+        "median": 0.9892330000002403,
+        "p95": 1.438192000001436,
+        "max": 4.625784000003478
+      },
+      "clientCpuMs": 315.703
+    },
+    {
+      "case": "tenon: empty transaction",
+      "repetition": 4,
+      "operations": 500,
+      "elapsedMs": 250.90623399999458,
+      "operationsPerSecond": 1992.7763134016463,
+      "latencyMs": {
+        "min": 0.33203900000080466,
+        "median": 0.4650080000064918,
+        "p95": 0.6876850000044215,
+        "max": 5.4221789999937755
+      },
+      "clientCpuMs": 184.801
+    },
+    {
+      "case": "pgclear: one-query transaction",
+      "repetition": 4,
+      "operations": 500,
+      "elapsedMs": 475.26656399999774,
+      "operationsPerSecond": 1052.041186722326,
+      "latencyMs": {
+        "min": 0.5545459999993909,
+        "median": 0.9196309999970254,
+        "p95": 1.3535739999933867,
+        "max": 1.780785000002652
+      },
+      "clientCpuMs": 279.417
+    },
+    {
+      "case": "tenon: one-query transaction",
+      "repetition": 4,
+      "operations": 500,
+      "elapsedMs": 421.2899230000039,
+      "operationsPerSecond": 1186.831140986003,
+      "latencyMs": {
+        "min": 0.5589810000019497,
+        "median": 0.8073160000058124,
+        "p95": 1.1307869999945979,
+        "max": 6.438174999995681
+      },
+      "clientCpuMs": 265.7
+    },
+    {
+      "case": "pgclear: three-query transaction",
+      "repetition": 4,
+      "operations": 500,
+      "elapsedMs": 785.6631449999986,
+      "operationsPerSecond": 636.4050588118154,
+      "latencyMs": {
+        "min": 0.8759159999972326,
+        "median": 1.5536060000013094,
+        "p95": 2.003969999997935,
+        "max": 6.1639370000048075
+      },
+      "clientCpuMs": 456.272
+    },
+    {
+      "case": "tenon: three-query transaction",
+      "repetition": 4,
+      "operations": 500,
+      "elapsedMs": 721.3489330000011,
+      "operationsPerSecond": 693.14582322949,
+      "latencyMs": {
+        "min": 0.9697349999987637,
+        "median": 1.4004879999993136,
+        "p95": 1.8703669999958947,
+        "max": 5.853004999997211
+      },
+      "clientCpuMs": 423.067
+    },
+    {
+      "case": "tenon: three-query transaction with write guards",
+      "repetition": 4,
+      "operations": 500,
+      "elapsedMs": 2751.9349470000016,
+      "operationsPerSecond": 181.6903413887275,
+      "latencyMs": {
+        "min": 4.011593999995966,
+        "median": 5.382796999998391,
+        "p95": 6.477287999994587,
+        "max": 10.13779500000237
+      },
+      "clientCpuMs": 952.821
+    },
+    {
+      "case": "tenon: ten separate inserts in one transaction",
+      "repetition": 4,
+      "operations": 500,
+      "elapsedMs": 1597.4237009999997,
+      "operationsPerSecond": 313.00399492444996,
+      "latencyMs": {
+        "min": 2.2790190000014263,
+        "median": 3.1380019999996875,
+        "p95": 3.7910550000015064,
+        "max": 6.946690999997372
+      },
+      "clientCpuMs": 963.155
+    },
+    {
+      "case": "tenon: one batch of ten inserts in one transaction",
+      "repetition": 4,
+      "operations": 500,
+      "elapsedMs": 422.00770000000193,
+      "operationsPerSecond": 1184.812504605953,
+      "latencyMs": {
+        "min": 0.6059749999985797,
+        "median": 0.8135770000008051,
+        "p95": 1.0943149999948218,
+        "max": 3.4357010000021546
+      },
+      "clientCpuMs": 265.95
+    },
+    {
+      "case": "pgclear: unprepared query",
+      "repetition": 4,
+      "operations": 500,
+      "elapsedMs": 183.4224250000043,
+      "operationsPerSecond": 2725.948040431743,
+      "latencyMs": {
+        "min": 0.23285300000134157,
+        "median": 0.33426999999937834,
+        "p95": 0.5767750000013621,
+        "max": 0.8640369999993709
+      },
+      "clientCpuMs": 88.784
+    },
+    {
+      "case": "tenon: query",
+      "repetition": 4,
+      "operations": 500,
+      "elapsedMs": 184.81987699999445,
+      "operationsPerSecond": 2705.3367208983427,
+      "latencyMs": {
+        "min": 0.2382069999948726,
+        "median": 0.323182000000088,
+        "p95": 0.6171250000043074,
+        "max": 3.349725000000035
+      },
+      "clientCpuMs": 99.822
+    },
+    {
+      "case": "tenon: guarded write",
+      "repetition": 4,
+      "operations": 500,
+      "elapsedMs": 442.92679399999906,
+      "operationsPerSecond": 1128.8547154363416,
+      "latencyMs": {
+        "min": 0.586382000001322,
+        "median": 0.8591340000057244,
+        "p95": 1.1540549999990617,
+        "max": 4.938619000000472
+      },
+      "clientCpuMs": 277.269
+    },
+    {
+      "case": "pgclear: empty transaction",
+      "repetition": 4,
+      "operations": 500,
+      "elapsedMs": 253.05089900000166,
+      "operationsPerSecond": 1975.8870724264714,
+      "latencyMs": {
+        "min": 0.33971800000290386,
+        "median": 0.48194599999987986,
+        "p95": 0.685961999995925,
+        "max": 0.929548000000068
+      },
+      "clientCpuMs": 176.148
+    }
+  ],
+  "summaries": [
+    {
+      "case": "pgclear: unprepared query",
+      "operationsPerSecond": {
+        "min": 1856.886717658484,
+        "median": 2725.948040431743,
+        "p95": 3134.5335269956827,
+        "max": 3134.5335269956827
+      },
+      "medianLatencyMs": {
+        "min": 0.29740099999980885,
+        "median": 0.33410100000037346,
+        "p95": 0.4993350000000305,
+        "max": 0.4993350000000305
+      },
+      "p95LatencyMs": {
+        "min": 0.49610699999902863,
+        "median": 0.5367399999995541,
+        "p95": 0.8451870000000099,
+        "max": 0.8451870000000099
+      },
+      "clientCpuMs": {
+        "min": 78.237,
+        "median": 88.784,
+        "p95": 235.107,
+        "max": 235.107
+      }
+    },
+    {
+      "case": "tenon: query",
+      "operationsPerSecond": {
+        "min": 2052.794179477824,
+        "median": 2410.4052721888193,
+        "p95": 2954.828263844813,
+        "max": 2954.828263844813
+      },
+      "medianLatencyMs": {
+        "min": 0.3155770000012126,
+        "median": 0.37840200000209734,
+        "p95": 0.45116300000006504,
+        "max": 0.45116300000006504
+      },
+      "p95LatencyMs": {
+        "min": 0.5058749999989232,
+        "median": 0.6463449999973818,
+        "p95": 0.7675100000000157,
+        "max": 0.7675100000000157
+      },
+      "clientCpuMs": {
+        "min": 93.974,
+        "median": 99.822,
+        "p95": 156.15,
+        "max": 156.15
+      }
+    },
+    {
+      "case": "tenon: guarded write",
+      "operationsPerSecond": {
+        "min": 738.1893374804141,
+        "median": 1113.465033101521,
+        "p95": 1186.3317686882688,
+        "max": 1186.3317686882688
+      },
+      "medianLatencyMs": {
+        "min": 0.8192129999988538,
+        "median": 0.8591340000057244,
+        "p95": 1.3020460000000185,
+        "max": 1.3020460000000185
+      },
+      "p95LatencyMs": {
+        "min": 1.098508999999467,
+        "median": 1.1769580000000133,
+        "p95": 1.8304740000000947,
+        "max": 1.8304740000000947
+      },
+      "clientCpuMs": {
+        "min": 258.96,
+        "median": 315.703,
+        "p95": 504.405,
+        "max": 504.405
+      }
+    },
+    {
+      "case": "pgclear: empty transaction",
+      "operationsPerSecond": {
+        "min": 1642.2650603194754,
+        "median": 2057.849330223343,
+        "p95": 2255.2821832297145,
+        "max": 2255.2821832297145
+      },
+      "medianLatencyMs": {
+        "min": 0.430726999999024,
+        "median": 0.47705499999938183,
+        "p95": 0.5512940000000981,
+        "max": 0.5512940000000981
+      },
+      "p95LatencyMs": {
+        "min": 0.5829039999989618,
+        "median": 0.6352779999997438,
+        "p95": 0.8473650000000816,
+        "max": 0.8473650000000816
+      },
+      "clientCpuMs": {
+        "min": 152.701,
+        "median": 176.148,
+        "p95": 275.075,
+        "max": 275.075
+      }
+    },
+    {
+      "case": "tenon: empty transaction",
+      "operationsPerSecond": {
+        "min": 1691.0013313422585,
+        "median": 2036.0836536859742,
+        "p95": 2269.918207674041,
+        "max": 2269.918207674041
+      },
+      "medianLatencyMs": {
+        "min": 0.4214540000011766,
+        "median": 0.4650080000064918,
+        "p95": 0.5533000000000357,
+        "max": 0.5533000000000357
+      },
+      "p95LatencyMs": {
+        "min": 0.5394200000009732,
+        "median": 0.6867420000016864,
+        "p95": 0.7969780000003084,
+        "max": 0.7969780000003084
+      },
+      "clientCpuMs": {
+        "min": 166.807,
+        "median": 184.603,
+        "p95": 245.058,
+        "max": 245.058
+      }
+    },
+    {
+      "case": "pgclear: one-query transaction",
+      "operationsPerSecond": {
+        "min": 918.0016843862106,
+        "median": 1094.8120049368265,
+        "p95": 1127.245607956903,
+        "max": 1127.245607956903
+      },
+      "medianLatencyMs": {
+        "min": 0.8420770000011544,
+        "median": 0.8872379999993427,
+        "p95": 1.044984999999997,
+        "max": 1.044984999999997
+      },
+      "p95LatencyMs": {
+        "min": 1.1508730000005016,
+        "median": 1.2086049999998068,
+        "p95": 1.4406490000001213,
+        "max": 1.4406490000001213
+      },
+      "clientCpuMs": {
+        "min": 271.016,
+        "median": 285.26,
+        "p95": 359.299,
+        "max": 359.299
+      }
+    },
+    {
+      "case": "tenon: one-query transaction",
+      "operationsPerSecond": {
+        "min": 1036.1947016227302,
+        "median": 1067.4590799702612,
+        "p95": 1228.651468123505,
+        "max": 1228.651468123505
+      },
+      "medianLatencyMs": {
+        "min": 0.7834819999989122,
+        "median": 0.8997889999991457,
+        "p95": 0.9276869999994233,
+        "max": 0.9276869999994233
+      },
+      "p95LatencyMs": {
+        "min": 1.0479689999992843,
+        "median": 1.2333550000003015,
+        "p95": 1.333252000000357,
+        "max": 1.333252000000357
+      },
+      "clientCpuMs": {
+        "min": 262.21,
+        "median": 283.613,
+        "p95": 323.723,
+        "max": 323.723
+      }
+    },
+    {
+      "case": "pgclear: three-query transaction",
+      "operationsPerSecond": {
+        "min": 634.7855549727673,
+        "median": 642.8168964585784,
+        "p95": 720.4643257708675,
+        "max": 720.4643257708675
+      },
+      "medianLatencyMs": {
+        "min": 1.3617469999990135,
+        "median": 1.4943560000001526,
+        "p95": 1.5536060000013094,
+        "max": 1.5536060000013094
+      },
+      "p95LatencyMs": {
+        "min": 1.7487839999994321,
+        "median": 2.003969999997935,
+        "p95": 2.1039119999986724,
+        "max": 2.1039119999986724
+      },
+      "clientCpuMs": {
+        "min": 407.826,
+        "median": 453.646,
+        "p95": 551.666,
+        "max": 551.666
+      }
+    },
+    {
+      "case": "tenon: three-query transaction",
+      "operationsPerSecond": {
+        "min": 624.8192077812054,
+        "median": 649.8972517644156,
+        "p95": 693.14582322949,
+        "max": 693.14582322949
+      },
+      "medianLatencyMs": {
+        "min": 1.4004879999993136,
+        "median": 1.4847519999966607,
+        "p95": 1.5323839999982738,
+        "max": 1.5323839999982738
+      },
+      "p95LatencyMs": {
+        "min": 1.8642519999993965,
+        "median": 1.9697660000019823,
+        "p95": 2.0242749999997613,
+        "max": 2.0242749999997613
+      },
+      "clientCpuMs": {
+        "min": 423.067,
+        "median": 484.975,
+        "p95": 536.156,
+        "max": 536.156
+      }
+    },
+    {
+      "case": "tenon: three-query transaction with write guards",
+      "operationsPerSecond": {
+        "min": 158.6927230664087,
+        "median": 170.98226367534764,
+        "p95": 181.6903413887275,
+        "max": 181.6903413887275
+      },
+      "medianLatencyMs": {
+        "min": 5.382796999998391,
+        "median": 5.807765999998082,
+        "p95": 6.096795999997994,
+        "max": 6.096795999997994
+      },
+      "p95LatencyMs": {
+        "min": 6.477287999994587,
+        "median": 6.987568000000465,
+        "p95": 7.630696000000171,
+        "max": 7.630696000000171
+      },
+      "clientCpuMs": {
+        "min": 938.901,
+        "median": 952.821,
+        "p95": 1113.751,
+        "max": 1113.751
+      }
+    },
+    {
+      "case": "tenon: ten separate inserts in one transaction",
+      "operationsPerSecond": {
+        "min": 300.4263460232467,
+        "median": 313.00399492444996,
+        "p95": 329.47731013121415,
+        "max": 329.47731013121415
+      },
+      "medianLatencyMs": {
+        "min": 2.973058999999921,
+        "median": 3.1303079999997863,
+        "p95": 3.334073999998509,
+        "max": 3.334073999998509
+      },
+      "p95LatencyMs": {
+        "min": 3.7838640000009036,
+        "median": 4.075314999998227,
+        "p95": 4.119383999999627,
+        "max": 4.119383999999627
+      },
+      "clientCpuMs": {
+        "min": 909.963,
+        "median": 995.912,
+        "p95": 1026.756,
+        "max": 1026.756
+      }
+    },
+    {
+      "case": "tenon: one batch of ten inserts in one transaction",
+      "operationsPerSecond": {
+        "min": 1026.152099905035,
+        "median": 1178.6568191429544,
+        "p95": 1184.812504605953,
+        "max": 1184.812504605953
+      },
+      "medianLatencyMs": {
+        "min": 0.8079900000011548,
+        "median": 0.8135770000008051,
+        "p95": 0.9503709999989951,
+        "max": 0.9503709999989951
+      },
+      "p95LatencyMs": {
+        "min": 1.0943149999948218,
+        "median": 1.1857540000000881,
+        "p95": 1.2585420000032173,
+        "max": 1.2585420000032173
+      },
+      "clientCpuMs": {
+        "min": 265.95,
+        "median": 286.975,
+        "p95": 379.547,
+        "max": 379.547
+      }
+    }
+  ]
+}

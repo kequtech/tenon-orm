@@ -39,7 +39,7 @@ import the config safely. Values are captured when the config module is imported
 before application startup. An explicitly missing/empty connection string fails when used. A
 purposefully empty options object `{}` selects pgclear's local defaults.
 
-Keep codecs in `connection.codecs` so runtime, generation and checking agree; [types](types.md#codecs)
+Keep codecs in `connection.codecs` so runtime, generation and checking agree; [types](types.md#choose-representations)
 explains representations. `startupParameters.search_path` controls runtime name resolution.
 Tooling `namespace` selects metadata/history and does not change application queries.
 Use `tls: {}` for verified TLS with system trust, or the provider's required CA/settings.
@@ -83,7 +83,7 @@ try {
 Close immediately rejects new Tenon operations. An owned pool drains within the chosen grace,
 then expires outstanding handles. The first valid close call fixes its timeout; later calls share
 its promise and outcome. This bounds driver resources, not arbitrary JavaScript callbacks or proof
-of remote rollback. See [Jobs hosting](jobs.md#hosting) when a worker shares the process.
+of remote rollback. See [Jobs hosting](jobs.md#run-and-close) when a worker shares the process.
 
 If the application already owns a pgclear pool, pass it directly:
 
@@ -112,11 +112,11 @@ When adapting an ORM query to a consumer expecting driver results, use
 `tx.query(query, { returns: 'native' })`; keep the adapter scoped to the supplied `Transaction`,
 rather than pretending it is a full database with lifetime/pool methods.
 
-Listeners own dedicated connections. Reuse connection option values and codecs, not the query
-pool, when calling native `listen`. Await subscription acknowledgement, supervise reconnects,
-reconcile gaps from authoritative application state, and close the listener separately. Shared
-reference counts, authorization and listener ownership remain application responsibilities. See the
-installed pgclear notification guide and its complete shared-listener example.
+Listeners own dedicated connections and close separately. Reuse connection values, not pool-only
+options, when calling native listen. The driver's [connection](https://github.com/kequtech/pgclear/blob/main/docs/connections.md)
+and [notification](https://github.com/kequtech/pgclear/blob/main/docs/notifications.md) guides own
+native configuration, registration/reconnect and shared-listener examples. Tenon adds no listener
+or streaming wrapper.
 
 ## Migrations
 
@@ -147,7 +147,7 @@ is separate. Migration/history queries use default decoding even with applicatio
 Run `generate` after migrations commit; it cannot see an uncommitted schema on another session.
 
 For Jobs, `tenon jobs setup` creates offline installation SQL. It does not migrate storage on startup
-or upgrade existing installations. [Jobs storage](jobs.md#storage-and-grants) covers the explicit
+or upgrade existing installations. [Jobs storage](jobs.md#install-storage) covers the explicit
 version-1-to-2 upgrade and permissions.
 
 ## Adopt an existing schema

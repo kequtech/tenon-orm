@@ -39,7 +39,6 @@
     "dist/**/*.d.ts",
     "docs/",
     "examples/*.ts",
-    "examples/*.mjs",
     "CHANGELOG.md"
   ],
   "engines": {

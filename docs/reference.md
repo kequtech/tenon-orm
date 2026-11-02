@@ -89,11 +89,10 @@ is re-exported. Use queryClassic for finished SQL passed to a native executor.
 | Driver / server errors           | Original pgclear error / PostgreSQL SQLSTATE                                                          |
 | Concurrent work/cleanup failures | AggregateError preserving original errors                                                             |
 
-`findDriverErrors(error: unknown): readonly DriverError[]` is directly re-exported from pgclear.
-It follows own cause and AggregateError members, root/cause/member order, deduplicates identities,
-skips accessors and handles cycles. It returns evidence about individual operations, not a safe-to-retry
-or transaction-committed classification. [Error workflows](queries.md#errors) explain reconciliation.
-Use structured codes rather than messages, including PGCLEAR_COMMIT_UNKNOWN for uncertain commits.
+`findDriverErrors(error)` is directly re-exported from pgclear. It returns original driver errors
+through causes/aggregates, preserving operation evidence. The driver's
+[error guide](https://github.com/kequtech/pgclear/blob/main/docs/errors.md) owns traversal, outcomes,
+cancellation and recovery. Tenon's [error workflow](queries.md#errors) shows it at the ORM boundary.
 
 Common diagnoses: alias duplicate selected columns; choose string for default int8/count output;
 encode JSON/arrays explicitly; branch/skip empty patches; restore immutable applied migrations;
@@ -127,85 +126,31 @@ never executed. [Checking](checking.md) owns coverage, uncertainty and fingerpri
 
 ## Jobs
 
-Import defineJob/defineWorker and Jobs types/errors from Tenon for ORM transaction typing.
-`defineJob<Payload>({name,...policy})` returns an inert JobSpec. `defineWorker(spec, {handler,
-transactional?, concurrency?})` returns an executable definition. Inline definitions with handlers
-also work. Name is 1–200 nonblank characters. Payload is strict JSON data, not runtime-validated
-against its TypeScript declaration. [Jobs guide](jobs.md) explains workflows and ownership.
+Tenon re-exports defineJob/defineWorker with ORM Transaction types. JobSpec, saved policy,
+record/schedule types, RunnerOptions/RunnerHandle and original engine errors come from pgclear-jobs.
+The [Tenon walkthrough](jobs.md) shows setup, submissions and handlers; the
+[engine reference](https://github.com/kequtech/pgclear-jobs/blob/main/docs/reference.md) owns exact
+queue signatures, fields, defaults, events and errors. Those guides ship with the dependency.
 
-| Saved policy       | Default                          |
-| ------------------ | -------------------------------- |
-| maxAttempts        | 3 total, including first; 1–1000 |
-| retryDelayMs       | 1000; 0–86400000                 |
-| retryBackoff       | exponential; or fixed            |
-| retryMaxDelayMs    | 86400000; zero allowed           |
-| retryJitter        | true; half-to-full capped delay  |
-| executionTimeoutMs | 300000 per attempt               |
+| Tenon surface                       | Binding                                                                                           |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------- |
+| defineJob / defineWorker            | Inert producer specifications and executable handlers; transactional context uses ORM Transaction |
+| db.jobs / tx.jobs                   | Jobs record methods on the exact root/transaction scope, with Tenon lifetime checks               |
+| db.jobs.run(definitions,options?)   | Native engine lifetime promise; options forwarded                                                 |
+| db.jobs.start(definitions,options?) | Native ready/done handle; options forwarded                                                       |
+| createJobsMigration({directory?})   | Copy canonical installation SQL into an app migration pair; existing files remain unchanged       |
 
-Worker transactional defaults false; concurrency defaults to runner capacity. These are runtime
-settings, while submitted policy is saved and unchanged by later definition edits. Context includes
-id, attempt, maxAttempts, signal, scheduledFor and tx only for transactional handlers.
+Record methods include send, sendMany, request, get, getMany, find, stats, attempts, update,
+reschedule, cancel, retry, remove, prune, schedule, schedules and unschedule. Transaction scopes
+cannot start workers/install storage. A closed database rejects run and throws from start before
+starting work; expired transaction record facades reject even empty batches. Root db calls inside
+handlers commit independently of their supplied tx.
 
-| Record operation, on db.jobs or tx.jobs                  | Result / behavior                                                                  |
-| -------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| send(spec,payload,{id?,runAt?,delayMs?}?)                | Independent job; stable ID returns original while retained                         |
-| sendMany(spec,submissions)                               | Up to 1000 entries; inserted records only, duplicates skipped, no guaranteed order |
-| request(spec,payload,{key,runAt?,delayMs?})              | Unstarted head replacement or one coalesced successor                              |
-| get(id) / getMany(ids)                                   | Job<unknown>/null, or found records once in first-requested order; batch max 1000  |
-| find(spec,{key?,states?,limit?,after?}?)                 | Creation-time/UUID cursor order; default 100, max 1000                             |
-| stats(spec)                                              | State counts plus ready, delayed, blocked, total                                   |
-| attempts(id,{limit?}?)                                   | Latest first; number, startedAt, finishedAt, outcome, error; default 100, max 1000 |
-| update(spec,id,payload) / reschedule(id,runAt)           | Pending records only; preserve policy/history/budget                               |
-| cancel(id)                                               | Pending only, including backoff/successor                                          |
-| retry(id)                                                | Fresh linked job from failed record; occupied key/schedule rejects                 |
-| remove(id)                                               | Terminal only; false if absent; attempts cascade                                   |
-| prune(spec,{before,states?,limit?})                      | Bounded terminal cleanup; default completed/cancelled, limit 100, max 1000         |
-| schedule(spec,payload,{cron,timeZone?,key?,requestKey?}) | Durable producer; key defaults empty, timezone UTC                                 |
-| schedules(spec,{limit?}?) / unschedule(spec,key?)        | List by key or remove producer, leaving submitted work                             |
-
-Job fields: id, name, payload, nullable key/blockedBy, state (pending/running/completed/failed/cancelled),
-attempts, saved policy, runAt/createdAt/updatedAt, nullable finishedAt/lastError/scheduleId/scheduledFor/
-retryOf, opaque cursor. Schedule fields: id, name, key, nullable requestKey, payload, policy, cron,
-timeZone, nextRunAt, nullable lastJobId. Keys accept at most 500 characters, including empty.
-Timing accepts either runAt or delayMs, never both. Empty sendMany/getMany perform no SQL.
-
-`previewSchedule({cron,timeZone?},{from?,count?}?)` returns Dates strictly after from; default count 5,
-max 100. Five-field deterministic cron only. Unscheduling does not cancel jobs.
-
-`db.jobs.run(definitions, options?): Promise<void>` is the worker lifetime.
-`db.jobs.start(definitions, options?): RunnerHandle` exposes ready/done using that same runner.
-A closed database rejects run and throws from start before starting work. Neither exists on tx.jobs.
-Definitions must be nonempty, executable and uniquely named. Pool shutdown stays application-owned.
-
-| Runner option      | Default / contract                                           |
-| ------------------ | ------------------------------------------------------------ |
-| signal             | Application-owned shutdown signal                            |
-| onReady            | Awaited once after schema validation, before dispatch        |
-| concurrency        | 1; 1–1000 unfinished handlers, including cancelled callbacks |
-| notifications      | Optional dedicated listener connection; omit for polling     |
-| pollIntervalMs     | 1000; 30000 when notifications enabled                       |
-| recoveryIntervalMs | 1000                                                         |
-| leaseMs            | 30000; min 30, renewed each third                            |
-| shutdownTimeoutMs  | 30000; zero allowed                                          |
-| databaseTimeoutMs  | 10000                                                        |
-| retentionMs        | 604800000; positive safe integer or false; failures retained |
-| onEvent            | Best-effort local observation; not awaited                   |
-| onHandlerError     | Awaited continue/stop policy for escaping handler errors     |
-
-Other millisecond options accept integers 1–2147483647 unless noted. Runner handles reject ready
-on startup failure or pre-ready cancellation (AbortError); done covers final cleanup and later
-failures. Readiness is not ongoing health. [Hosting](jobs.md#hosting) gives complete ownership rules.
-
-Events: attemptStarted, attemptCompleted, attemptFailed (original error and saved retryAt),
-attemptAbandoned (leaseLost/deadlineExceeded/runnerStopped), runnerFailed (final original/aggregate
-error, optional originating attempt). AttemptInfo has id, name, attempt, maxAttempts, scheduledFor.
-Events are local/non-durable; observer failures warn with PGCLEAR_JOBS_OBSERVER_FAILED.
-
-HandlerFailure adds error, signal and transactional to AttemptInfo. Continue preserves normal retry;
-stop rejects before failure bookkeeping. Managed infrastructure failures bypass the hook. A hook
-failure/invalid action aggregates original handler and policy errors. Keep async action literals
-strict with `Promise<HandlerErrorAction>` if necessary. JobError accepts retry:false or retryAt,
-plus standard cause. JobNotFoundError/JobStateError expose jobId.
+Tenon applies its query guards/result modes/onQuery to ORM execution. The engine owns claims,
+leases, retries, schedules, observation and shutdown. db.close does not await workers; applications
+supervise and await them first. See Jobs' [hosting](https://github.com/kequtech/pgclear-jobs/blob/main/docs/hosting.md)
+and [storage](https://github.com/kequtech/pgclear-jobs/blob/main/docs/storage.md) guides for detailed
+lifecycle, upgrades and grants.
 
 ## Commands
 

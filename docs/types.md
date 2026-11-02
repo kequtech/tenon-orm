@@ -1,24 +1,29 @@
-# Types and values
+# Storage types and application values
 
-[All guides](../README.md) · [Queries](queries.md) · [Checking](checking.md)
+[Overview](../README.md) · [Queries](queries.md) · [Checking](checking.md)
 
-[Generate types](#generate-types) · [Writable fields](#writable-fields) ·
-[Value mappings](#value-mappings) · [Codecs](#codecs) · [Domain values](#domain-values)
+Tenon generates declarations from PostgreSQL storage. You still choose each query's projection and
+validate application values. The driver owns conversion; use its
+[value guide](https://github.com/kequtech/pgclear/blob/main/docs/values.md) for complete encoders,
+arrays, temporal behavior and codec metadata. That guide also ships with pgclear.
 
-## Generate types
+## Generate and check
 
 ```sh
 npx tenon generate
 npx tenon generate --check
 ```
 
-Generation is optional and works with any migration runner. Configure `generate.out` in the shared
-config, or supply `--out`. Namespace precedence is `--namespace`, `generate.namespace`,
-`migrations.namespace`, then `public`, independently of runtime search path.
+Configure generate.out or pass --out. Namespace precedence is --namespace, generate.namespace,
+migrations.namespace, then public; runtime search_path is independent. Generation works with any
+migration runner and requires no Tenon history. Run it after migrations commit.
 
-The output is a schema map:
+The output contains a schema map and comments describing tables, columns, keys, indexes, constraints
+and relevant domains. It includes ordinary tables/partitioned roots, excluding attached partitions,
+views/materialized views and the selected history table. It generates no runtime models or validators.
 
 ```ts
+import type { Parameter } from '@kequtech/tenon-orm';
 export type Database = {
   users: {
     row: { id: number; email: string; active: boolean };
@@ -32,98 +37,56 @@ export type Database = {
 };
 ```
 
-The generated file imports `Parameter` itself. It includes schema-summary comments for tables,
-columns, keys, indexes, constraints and relevant domains. Ordinary tables and partitioned roots
-are included; attached partitions, views/materialized views and Tenon's history table are excluded.
-Generation creates no models, relationship methods or validators.
-
-Use handwritten aliases and query projections:
+Keep handwritten aliases outside generated output:
 
 ```ts
 import type { Database as Storage } from './generated-schema.js';
-export type UserRow = Storage['users']['row'];
-export type UserSummary = Pick<UserRow, 'id' | 'email'>;
+export type UserSummary = Pick<Storage['users']['row'], 'id' | 'email'>;
 export type UserInsert = Storage['users']['insert'];
 ```
 
-This schema `Database` differs from Tenon's runtime `Database` interface. Leave generated output
-unchanged, keep aliases elsewhere and exclude the generated file from automatic formatting.
+A complete table row does not describe every join/aggregate. Use sql<UserSummary> for the actual
+projection. The generated Database differs from Tenon's runtime Database interface; alias imports
+when both are needed. Exclude generated output from formatting and keep its exact committed text.
 
-Generation reads a repeatable-read catalog snapshot and shares the migration advisory lock on one
-borrowed session. Use direct/session pooling. It runs after migrations commit and outside application
-callback transactions. Catalog decoding uses defaults, while generated application types use the
-chosen registry. Parent directories are created and output replaced atomically; failure preserves
-the prior file. `--check` writes nothing, creates no directories and reports a bounded stale diff.
-
-For source text without filesystem handling, use `generateDefinitions({ connection, namespace?,
-onWarning? })`. Warnings default to console.warn; a synchronous/asynchronous warning callback can
-reject generation. No programmatic tool discovers config implicitly.
+Generation uses a repeatable-read catalog snapshot and the shared migration advisory lock on one
+borrowed session, with default catalog decoding and selected application representations. Use direct/
+session pooling. The CLI creates directories and replaces output atomically; failures preserve the
+old file. --check creates/writes nothing and reports a bounded stale diff. Programmatic
+`generateDefinitions({connection,namespace?,onWarning?})` returns source without filesystem handling;
+warning callbacks may be asynchronous and failures reject. No programmatic tool discovers config.
 
 ## Writable fields
 
-Required insert fields are writable, nonnullable and have no default. Other writable insert fields
-and all update fields are optional, accepting explicit undefined under exactOptionalPropertyTypes.
+Insert fields are required when writable, nonnullable and without defaults. Other writable insert
+fields and all update fields are optional, accepting explicit undefined under exactOptionalPropertyTypes.
 
 - Computed columns and GENERATED ALWAYS identities use optional never fields.
-- Serial and GENERATED BY DEFAULT identities are optional on insert and writable on update.
-  Other primary keys remain writable.
-- Column defaults take precedence over domain defaults; domain chains also affect write nullability.
-- Every writable field accepts an explicit driver `Parameter` alongside plain compatible inputs.
+- Serial/GENERATED BY DEFAULT identities are optional on insert and writable on update. Other primary
+  keys remain writable.
+- Column defaults take precedence over domain defaults. Domain chains affect write nullability.
+- Every writable field accepts an explicit Parameter as well as plain compatible inputs.
 
-Apply types through an annotation, satisfies, or helper generic. Narrow accepted application fields
-with Pick/Omit and validate external data. Types do not enforce nonempty patches, authorization,
-JSON members or CHECK constraints. Selecting columns can discard required fields even from a
-well-typed input. [Object writes](queries.md#write-objects) explains omission and defaults.
+Use annotations, satisfies or helper generics; generating a file alone does not check a write. Narrow
+editable fields with Pick/Omit. Types do not enforce authorization, CHECK constraints, JSON members or
+nonempty patches. Explicit helper columns can discard required inputs. [Object writes](queries.md#write-objects)
+explains omission/default behavior.
 
-## Value mappings
+## Choose representations
 
-SQL NULL reads as null; nullable generated columns add it to their type. Input and output choices
-are separate. Defaults are deliberately exact for bigint, decimals and temporal text.
+| Common value                               | Default read                                       |
+| ------------------------------------------ | -------------------------------------------------- |
+| integer, serial, boolean, text, UUID       | number, boolean or string as appropriate           |
+| bigint / count(*), decimal, temporal types | string                                             |
+| JSON                                       | unknown                                            |
+| bytea                                      | Uint8Array                                         |
+| supported built-in arrays                  | recursive readonly PgArray of scalar/null elements |
 
-| PostgreSQL                                             | Default read                                       | Plain write input                              |
-| ------------------------------------------------------ | -------------------------------------------------- | ---------------------------------------------- |
-| smallint, integer, serial, oid                         | number                                             | number                                         |
-| bigint, bigserial, count(*)                            | exact string                                       | exact string or bigint                         |
-| numeric/decimal                                        | string                                             | string or bigint                               |
-| real/double precision                                  | number                                             | finite number                                  |
-| boolean                                                | boolean                                            | boolean                                        |
-| text, UUID, textual types                              | string                                             | string                                         |
-| enum with default decoding                             | catalog label union                                | catalog label union                            |
-| date, timestamp, timestamptz                           | string                                             | string, Date or supported Temporal value       |
-| time, interval                                         | string                                             | string or supported Temporal value             |
-| timetz                                                 | string                                             | string                                         |
-| json/jsonb                                             | unknown                                            | encoded JSON string or explicit json parameter |
-| bytea                                                  | Uint8Array                                         | Uint8Array                                     |
-| supported built-in arrays                              | recursive readonly PgArray of scalar/null elements | array text or explicit param                   |
-| unknown types and dynamic enum/domain/extension arrays | wire-text string                                   | encoded string or explicit param               |
+SQL NULL becomes null; nullable generated columns include it. Inputs and outputs differ: bigint/Date
+can bind directly without changing string reads. JSON and arrays require explicit encoding. Command
+rowCount is number|null independently of SQL aggregates. Full mappings belong to pgclear.
 
-Bound scalars also accept null; undefined, plain arrays/objects, nonfinite numbers and unsafe integer
-numbers reject. PostgreSQL validates ranges and text formats. Generated write types are conservative
-column contracts, while a Parameter explicitly selects an encoder.
-
-Use BigInt for exact integer arithmetic, converting to number only after checking the safe range.
-Command `rowCount` is number or null; it is independent of SQL count(*) and rejects overflow instead
-of rounding. Bigint/numeric arrays keep exact strings.
-
-Temporal strings preserve precision and infinity. Date inputs encode UTC; use a date string or
-Temporal plain value when an instant is not intended. Inputs never change output decoders. JSON
-numbers follow JavaScript precision; decoded JSON null and SQL NULL both become null.
-
-```ts
-import { builtin, json, param, sql } from '@kequtech/tenon-orm';
-
-const ids = ['123e4567-e89b-42d3-a456-426614174000'];
-const query = sql`SELECT id FROM public.assets WHERE id = ANY(${param(ids, builtin.uuidArray)})`;
-const document = json({ tags: ['news'] });
-```
-
-The UUID example assumes `public.assets(id uuid)`. UUID-array encoding uses PostgreSQL's UUID-array
-OID and supports empty arrays and null elements; PostgreSQL validates UUIDs. `textArray` with an
-explicit `::uuid[]` cast is also valid. PostgreSQL arrays and JSON arrays have separate encoders.
-
-## Codecs
-
-Set codecs once in shared configuration:
+Configure representations once so runtime and tooling agree:
 
 ```ts
 import { builtin, defaultCodecs, type TenonConfig } from '@kequtech/tenon-orm';
@@ -135,41 +98,22 @@ export const main = {
 } satisfies TenonConfig;
 ```
 
-Runtime, generation, Describe and source checks now agree on bigint and millisecond-precision Date
-outputs. Scalar overrides affect derived built-in arrays; explicit array overrides win. Date/Temporal
-output codecs reject infinity and unsupported ranges. Tenon has no per-query output-codec override;
-native pgclear can provide one where explicitly needed. Parameter encoders remain independent.
+Regenerate/review declarations after codec changes. Tenon re-exports driver helpers without owning
+another codec registry. Custom text.typescript declarations are trusted metadata; unidentified
+decoders warn and become unknown. Default enum decoding preserves catalog label unions, even after
+unrelated codec changes. A custom enum decoder uses its declared representation; declaring string
+does not establish label preservation. Enum write types still use catalog choices.
 
-For Temporal, supply native constructors or a compatible application-installed polyfill:
+Type-import expressions resolve beside generated files and from the tsconfig directory during
+checking; choose a package/alias available in both. Resolution does not execute referenced modules.
+Native/polyfilled Temporal choices, exact-number handling and decoding diagnostics are described in
+the driver's value/error guides, rather than duplicated here.
 
-```ts
-import { Temporal } from '@js-temporal/polyfill';
-import { createTemporalCodecs, defaultCodecs } from '@kequtech/tenon-orm';
+## Keep domain validation explicit
 
-const temporal = createTemporalCodecs(Temporal, {
-  typescriptNamespace: 'import("@js-temporal/polyfill").Temporal',
-});
-const codecs = defaultCodecs.with(temporal.date).with(temporal.timestamptz);
-```
-
-Tenon installs no polyfill and changes no globals. Native Temporal needs matching TypeScript library
-declarations. A custom text codec can declare `text.typescript` for its non-NULL output. This metadata
-is trusted; an unidentified decoder warns and becomes unknown. Catalog base types never replace
-the selected wire decoder's contract.
-
-Default enum decoding retains catalog labels even when unrelated codecs change. Custom enum
-decoders use their own declared representations; declaring string does not prove labels are
-preserved. Enum write inputs still use catalog choices. Type-import expressions resolve beside
-the generated file and from the tsconfig directory during checking; prefer a package/alias valid
-in both places. Type resolution does not execute those modules.
-
-`PGCLEAR_DECODE` errors may expose column and dataTypeOid without SQL or row values. The original
-decoder exception remains in cause and can contain application data; choose logging deliberately.
-
-## Domain values
-
-Generated types describe storage. Text CHECK constraints do not become application unions, and
-JSON stays unknown. Validate at the persistence boundary before narrowing:
+Storage can be broader than a product's types. Text CHECK constraints do not become application
+unions and JSON reads remain unknown. Validate external inputs and stored domain values before
+narrowing them:
 
 ```ts
 function sessionData(value: unknown): { userId: string } {
@@ -186,7 +130,7 @@ function sessionData(value: unknown): { userId: string } {
 }
 ```
 
-Use the same policy for writes and reads. For expiry-sensitive queries, consider PostgreSQL infinity
-explicitly: `isfinite(expires_at) AND expires_at > now()` excludes positive infinity before Date
-conversion. Keep equivalent rules in updates/deletes and test expired, infinite and invalid values.
-Fresh generated output establishes neither domain validity nor schema equivalence; see [checking](checking.md).
+Use the same policy on writes and reads. For expiry-sensitive SQL, decide deliberately how infinity
+is handled; `isfinite(expires_at) AND expires_at > now()` excludes it before Date conversion. Test
+those domain choices. Fresh declarations establish neither domain validity nor complete schema
+equivalence; [checking](checking.md) separates those contracts.

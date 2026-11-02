@@ -2,6 +2,7 @@
 
 [All guides](../README.md) · [Queries](queries.md) · [Reference](reference.md)
 
+Tenon is designed for coding agents: keep SQL, types and transaction boundaries visible together.
 This walkthrough creates one table, writes a reusable query and verifies a guarded transaction.
 Use Node.js 24+, PostgreSQL 16+, TypeScript 6+ and ESM. You need an existing database; Tenon does
 not create databases or load `.env` files.
@@ -166,5 +167,5 @@ assert.equal(user?.active, false);
 
 Also test rollback and authorization paths for changed workflows. Type annotations are declarations;
 source checks do not prove result nullability, JSON contents or business invariants. The
-[checking guide](checking.md) explains what each tool establishes. Learn [value mappings](types.md#value-mappings)
+[checking guide](checking.md) explains what each tool establishes. Learn [value mappings](types.md#choose-representations)
 before choosing types for bigint, decimal, JSON, arrays or timestamps.

@@ -2,6 +2,12 @@
 
 ## 0.5.0
 
+- Keep detailed queue/driver contracts in their owning packages. Tenon's guides retain concise
+  ORM usage and integration boundaries, with coding-agent positioning in the README and first-use guide.
+- Move generic Next process hosting and its standalone tests into pgclear-jobs; retain ORM-specific
+  examples/tests here. Native parameter-limit behavior remains covered in pgclear, while Tenon
+  retains composition limits and execution/inspection integration coverage.
+
 - Replace the 15-guide documentation structure with seven task guides and a shorter README.
   Humans and coding agents use the same first-use/existing-project workflow. Old pages map as follows:
 
@@ -25,7 +31,7 @@
   transaction-outcome guess or retry wrapper.
 - Recover immutable finite string-literal identifier parameters in source checks, including imported
   aliases and reused names. Correlated object choices and open/mutable names stay unchecked.
-- Ship a supervised Next.js process-hosting recipe and tested runtime-role grants. Process policy,
+- Document the supervised Next.js host and tested runtime-role grants shipped by pgclear-jobs. Process policy,
   durable application results, authorization and external-effect reconciliation remain app-owned.
 
 ## 0.4.11

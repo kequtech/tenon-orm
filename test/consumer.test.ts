@@ -76,7 +76,6 @@ test('the packed package preserves API contracts and consumes generated .d.ts sc
       'docs/checking.md',
       'docs/jobs.md',
       'docs/reference.md',
-      'examples/next-host.mjs',
       'examples/jobs-worker.ts',
       'examples/jobs-host.ts',
     ]) {
@@ -86,7 +85,7 @@ test('the packed package preserves API contracts and consumes generated .d.ts sc
       assert.ok(
         ['LICENSE', 'README.md', 'CHANGELOG.md', 'package.json'].includes(path) ||
           /^docs\/(?:[\w-]+\/)*[\w-]+\.md$/.test(path) ||
-          /^examples\/[\w-]+\.(?:ts|mjs)$/.test(path) ||
+          /^examples\/[\w-]+\.ts$/.test(path) ||
           /^dist\/(?:[\w-]+\/)*[\w-]+\.(?:js|d\.ts)$/.test(path),
         `Unexpected package content: ${path}`,
       );

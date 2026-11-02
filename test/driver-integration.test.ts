@@ -97,17 +97,6 @@ test('borrowed pools retain custom pgclear codecs without modification', async (
   }
 });
 
-test("unnamed execution accepts PostgreSQL's full 65535-parameter limit", async (t) => {
-  const db = createTenon({ connection: testConnection });
-  t.after(() => db.close());
-  const size = 65535;
-  const query = unsafeSql<{ count: number }>(
-    `SELECT cardinality(ARRAY[${Array.from({ length: size }, (_, i) => `$${i + 1}::integer`).join(',')}]) AS count`,
-    Array(size).fill(1),
-  );
-  assert.deepEqual(await db.query(query, { returns: 'one' }), { count: size });
-});
-
 test('Unicode field names, leading BOMs and array whitespace agree between Describe and execution', async () => {
   const db = createTenon({ connection: testConnection });
   try {

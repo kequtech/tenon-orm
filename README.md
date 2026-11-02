@@ -1,7 +1,7 @@
 # Tenon ORM
 
-Explicit PostgreSQL SQL, typed query results, guarded writes and application-owned SQL migrations.
-Built for coding agents and the people reading their work. Node.js 24+, PostgreSQL 16+, TypeScript
+A PostgreSQL ORM designed for coding agents and the people reading their work.
+Explicit SQL, typed query results, guarded writes and application-owned SQL migrations. Node.js 24+, PostgreSQL 16+, TypeScript
 6+, ESM.
 
 ```sh
@@ -45,6 +45,10 @@ A server reuses one database instance and closes it after its requests and worke
 | Check source SQL, inspect queries and compare schemas        | [Checking](docs/checking.md)               |
 | Produce and run reliable background work                     | [Jobs](docs/jobs.md)                       |
 | Look up signatures, defaults, errors and commands            | [Reference](docs/reference.md)             |
+
+Tenon documents the application-facing workflow. The included libraries own their detailed
+[driver contracts](https://github.com/kequtech/pgclear/blob/main/README.md) and
+[queue contracts](https://github.com/kequtech/pgclear-jobs/blob/main/README.md); both also work standalone.
 
 The guides and [changelog](CHANGELOG.md) ship with the package. Read the installed version's docs.
 Maintainer instructions are in

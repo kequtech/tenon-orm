@@ -217,8 +217,6 @@ try {
 }
 ```
 
-A rejected commit does not prove rollback. The helper returns original driver errors through causes
-and aggregates, once each, without wrapping or logging. It skips getters and handles cycles. Each
-outcome concerns one operation; even `confirmed` is not proof of a surrounding transaction's commit.
-Absence of a commit-unknown error proves neither success nor rollback. Reconcile before repeating
-external effects or deleting an uploaded object that a committed row may reference.
+The helper is re-exported unchanged. A rejected commit does not prove rollback; retain stable IDs and reconcile before repeating effects or deleting objects a committed row
+may reference. Exact operation outcomes and traversal behavior belong to the driver's
+[error guide](https://github.com/kequtech/pgclear/blob/main/docs/errors.md).

@@ -1,10 +1,36 @@
-# Pgclear integration
+# Library boundaries
 
-Tenon includes `@kequtech/pgclear` as a runtime dependency, currently supporting 0.3.x. This document
-explains the library boundary for maintenance. Application contracts belong in the
+Tenon depends on standalone pgclear and pgclear-jobs packages. This document records their
+responsibilities and the ORM integration boundary for maintenance. Application contracts belong in the
 [reference](docs/reference.md), value mappings in [schema types](docs/types.md), and
-consumer-visible changes in the [changelog](CHANGELOG.md). The
-[integration brief](notes/tenon-pgclear-integration-brief.md) records the original agreement.
+consumer-visible changes in the [changelog](CHANGELOG.md).
+
+## Ownership review for 0.5.0
+
+The standalone dependency direction remains Tenon → pgclear-jobs → pgclear (Tenon also depends
+on pgclear directly). No library imports a sibling repository's source. Public package APIs and
+packed artifacts are the integration boundary.
+
+| Layer        | Runtime/tooling ownership                                                                                                 | Documentation and tests                                                                      |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| pgclear      | Protocol, pools/scopes, cancellation/outcomes, codecs, raw Describe, streams/COPY/LISTEN                                  | Exact native contracts and native fault/parameter-limit tests                                |
+| pgclear-jobs | Queue SQL/storage upgrades, records, claims/retries/keys/schedules, runner and generic adapter                            | Queue semantics, grants, reliability, process-host recipes and standalone/custom-scope tests |
+| Tenon        | SQL composition, projections/guards, query observation, schema interpretation/generation/checking, application migrations | ORM workflows and adapter regressions for scope, guard, observation and migration generation |
+| Application  | Process/restart policy, authorization, business IDs/results, external effects                                             | Product and operational validation                                                           |
+
+The adapters delegate transport and queue behavior to their owners. The generic Next host and its real framework fixture moved from Tenon
+to Jobs and now use a native worker with no Tenon installation. Tenon's HTTP/worker examples remain
+because they demonstrate ORM query guards/transaction typing. Its execution/inspection, codec and
+cleanup tests remain integration regressions; the duplicated raw 65,535-parameter test was removed
+because pgclear already verifies both the maximum and overflow. Tenon retains its own SQL builder
+and checker parameter-limit tests.
+
+Detailed driver/queue reference material belongs in those packages. Tenon gives concise integration
+examples and links to the owning guides. Consumer guides/examples ship with each package;
+architecture, contributor instructions and active design decisions stay repository-only. Retired
+investigations remain in Git history.
+Package tests verify installed documentation files/anchors, rather than prose wording. Versions
+remain Tenon 0.5.0, pgclear 0.3.5 and pgclear-jobs 0.2.1.
 
 ## Execution and ownership
 

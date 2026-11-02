@@ -47,8 +47,8 @@ TENON_TEST_PGCLEAR_TARBALL=/absolute/path/pgclear.tgz TENON_TEST_JOBS_TARBALL=/a
 ```
 
 Either candidate can be selected independently. The harness overrides transitive resolution to use
-that artifact; omitted variables use registry dependencies. This also validates the real Next.js
-host fixture in a disposable consumer installation; Next/React are test-fixture dependencies only.
+that artifact; omitted variables use registry dependencies. Jobs owns the real Next.js host fixture
+and its native worker tests. Tenon keeps the ORM worker entry and guarded HTTP-host integration checks.
 
 Tenon 0.5.0 currently requires the prepared but unpublished pgclear 0.3.5 and Jobs 0.2.1 patches.
 Until they are published, use the local packed-artifact workflow above. Their lockfile entries reserve
@@ -119,9 +119,9 @@ links and heading anchors inside the installed package. Use repository URLs for 
 contracts in the reference or focused guide and link to them instead of repeating the details in
 every introduction.
 
-Historical investigations in `notes/` are excluded from the package and are not current API docs.
-The [integration brief](notes/tenon-pgclear-integration-brief.md) records the agreed driver boundary;
-the [archived review](notes/pgclear-author-feedback-2026-10-28.md) explains the original investigation.
+Keep current boundary decisions in [CONSIDERATIONS.md](CONSIDERATIONS.md). The short
+[0.5.0 scope note](notes/0.5.0-plan.md) retains release choices and deferred requests; Git history
+preserves completed investigations and retired implementation plans.
 
 ## Release
 

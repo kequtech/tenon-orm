@@ -135,7 +135,7 @@ test('the packed package preserves API contracts and consumes generated .d.ts sc
     assert.deepEqual(metadata.dependencies, {
       '@kequtech/pgclear': '^0.3.6',
       '@kequtech/pgclear-jobs': '^0.3.0',
-      typescript: '~7.0.2',
+      typescript: '7.0.2',
     });
     assert.equal(metadata.peerDependencies, undefined);
     assert.equal(

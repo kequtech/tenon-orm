@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Migrate source checking to TypeScript 7's native compiler API and use one TypeScript dependency
+- Migrate source checking to TypeScript 7's native compiler API and use one pinned TypeScript 7.0.2 dependency
   for builds and checking. Keep TypeScript 6 declaration compatibility checks in an isolated consumer.
 
 ## 0.5.2

@@ -67,7 +67,9 @@ Tenon consumes these expressions instead of maintaining another decoder registry
 resolves them in the application's TypeScript project without executing modules. `readTypes` is a
 fallback only for unidentified decoder representations; it cannot replace known metadata.
 The checker uses the included TypeScript 7 native compiler through its unstable API entry points,
-kept at one internal import boundary. Each check owns and closes its native compiler session,
+kept at one internal import boundary. Pin the dependency to the exact tested version while these
+APIs are unstable; compiler upgrades require running the checker and packed-consumer regressions.
+Each check owns and closes its native compiler session,
 including failures and early returns. The same compiler's `--showConfig` command supplies root
 files and project references, while the virtual config extends the original to preserve the base
 paths of inherited options. Checker-only modules and configuration stay in a virtual filesystem

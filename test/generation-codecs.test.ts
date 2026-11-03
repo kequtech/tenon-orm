@@ -142,7 +142,7 @@ test('generation uses declared scalar and derived-array outputs while catalog de
           `,
         );
         await run(process.execPath, [
-          resolve('node_modules/typescript-next/bin/tsc'),
+          resolve('node_modules/typescript/bin/tsc'),
           '--project',
           join(options.directory, 'tsconfig.json'),
         ]);

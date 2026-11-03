@@ -88,12 +88,10 @@ test('custom Describe declarations preserve nullable function types, imported ty
         files: ['consumer.ts'],
       }),
     );
-    for (const compiler of ['typescript', 'typescript-next']) {
-      try {
-        await run(process.execPath, [resolve('node_modules', compiler, 'bin/tsc'), '-p', config]);
-      } catch (error) {
-        throw new Error((error as { stdout?: string }).stdout ?? String(error), { cause: error });
-      }
+    try {
+      await run(process.execPath, [resolve('node_modules/typescript/bin/tsc'), '-p', config]);
+    } catch (error) {
+      throw new Error((error as { stdout?: string }).stdout ?? String(error), { cause: error });
     }
   } finally {
     await native.close();

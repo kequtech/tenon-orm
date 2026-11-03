@@ -98,9 +98,6 @@ test('the packed package preserves API contracts and consumes generated .d.ts sc
     const nodeTypes = JSON.parse(
       await readFile(resolve('node_modules/@types/node/package.json'), 'utf8'),
     ) as { version: string };
-    const minimum = JSON.parse(
-      await readFile(resolve('node_modules/typescript/package.json'), 'utf8'),
-    ) as { version: string };
     await writeFile(
       join(consumer, 'package.json'),
       JSON.stringify({
@@ -114,7 +111,8 @@ test('the packed package preserves API contracts and consumes generated .d.ts sc
           ...jobsDependency,
         },
         devDependencies: {
-          typescript: minimum.version,
+          // Keep declaration compatibility with applications on TypeScript 6.
+          typescript: '~6.0.2',
           '@types/node': nodeTypes.version,
         },
       }),
@@ -137,7 +135,7 @@ test('the packed package preserves API contracts and consumes generated .d.ts sc
     assert.deepEqual(metadata.dependencies, {
       '@kequtech/pgclear': '^0.3.6',
       '@kequtech/pgclear-jobs': '^0.3.0',
-      typescript: '~6.0.2',
+      typescript: '~7.0.2',
     });
     assert.equal(metadata.peerDependencies, undefined);
     assert.equal(
@@ -334,7 +332,7 @@ test('the packed package preserves API contracts and consumes generated .d.ts sc
         );
         for (const compiler of [
           join(consumer, 'node_modules/typescript/bin/tsc'),
-          resolve('node_modules/typescript-next/bin/tsc'),
+          resolve('node_modules/typescript/bin/tsc'),
         ]) {
           try {
             await run(process.execPath, [compiler, '-p', config], { cwd: consumer });

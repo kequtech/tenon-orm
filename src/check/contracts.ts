@@ -1,4 +1,4 @@
-import ts from 'typescript';
+import * as ts from './compiler.js';
 import type { QueryDescription } from '../inspection/types.js';
 import { location, type Project } from './project.js';
 import type { QueryNode } from './source.js';
@@ -7,10 +7,10 @@ import type { CheckDiagnostic } from './types.js';
 function kinds(project: Project, type: ts.Type, seen = new Set<ts.Type>()): Set<string> {
   if (seen.has(type)) return new Set();
   seen.add(type);
-  if (type.isUnion())
-    return new Set(type.types.flatMap((member) => [...kinds(project, member, seen)]));
-  if (type.isIntersection())
-    return new Set(type.types.flatMap((member) => [...kinds(project, member, seen)]));
+  if (type.isUnionType())
+    return new Set(type.getTypes().flatMap((member) => [...kinds(project, member, seen)]));
+  if (type.isIntersectionType())
+    return new Set(type.getTypes().flatMap((member) => [...kinds(project, member, seen)]));
   if (type.flags & (ts.TypeFlags.Null | ts.TypeFlags.Undefined | ts.TypeFlags.Never))
     return new Set();
   if (type.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown | ts.TypeFlags.TypeParameter))
@@ -29,9 +29,9 @@ function kinds(project: Project, type: ts.Type, seen = new Set<ts.Type>()): Set<
 
 function disjoint(project: Project, actual: ts.Type, expected: ts.Type, depth = 0): boolean {
   if (depth > 8) return false;
-  if (expected.isUnion())
-    return expected.types.every((member) => disjoint(project, actual, member, depth + 1));
-  if (actual.isStringLiteral() && expected.isStringLiteral())
+  if (expected.isUnionType())
+    return expected.getTypes().every((member) => disjoint(project, actual, member, depth + 1));
+  if (actual.isStringLiteralType() && expected.isStringLiteralType())
     return actual.value !== expected.value;
   const a = kinds(project, actual),
     b = kinds(project, expected);
@@ -40,8 +40,10 @@ function disjoint(project: Project, actual: ts.Type, expected: ts.Type, depth = 
   if (![...a].some((kind) => b.has(kind))) return true;
   if (a.size === 1 && a.has('array') && b.size === 1 && b.has('array')) {
     const elements = (type: ts.Type): ts.Type[] =>
-      (type.isUnion() ? type.types : [type]).flatMap((part) => {
-        const element = project.checker.getIndexTypeOfType(part, ts.IndexKind.Number);
+      (type.isUnionType() ? type.getTypes() : [type]).flatMap((part) => {
+        const element = project.checker
+          .getIndexInfosOfType(part)
+          .find((info) => info.keyType.flags & ts.TypeFlags.Number)?.valueType;
         return element ? [element] : [];
       });
     const actualElements = elements(actual),
@@ -53,8 +55,8 @@ function disjoint(project: Project, actual: ts.Type, expected: ts.Type, depth = 
     );
   }
   if (a.size === 1 && a.has('object') && b.size === 1 && b.has('object')) {
-    for (const property of actual.getProperties()) {
-      const other = expected.getProperty(property.name);
+    for (const property of project.checker.getPropertiesOfType(actual)) {
+      const other = project.checker.getPropertyOfType(expected, property.name);
       if (
         !other ||
         (property.flags & ts.SymbolFlags.Optional && other.flags & ts.SymbolFlags.Optional)
@@ -80,7 +82,7 @@ function rowType(project: Project, query: QueryNode): ts.Type | undefined {
   if (explicit) return project.checker.getTypeFromTypeNode(explicit);
   const contextual = project.checker.getContextualType(query);
   const type = contextual ?? project.checker.getTypeAtLocation(query);
-  const property = type.getProperty('__rowType');
+  const property = type && project.checker.getPropertyOfType(type, '__rowType');
   return property
     ? project.checker.getNonNullableType(project.checker.getTypeOfSymbolAtLocation(property, query))
     : undefined;
@@ -93,6 +95,11 @@ export function compareContracts(
   description: QueryDescription,
   readTypes: Readonly<Record<number, string>>,
 ): CheckDiagnostic[] {
+  project.addTypes(
+    description.columns.flatMap(
+      (column) => column.enumLabels?.map((label) => JSON.stringify(label)) ?? [],
+    ),
+  );
   const checker = project.checker;
   const at = location(query);
   const diagnostics: CheckDiagnostic[] = [];
@@ -119,10 +126,10 @@ export function compareContracts(
     });
     return diagnostics;
   }
-  const alternatives = declared.isUnion() ? declared.types : [declared];
+  const alternatives = declared.isUnionType() ? declared.getTypes() : [declared];
   const results = alternatives.map((row) => {
     const findings: CheckDiagnostic[] = [];
-    for (const property of row.getProperties()) {
+    for (const property of checker.getPropertiesOfType(row)) {
       if (
         !(property.flags & ts.SymbolFlags.Optional) &&
         !description.columns.some((column) => column.name === property.name)
@@ -139,15 +146,16 @@ export function compareContracts(
       }
     }
     for (const column of description.columns) {
-      const property = row.getProperty(column.name);
+      const property = checker.getPropertyOfType(row, column.name);
       const expected = property
         ? checker.getTypeOfSymbolAtLocation(property, query)
-        : checker.getIndexTypeOfType(row, ts.IndexKind.String);
+        : checker.getIndexInfosOfType(row).find((info) => info.keyType.flags & ts.TypeFlags.String)
+            ?.valueType;
       if (!expected) continue; // Structural result types may omit additional selected columns.
       const representation = readTypes[column.oid] ?? column.readType;
       const actual = project.types.get(representation);
       const actualTypes =
-        column.enumLabels?.map((label) => checker.getStringLiteralType(label)) ??
+        column.enumLabels?.map((label) => project.types.get(JSON.stringify(label))!) ??
         (actual && !(actual.flags & (ts.TypeFlags.Unknown | ts.TypeFlags.Any))
           ? [actual]
           : undefined);
@@ -166,7 +174,7 @@ export function compareContracts(
         });
         continue;
       }
-      const nonnull = checker.getNonNullableType(expected);
+      const nonnull = checker.getNonNullableType(expected) ?? expected;
       if (nonnull.flags & ts.TypeFlags.Any) {
         findings.push({
           ...common,

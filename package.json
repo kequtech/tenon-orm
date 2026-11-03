@@ -61,8 +61,7 @@
   "devDependencies": {
     "@js-temporal/polyfill": "^0.5.1",
     "@types/node": "^24.19.2",
-    "prettier": "^3.9.10",
-    "typescript-next": "npm:typescript@^7.0.2"
+    "prettier": "^3.9.10"
   },
   "bin": {
     "tenon": "dist/cli.js"
@@ -74,6 +73,6 @@
   "dependencies": {
     "@kequtech/pgclear": "^0.3.6",
     "@kequtech/pgclear-jobs": "^0.3.0",
-    "typescript": "~6.0.2"
+    "typescript": "~7.0.2"
   }
 }

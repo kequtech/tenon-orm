@@ -1,5 +1,5 @@
 import { builtin } from '@kequtech/pgclear';
-import ts from 'typescript';
+import * as ts from './compiler.js';
 import { assignmentParts, insertParts } from '../mutations.js';
 import { joinSeparator, quote } from '../sql.js';
 import { location, symbol, type Project } from './project.js';
@@ -40,7 +40,7 @@ function unwrap(node: ts.Expression): ts.Expression {
   while (
     ts.isParenthesizedExpression(node) ||
     ts.isAsExpression(node) ||
-    ts.isTypeAssertionExpression(node) ||
+    ts.isTypeAssertion(node) ||
     ts.isSatisfiesExpression(node) ||
     ts.isNonNullExpression(node)
   )
@@ -48,11 +48,8 @@ function unwrap(node: ts.Expression): ts.Expression {
   return node;
 }
 
-function variable(
-  checker: ts.TypeChecker,
-  node: ts.Expression,
-): ts.VariableDeclaration | undefined {
-  const declaration = symbol(checker, node)?.valueDeclaration;
+function variable(checker: ts.Checker, node: ts.Expression): ts.VariableDeclaration | undefined {
+  const declaration = symbol(checker, node)?.valueDeclaration?.resolve();
   return declaration && ts.isVariableDeclaration(declaration) ? declaration : undefined;
 }
 
@@ -109,7 +106,7 @@ export class SourceAnalysis {
     const queries: QueryNode[] = [];
     const visit = (node: ts.Node) => {
       if (this.query(node)) queries.push(node);
-      ts.forEachChild(node, visit);
+      node.forEachChild(visit);
     };
     visit(source);
     return queries;
@@ -130,9 +127,14 @@ export class SourceAnalysis {
       return undefined;
     const client = this.libraries.get('@kequtech/tenon-orm:QueryClient');
     const method =
-      client && this.project.checker.getDeclaredTypeOfSymbol(client).getProperty('query');
-    const declaration = this.project.checker.getResolvedSignature(call)?.declaration;
-    if (!declaration || !method?.declarations?.includes(declaration)) return undefined;
+      client &&
+      this.project.checker.getPropertyOfType(
+        this.project.checker.getDeclaredTypeOfSymbol(client),
+        'query',
+      );
+    const declaration = this.project.checker.getResolvedSignature(call)?.declaration?.resolve();
+    if (!declaration || !method?.declarations.some((handle) => handle.resolve() === declaration))
+      return undefined;
     const options = call.arguments[1] && unwrap(call.arguments[1]);
     if (
       !options ||
@@ -146,12 +148,13 @@ export class SourceAnalysis {
       return undefined;
     const labels = options.properties.filter(
       (property) =>
+        'name' in property &&
         property.name &&
         (ts.isIdentifier(property.name) || ts.isStringLiteral(property.name)) &&
         property.name.text === 'label',
     );
     const label = labels.length === 1 ? labels[0] : undefined;
-    return label && ts.isPropertyAssignment(label) && ts.isStringLiteralLike(label.initializer)
+    return label && ts.isPropertyAssignment(label) && ts.isStringLiteralLikeNode(label.initializer)
       ? label.initializer.text
       : undefined;
   }
@@ -257,7 +260,7 @@ export class SourceAnalysis {
           const exportedAlias = ts.isExportSpecifier(parent) || ts.isImportSpecifier(parent);
           if (!safe && !exportedAlias) this.fail(reference, code, message);
         }
-        ts.forEachChild(reference, visit);
+        reference.forEachChild(visit);
       };
       visit(source);
     }
@@ -319,9 +322,12 @@ export class SourceAnalysis {
   ): Expansion[] {
     let variants: Expansion[] = [{ parts: [], choices: new Map() }];
     for (const fragment of fragments) {
-      const type = this.project.checker.getTypeAtLocation(fragment);
+      const type =
+        this.project.checker.getTypeAtLocation(fragment) ?? this.project.checker.getUnknownType();
       if (
-        !(type.isUnion() ? type.types : [type]).every((part) => part.getProperty('__tenonFragment'))
+        !(type.isUnionType() ? type.getTypes() : [type]).every((part) =>
+          this.project.checker.getPropertyOfType(part, '__tenonFragment'),
+        )
       )
         return this.fail(
           fragment,
@@ -367,7 +373,11 @@ export class SourceAnalysis {
     const inBlock = (at: ts.Node): ts.Statement | undefined => {
       let current = at;
       while (current.parent !== block) {
-        if (!current.parent || ts.isFunctionLike(current) || ts.isClassLike(current))
+        if (
+          !current.parent ||
+          ts.isFunctionLikeDeclaration(current) ||
+          ts.isClassLikeDeclaration(current)
+        )
           return undefined;
         current = current.parent;
       }
@@ -380,7 +390,7 @@ export class SourceAnalysis {
     const pushes = new Set<ts.CallExpression>();
     const referencesList = (at: ts.Node): boolean =>
       (ts.isIdentifier(at) && symbol(this.project.checker, at) === target) ||
-      !!ts.forEachChild(at, referencesList);
+      !!at.forEachChild(referencesList);
     const sequence = (statements: readonly ts.Statement[], level: number): Expansion[] => {
       if (level > 32)
         return this.fail(call, 'composition-depth', 'List composition exceeds the depth limit.');
@@ -445,14 +455,14 @@ export class SourceAnalysis {
           block.statements.indexOf(inBlock(parent)!) >= end;
         if (!push && !join) reject(reference);
       }
-      ts.forEachChild(reference, visit);
+      reference.forEachChild(visit);
     };
     visit(block);
     return this.appendJoined(initial, additions, separator, call);
   }
 
   private stableBinding(target: ts.Symbol): boolean {
-    const declaration = target.valueDeclaration;
+    const declaration = target.valueDeclaration?.resolve();
     if (!declaration) return false;
     if (!this.stableBindings.has(target)) {
       let written = false;
@@ -462,7 +472,7 @@ export class SourceAnalysis {
         if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) return false;
         return (
           (ts.isIdentifier(node) && symbol(this.project.checker, node) === target) ||
-          !!ts.forEachChild(node, contains)
+          !!node.forEachChild(contains)
         );
       };
       const visit = (candidate: ts.Node): void => {
@@ -486,7 +496,7 @@ export class SourceAnalysis {
           contains(candidate.initializer)
         )
           written = true;
-        ts.forEachChild(candidate, visit);
+        candidate.forEachChild(visit);
       };
       visit(declaration.getSourceFile());
       this.stableBindings.set(target, !written);
@@ -525,9 +535,9 @@ export class SourceAnalysis {
     }
     const target = symbol(this.project.checker, condition);
     const declaration = variable(this.project.checker, condition);
-    const valueDeclaration = target?.valueDeclaration;
+    const valueDeclaration = target?.valueDeclaration?.resolve();
     let stable = !!declaration && constant(declaration);
-    if (target && valueDeclaration && ts.isParameter(valueDeclaration)) {
+    if (target && valueDeclaration && ts.isParameterDeclaration(valueDeclaration)) {
       stable = this.stableBinding(target);
     }
     if (target && !stable) {
@@ -601,10 +611,15 @@ export class SourceAnalysis {
     const node = this.reference(input, depth);
     if (ts.isConditionalExpression(node))
       return this.conditional(node, depth, (branch, depth) => this.identifierName(branch, depth));
-    if (!ts.isStringLiteralLike(node)) {
+    if (!ts.isStringLiteralLikeNode(node)) {
       const target = symbol(this.project.checker, node);
-      const declaration = target?.valueDeclaration;
-      if (target && ts.isIdentifier(node) && declaration && ts.isParameter(declaration)) {
+      const declaration = target?.valueDeclaration?.resolve();
+      if (
+        target &&
+        ts.isIdentifier(node) &&
+        declaration &&
+        ts.isParameterDeclaration(declaration)
+      ) {
         // The same immutable parameter must select the same name wherever it is reused.
         if (!this.stableBinding(target))
           return this.fail(
@@ -612,15 +627,16 @@ export class SourceAnalysis {
             'dynamic-binding',
             'Identifier parameters must not be reassigned.',
           );
-        const type = this.project.checker.getTypeAtLocation(node);
-        const members = type.isUnion() ? type.types : [type];
+        const type =
+          this.project.checker.getTypeAtLocation(node) ?? this.project.checker.getUnknownType();
+        const members = type.isUnionType() ? type.getTypes() : [type];
         if (members.length > variantLimit)
           return this.fail(
             node,
             'variant-limit',
             `The query exceeds the ${variantLimit}-variant budget.`,
           );
-        if (members.length && members.every((member) => member.isStringLiteral())) {
+        if (members.length && members.every((member) => member.isStringLiteralType())) {
           return members.map((member) => {
             try {
               return {
@@ -657,7 +673,7 @@ export class SourceAnalysis {
   /** Substitute direct parameters into a single-return template; never execute helper code. */
   private fragmentFactory(call: ts.CallExpression, depth: number): Expansion[] | undefined {
     const target = symbol(this.project.checker, unwrap(call.expression));
-    const declaration = target?.valueDeclaration;
+    const declaration = target?.valueDeclaration?.resolve();
     let fn: ts.ArrowFunction | ts.FunctionExpression | ts.FunctionDeclaration;
     if (declaration && ts.isFunctionDeclaration(declaration) && this.stableBinding(target!))
       fn = declaration;
@@ -732,10 +748,11 @@ export class SourceAnalysis {
         return undefined;
       // A colon-form __proto__ property changes the prototype rather than defining an own key.
       if (name.text === '__proto__' && ts.isPropertyAssignment(property)) return undefined;
-      const value = ts.isPropertyAssignment(property) ? property.initializer : property.name;
+      const value = ts.isPropertyAssignment(property) ? property.initializer : name;
       fields.set(name.text, {
         node: value,
-        type: this.project.checker.getTypeAtLocation(value),
+        type:
+          this.project.checker.getTypeAtLocation(value) ?? this.project.checker.getUnknownType(),
         field: name.text,
       });
     }
@@ -750,13 +767,14 @@ export class SourceAnalysis {
         'expansion-type-required',
         'Object expansion requires an explicit shape: sql.insertValues<Shape>(input) or sql.assignments<Shape>(input).',
       );
-    const shape = this.project.checker.getTypeFromTypeNode(shapeNode);
+    const shape =
+      this.project.checker.getTypeFromTypeNode(shapeNode) ?? this.project.checker.getUnknownType();
     const open = (type: ts.Type): boolean =>
-      !!(type.flags & ts.TypeFlags.TypeParameter) || !!type.aliasTypeArguments?.some(open);
+      !!(type.flags & ts.TypeFlags.TypeParameter) || !!type.getAliasTypeArguments().some(open);
     const unresolvedMapped =
       !!(shape.flags & ts.TypeFlags.Object) &&
       !!((shape as ts.ObjectType).objectFlags & ts.ObjectFlags.Mapped) &&
-      shape.getProperties().length === 0;
+      this.project.checker.getPropertiesOfType(shape).length === 0;
     if (
       shape.flags &
         (ts.TypeFlags.Any |
@@ -767,9 +785,8 @@ export class SourceAnalysis {
           ts.TypeFlags.IndexedAccess) ||
       open(shape) ||
       unresolvedMapped ||
-      shape.getStringIndexType() ||
-      shape.getNumberIndexType() ||
-      shape.getCallSignatures().length
+      this.project.checker.getIndexInfosOfType(shape).length ||
+      this.project.checker.getSignaturesOfType(shape, ts.SignatureKind.Call).length
     ) {
       return this.fail(
         shapeNode,
@@ -786,13 +803,14 @@ export class SourceAnalysis {
     if (explicit && (!explicit.length || new Set(explicit).size !== explicit.length))
       return this.fail(node, 'expansion-columns', 'Expansion columns must be nonempty and unique.');
     for (const name of explicit ?? [])
-      if (!shape.getProperty(name))
+      if (!this.project.checker.getPropertyOfType(shape, name))
         return this.fail(
           node,
           'expansion-columns',
           `Column ${name} is absent from the expansion shape.`,
         );
-    const inputType = this.project.checker.getTypeAtLocation(input);
+    const inputType =
+      this.project.checker.getTypeAtLocation(input) ?? this.project.checker.getUnknownType();
     const rows =
       helper === 'sql.insertValues' &&
       (this.project.checker.isArrayType(inputType) || this.project.checker.isTupleType(inputType))
@@ -816,7 +834,10 @@ export class SourceAnalysis {
     for (const [index, row] of rows.entries()) {
       const literal = literals[index];
       const columns =
-        explicit ?? (literal ? [...literal.keys()] : shape.getProperties().map((p) => p.name));
+        explicit ??
+        (literal
+          ? [...literal.keys()]
+          : this.project.checker.getPropertiesOfType(shape).map((p) => p.name));
       let choices: Row[] = [{}];
       for (const name of columns) {
         try {
@@ -828,7 +849,7 @@ export class SourceAnalysis {
             'Expansion columns must be valid PostgreSQL identifiers.',
           );
         }
-        const property = shape.getProperty(name);
+        const property = this.project.checker.getPropertyOfType(shape, name);
         const binding = literal
           ? literal.get(name)
           : property && {
@@ -838,7 +859,11 @@ export class SourceAnalysis {
             };
         const valueType =
           binding && (this.project.checker.getBaseConstraintOfType(binding.type) ?? binding.type);
-        const members = valueType ? (valueType.isUnion() ? valueType.types : [valueType]) : [];
+        const members = valueType
+          ? valueType.isUnionType()
+            ? valueType.getTypes()
+            : [valueType]
+          : [];
         const defined = members.some(
           (member) => !(member.flags & (ts.TypeFlags.Undefined | ts.TypeFlags.Never)),
         );
@@ -961,10 +986,15 @@ export class SourceAnalysis {
         return variants;
       }
     }
-    const type = this.project.checker.getTypeAtLocation(input);
-    const members = type.isUnion() ? type.types : [type];
+    const type =
+      this.project.checker.getTypeAtLocation(input) ?? this.project.checker.getUnknownType();
+    const members = type.isUnionType() ? type.getTypes() : [type];
     if (
-      members.some((member) => member.getProperty('__tenonFragment') || member.getProperty('names'))
+      members.some(
+        (member) =>
+          this.project.checker.getPropertyOfType(member, '__tenonFragment') ||
+          this.project.checker.getPropertyOfType(member, 'names'),
+      )
     ) {
       if (ts.isCallExpression(node)) {
         const factory = this.fragmentFactory(node, depth);
@@ -1009,8 +1039,10 @@ export class SourceAnalysis {
         (property) => ts.isPropertyAssignment(property) && property.name.getText() === 'oid',
       );
       if (property && ts.isPropertyAssignment(property)) {
-        const type = this.project.checker.getTypeAtLocation(property.initializer);
-        if (type.isNumberLiteral()) return type.value;
+        const type =
+          this.project.checker.getTypeAtLocation(property.initializer) ??
+          this.project.checker.getUnknownType();
+        if (type.isNumberLiteralType()) return type.value;
       }
     }
     return undefined;
@@ -1043,8 +1075,8 @@ export class SourceAnalysis {
     let uncertain = false;
     const visit = (type: ts.Type): void => {
       if (binding.field !== undefined && type.flags & ts.TypeFlags.Undefined) return;
-      if (type.isUnion()) {
-        type.types.forEach(visit);
+      if (type.isUnionType()) {
+        type.getTypes().forEach(visit);
         return;
       }
       if (type.flags & ts.TypeFlags.TypeParameter) {
@@ -1065,7 +1097,7 @@ export class SourceAnalysis {
         );
       }
       if (
-        type.isNumberLiteral() &&
+        type.isNumberLiteralType() &&
         (!Number.isFinite(type.value) ||
           (Number.isInteger(type.value) && !Number.isSafeInteger(type.value)))
       ) {
@@ -1163,7 +1195,8 @@ export class SourceAnalysis {
         const text = this.text(node.arguments[0]);
         const bindings = this.array(node.arguments[1]).map((value) => ({
           node: value,
-          type: this.project.checker.getTypeAtLocation(value),
+          type:
+            this.project.checker.getTypeAtLocation(value) ?? this.project.checker.getUnknownType(),
         }));
         return this.withHints(text, bindings, node);
       }

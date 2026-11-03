@@ -33,7 +33,7 @@ npx tenon check --verbose
 
 Select a project, file or one complete multiline query containing a one-based line. A fragment alone
 is not a query target. `--project` overrides `check.project`; targets must belong to that project.
-The checker uses bundled TypeScript 6 and the project's imports, aliases, indexed access, Pick,
+The checker uses bundled TypeScript 7's native API and the project's imports, aliases, indexed access, Pick,
 unions and path mappings. It requires strictNullChecks and reports selected-file compiler errors.
 
 | Finding   | Action                                                                                  | Fails command? |

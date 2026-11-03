@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Migrate source checking to TypeScript 7's native compiler API and use one TypeScript dependency
+  for builds and checking. Keep TypeScript 6 declaration compatibility checks in an isolated consumer.
+
 ## 0.5.2
 
 - Recover single-return fragment helpers with scalar and fragment arguments, including imported

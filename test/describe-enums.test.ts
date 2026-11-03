@@ -145,16 +145,14 @@ test('enum inspection declarations compile for empty enums and escaped labels', 
           files: ['consumer.ts'],
         }),
       );
-      for (const compiler of ['typescript', 'typescript-next']) {
-        try {
-          await run(process.execPath, [
-            resolve('node_modules', compiler, 'bin/tsc'),
-            '--project',
-            config,
-          ]);
-        } catch (error) {
-          throw new Error((error as { stdout?: string }).stdout ?? String(error), { cause: error });
-        }
+      try {
+        await run(process.execPath, [
+          resolve('node_modules/typescript/bin/tsc'),
+          '--project',
+          config,
+        ]);
+      } catch (error) {
+        throw new Error((error as { stdout?: string }).stdout ?? String(error), { cause: error });
       }
       assert.deepEqual((await pool.queryClassic(query)).rows, [{ empty: null, unusual: null }]);
     },
@@ -298,4 +296,34 @@ test('disjoint enum literals fail while overlapping declarations and transformed
       },
     );
   });
+});
+
+test('source checking retains query identities and type contracts across distinct enum snapshots', async () => {
+  await project(
+    { '0001_enum.up.sql': `${schema}\nCREATE TYPE priority AS ENUM ('low', 'hi''gh');` },
+    async (database) => {
+      await migrate(database);
+      const table = qualified(database.namespace, 'records');
+      const priority = qualified(database.namespace, 'priority');
+      await sourceProject(
+        {
+          'queries.ts': [
+            "import { sql } from '@kequtech/tenon-orm';",
+            `export const state = sql<{state: 'queued' | 'done'}>\`SELECT state FROM ${table}\`;`,
+            `export const priority = sql<{priority: 'low' | "hi'gh"}>\`SELECT 'low'::${priority} AS priority\`;`,
+            'export const wrong = sql<{total: number}>`SELECT count(*) AS total FROM pg_class`;',
+            `export const again = sql<{state: 'queued' | 'done'}>\`SELECT state FROM ${table}\`;`,
+          ].join('\n'),
+        },
+        async (options) => {
+          const report = await checkQueries(options);
+          assert.deepEqual(report.coverage, { total: 4, analysed: 4, unchecked: 0 });
+          assert.deepEqual(
+            report.queries.map(({ diagnostics }) => diagnostics.map(({ code }) => code)),
+            [[], [], ['result-type-mismatch'], []],
+          );
+        },
+      );
+    },
+  );
 });

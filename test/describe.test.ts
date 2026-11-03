@@ -409,7 +409,7 @@ test('date and timestamp scalars preserve pgclear temporal strings and infinitie
   assert.deepEqual(row!.instant, '2026-01-01 00:00:00+00');
 });
 
-test('the conservative declaration compiles under TypeScript 6 and 7 without claiming non-null or JSON structure', async () => {
+test('the conservative declaration compiles under TypeScript 7 without claiming non-null or JSON structure', async () => {
   await fixture(async (namespace) => {
     const result = await describe(sql`SELECT quota, payload, state, tags, amounts, at,
       decode('00ff','hex') AS bytes FROM ${identifier(namespace, 'accounts')}`);
@@ -447,9 +447,7 @@ test('the conservative declaration compiles under TypeScript 6 and 7 without cla
           files: ['consumer.ts'],
         }),
       );
-      for (const name of ['typescript', 'typescript-next']) {
-        await run(process.execPath, [resolve('node_modules', name, 'bin/tsc'), '-p', config]);
-      }
+      await run(process.execPath, [resolve('node_modules/typescript/bin/tsc'), '-p', config]);
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

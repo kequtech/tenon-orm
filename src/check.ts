@@ -38,7 +38,7 @@ export async function checkQueries(options: CheckOptions): Promise<CheckReport> 
     options.codecs ??
     (typeof options.connection === 'object' ? options.connection?.codecs : undefined) ??
     defaultCodecs;
-  const project = loadProject({ ...options, codecs });
+  using project = loadProject({ ...options, codecs });
   const libraries = librarySymbols(project);
   const diagnostics = [...project.diagnostics];
   const queries = project.selected.flatMap((source) =>

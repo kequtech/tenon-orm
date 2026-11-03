@@ -32,6 +32,11 @@ artifact and compile public/generated types with TypeScript 6 and 7, without rep
 dependencies. They prefer npm's cache and fetch missing packages/metadata. No application checkout
 or third-party ORM installation is required.
 
+The repository uses one TypeScript 7 dependency for builds and source checking. The checker uses
+its native API through the internal `src/check/compiler.ts` boundary; the upstream API entry points
+are still marked unstable. The packed-consumer fixture installs TypeScript 6 independently to retain
+public/generated declaration compatibility with older application compilers.
+
 Test observable workflows, function behavior, and compiler contracts. Add focused regressions for
 bugs. Avoid tests coupled to prose wording or matching strings in SQL when a database assertion can
 establish the behavior.

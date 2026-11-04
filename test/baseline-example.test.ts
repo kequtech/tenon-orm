@@ -61,3 +61,52 @@ test('adoption example rejects drift before recording history and preserves data
     assert.equal(await readFile(baseline.upPath, 'utf8'), savedSql);
   });
 });
+
+test('adoption example accepts equivalent array casts and rejects changed CHECK values', async () => {
+  await migrationProject(pool)({}, async (options) => {
+    const table = qualified(options.namespace, 'records');
+    await pool.queryClassic(`CREATE SCHEMA ${quote(options.namespace)}`);
+    await pool.queryClassic(`CREATE TABLE ${table} (status varchar(16), CONSTRAINT status_check
+      CHECK (status::text = ANY (ARRAY[('active'::varchar)::text, ('disabled'::varchar)::text])))`);
+    await captureBaseline({ ...options, connection: testConnection, schemas: [options.namespace] });
+    const checkpoint = join(options.directory, 'checkpoint.json');
+    // Independently replay the captured SQL before saving the reviewed reference.
+    await pool.queryClassic(`DROP SCHEMA ${quote(options.namespace)} CASCADE`);
+    await migrate(options);
+    await writeFile(
+      checkpoint,
+      JSON.stringify(await inspectSchema({ connection: pool, namespace: options.namespace })),
+    );
+    await pool.queryClassic(`DROP SCHEMA ${quote(options.namespace)} CASCADE`);
+    await pool.queryClassic(`CREATE SCHEMA ${quote(options.namespace)}`);
+    await pool.queryClassic(`CREATE TABLE ${table} (status varchar(16), CONSTRAINT status_check
+      CHECK (status IN ('active', 'retired')))`);
+    await pool.queryClassic(`INSERT INTO ${table} VALUES ('active')`);
+    const execute = () =>
+      run(process.execPath, [example, checkpoint, options.directory], {
+        env: { ...process.env, DATABASE_URL: testConnection },
+      });
+    await assert.rejects(execute(), /Schema differs/);
+    assert.deepEqual((await migrationStatus(options)).applied, []);
+    await pool.queryClassic(`ALTER TABLE ${table} DROP CONSTRAINT status_check,
+      ADD CONSTRAINT status_check CHECK (status IN ('active', 'disabled'))`);
+    const { stderr } = await execute();
+    assert.deepEqual(
+      JSON.parse(stderr).acceptedDifferences.map(
+        ({ path, reason }: { path: string[]; reason: string }) => ({ path, reason }),
+      ),
+      [
+        {
+          path: ['tables', 'records', 'constraints', 'status_check', 'definition'],
+          reason: 'check-text-array-casts',
+        },
+      ],
+    );
+    assert.deepEqual((await migrationStatus(options)).applied, ['0001']);
+    assert.deepEqual(
+      [...(await pool.queryClassic(`SELECT * FROM ${table}`)).rows],
+      [{ status: 'active' }],
+    );
+    await assert.rejects(pool.queryClassic(`INSERT INTO ${table} VALUES ('retired')`));
+  });
+});

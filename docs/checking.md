@@ -287,8 +287,45 @@ orders are preserved. See exported SchemaSnapshot types for individual fields an
 The fingerprint is `tenon-schema-v1:sha256:<hex>`, hashing canonical metadata JSON with sorted object
 keys and preserved array order. It includes namespace and PostgreSQL major, excludes OIDs/connection
 values and pins stable formatting settings. Codec, generator and prose changes do not affect it.
-Fresh replay in the same namespace/major reproduces it. Changed fingerprint inputs require a new
-format version; PostgreSQL deparsing can change even in patches, so review upgrade differences.
+Fresh replay of the same parsed definitions in the same namespace/major reproduces it. It is a
+textual checkpoint, not a semantic SQL hash: even on one server, equivalent CHECK expressions can
+produce different deparsed strings. Changed fingerprint inputs require a new format version;
+PostgreSQL deparsing can change even in patches, so review upgrade differences.
+
+Use `compareSchemas(expected, actual, options?)` for structured comparison of saved metadata and a
+live snapshot. It returns `equivalent`, `differences` and `acceptedDifferences`; it never trusts or
+compares the fingerprint field. Each difference has `kind` (`added`, `removed`, `changed`), a `path`
+array and the available `expected`/`actual` values. Paths identify collections and object names,
+for example `['tables', 'accounts', 'constraints', 'accounts_status_check', 'definition']`.
+Names containing dots remain single path components. Named collections match by name; column order,
+enum label order and other ordered values remain significant. Format versions must both be 1.
+
+```ts
+const comparison = compareSchemas(reviewedReplay, liveSnapshot, {
+  normalizeCheckTextArrayCasts: true,
+});
+if (!comparison.equivalent) {
+  console.error(JSON.stringify(comparison.differences, null, 2));
+  throw new Error('Schema differs from the reviewed baseline.');
+}
+```
+
+Both options default to false. `normalizeCheckTextArrayCasts` recognizes the narrow CHECK form
+`operand = ANY (text-array)`, where the text array is either an array of unconstrained varchar
+literals cast as a whole to `text[]`, or the same literals individually cast from varchar to text.
+PostgreSQL can emit these different forms for `status IN ('active', 'disabled')` and a captured
+baseline's explicit casts, including on the same PostgreSQL major. It applies to table and domain
+CHECK definitions only. It preserves literal contents/order, the left operand, operator and suffixes
+such as NOT VALID and NO INHERIT. Length-limited casts, other types, functions, collations and
+unrecognized expressions remain differences. This is intentionally not general SQL equivalence;
+review unsupported differences or regenerate a reference from an independently verified replay.
+
+`ignorePostgresMajor` accepts only the major field difference; use it after independently reviewing
+compatibility across the selected versions. It does not resolve deparsed expression differences.
+Accepted raw changes remain visible in `acceptedDifferences` with reason `postgres-major` or
+`check-text-array-casts`. Log or review those alongside blocking differences. Comparison does not
+rewrite the snapshots or change version-1 fingerprint inputs, so existing saved checkpoints remain
+usable. No database SQL is executed by comparison.
 
 Version 1 excludes functions, privileges/owners, RLS, triggers, rules, views/materialized views,
 foreign tables, extension/composite/range and collation definitions, external definitions and table

@@ -84,7 +84,7 @@ export { adoptBaseline, captureBaseline } from './baseline.js';
 export type { CaptureBaselineOptions, CapturedBaseline } from './baseline.js';
 export { generateDefinitions } from './generate.js';
 export type { GenerateOptions } from './generate.js';
-export { inspectSchema } from './schema.js';
+export { inspectSchema, compareSchemas } from './schema.js';
 export type {
   SchemaOptions,
   SchemaMetadata,
@@ -95,6 +95,11 @@ export type {
   SchemaDomain,
   SchemaSequence,
   SchemaDefinition,
+  SchemaValue,
+  SchemaDifference,
+  SchemaAcceptedDifference,
+  SchemaComparisonOptions,
+  SchemaComparison,
 } from './schema.js';
 export { migrate, migrationStatus, rollback } from './migrations.js';
 export type { MigrationStatus } from './migrations.js';

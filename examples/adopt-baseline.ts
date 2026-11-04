@@ -1,8 +1,14 @@
 // Copy outside node_modules in an ESM app. Run once at the reviewed legacy checkpoint.
 // Stop the old runner and freeze DDL first. Separately verify functions, grants, RLS and old history;
-// the catalog fingerprint below does not cover those application-specific contracts.
+// the catalog snapshot below does not cover those application-specific contracts.
 import { readFile } from 'node:fs/promises';
-import { adoptBaseline, inspectSchema, migrate } from '@kequtech/tenon-orm';
+import {
+  adoptBaseline,
+  compareSchemas,
+  inspectSchema,
+  migrate,
+  type SchemaSnapshot,
+} from '@kequtech/tenon-orm';
 
 const [checkpointPath, directory = 'migrations', ...extra] = process.argv.slice(2);
 if (!checkpointPath || extra.length)
@@ -25,7 +31,16 @@ if (
 
 const options = { connection, namespace: expected.namespace, directory };
 const observed = await inspectSchema({ connection, namespace: expected.namespace });
-if (observed.fingerprint !== expected.fingerprint)
-  throw new Error('Schema differs from the reviewed checkpoint. Baseline was not adopted.');
+const comparison = compareSchemas(expected as SchemaSnapshot, observed, {
+  normalizeCheckTextArrayCasts: true,
+  // Set ignorePostgresMajor only after separately reviewing a major-version change.
+});
+if (comparison.acceptedDifferences.length)
+  console.warn(JSON.stringify({ acceptedDifferences: comparison.acceptedDifferences }, null, 2));
+if (!comparison.equivalent)
+  throw new Error(
+    'Schema differs from the reviewed checkpoint. Baseline was not adopted.\n' +
+      JSON.stringify(comparison.differences, null, 2),
+  );
 await adoptBaseline(options);
 await migrate(options);

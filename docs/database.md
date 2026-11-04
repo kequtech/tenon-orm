@@ -204,7 +204,12 @@ cp node_modules/@kequtech/tenon-orm/examples/adopt-baseline.ts ./adopt-baseline.
 DATABASE_URL="$TARGET_DATABASE_URL" node adopt-baseline.ts baseline-checkpoint.json migrations
 ```
 
-Keep DDL frozen across comparison/adoption. The fingerprint omits functions, security and migration
+The example uses structured comparison and explicitly accepts the narrow varchar-array/text-array
+CHECK cast equivalence described in [schema checkpoints](checking.md#schema-checkpoints). It reports
+object/property differences before refusing adoption, and logs any accepted definition differences.
+PostgreSQL major changes still fail unless separately reviewed and explicitly allowed in the script.
+
+Keep DDL frozen across comparison/adoption. The snapshot omits functions, security and migration
 history; verify those separately before running the example. Never derive the reference from the
 target. Use this script once at handover, ordinary migrate thereafter. Test drift refusal and real
 application workflows on adopted and fresh databases. Keep old references until replacements are verified.

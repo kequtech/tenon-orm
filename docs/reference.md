@@ -111,6 +111,7 @@ Programmatic APIs take explicit options and never discover config:
 | describeQuery({connection, query, codecs?, session?, timeouts?})                        | QueryDescription: context, parameters, columns, rowType, issues                                |
 | checkQueries({connection, project?, target?, codecs?, session?, timeouts?, readTypes?}) | CheckReport: ok, project, queries, diagnostics, coverage, optional context; import from /check |
 | inspectSchema({connection, namespace?})                                                 | SchemaSnapshot: formatVersion:1, postgresMajor, namespace, metadata collections, fingerprint   |
+| compareSchemas(expected, actual, options?)                                              | SchemaComparison: equivalent, differences, acceptedDifferences                                 |
 | migrate({connection, directory?, namespace?})                                           | Applied IDs                                                                                    |
 | migrationStatus({connection, directory?, namespace?})                                   | {applied, pending} ID arrays                                                                   |
 | rollback({connection, directory?, namespace?, steps?})                                  | Reverted IDs; steps default 1, positive safe integer                                           |

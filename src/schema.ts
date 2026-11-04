@@ -17,7 +17,14 @@ export type {
   SchemaDomain,
   SchemaSequence,
   SchemaDefinition,
+  SchemaValue,
+  SchemaDifference,
+  SchemaAcceptedDifference,
+  SchemaComparisonOptions,
+  SchemaComparison,
 } from './schema/types.js';
+
+export { compareSchemas } from './schema/compare.js';
 
 /** Canonical JSON: object keys are sorted; ordered catalog arrays retain their semantic order. */
 function canonical(value: unknown): string {

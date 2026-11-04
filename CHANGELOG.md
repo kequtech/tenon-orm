@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Add `compareSchemas` with named object/property differences and explicit acceptance of the narrow
+  CHECK text-array/varchar-array cast equivalence. Keep version-1 snapshots and fingerprints intact;
+  PostgreSQL major acceptance remains a separate opt-in. The adoption example reports differences
+  and uses the CHECK comparison option before recording history.
+
 - Migrate source checking to TypeScript 7's native compiler API and use one pinned TypeScript 7.0.2 dependency
   for builds and checking. Keep TypeScript 6 declaration compatibility checks in an isolated consumer.
 

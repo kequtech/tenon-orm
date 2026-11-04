@@ -77,3 +77,37 @@ export interface SchemaMetadata {
 export interface SchemaSnapshot extends SchemaMetadata {
   readonly fingerprint: string;
 }
+
+export type SchemaValue =
+  | null
+  | boolean
+  | number
+  | string
+  | readonly SchemaValue[]
+  | { readonly [key: string]: SchemaValue };
+
+export interface SchemaDifference {
+  readonly kind: 'added' | 'removed' | 'changed';
+  /** Collection/object names identify objects; numeric positions identify ordered values. */
+  readonly path: readonly (string | number)[];
+  readonly expected?: SchemaValue;
+  readonly actual?: SchemaValue;
+}
+
+export interface SchemaAcceptedDifference extends SchemaDifference {
+  readonly reason: 'postgres-major' | 'check-text-array-casts';
+}
+
+export interface SchemaComparisonOptions {
+  /** Defaults to false; a version change still requires separate compatibility review. */
+  readonly ignorePostgresMajor?: boolean;
+  /** Defaults to false. Recognize only text ANY arrays of unconstrained varchar literals. */
+  readonly normalizeCheckTextArrayCasts?: boolean;
+}
+
+export interface SchemaComparison {
+  readonly equivalent: boolean;
+  readonly differences: readonly SchemaDifference[];
+  /** Explicitly accepted raw differences remain available for review/logging. */
+  readonly acceptedDifferences: readonly SchemaAcceptedDifference[];
+}

@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path';
 import { after, before, test } from 'node:test';
 import { promisify } from 'node:util';
 import { builtin, createPool, defaultCodecs } from '@kequtech/pgclear';
-import { inspectSchema, migrate } from '../src/index.js';
+import { compareSchemas, inspectSchema, migrate } from '../src/index.js';
 import { qualified, quote } from '../src/sql.js';
 import { assertTestDatabase, migrationProject, testConnection } from './helpers/database.js';
 import { writeConfig } from './helpers/config.js';
@@ -130,6 +130,70 @@ test('schema fingerprints reproduce after fresh replay with different catalog OI
     await migrate(options);
     assert.notEqual(await oid(), before);
     assert.deepEqual(await inspectSchema(request), first);
+  });
+});
+
+test('live CHECK deparser differences compare explicitly without losing meaningful drift', async () => {
+  await project({}, async (options) => {
+    const table = qualified(options.namespace, 'records');
+    const domain = qualified(options.namespace, 'status_domain');
+    const literals = `('active', 'disabled', 'retired')`;
+    const array = `ARRAY[('active'::varchar)::text, ('disabled'::varchar)::text, ('retired'::varchar)::text]`;
+    await pool.queryClassic(`CREATE SCHEMA ${quote(options.namespace)}`);
+    await pool.queryClassic(`CREATE TABLE ${table} (status varchar(16), other varchar(16),
+      CONSTRAINT status_check CHECK (status IN ${literals}))`);
+    await pool.queryClassic(`CREATE DOMAIN ${domain} AS varchar(16)
+      CONSTRAINT status_check CHECK (VALUE IN ${literals})`);
+    const request = { connection: pool, namespace: options.namespace };
+    const original = await inspectSchema(request);
+    await pool.queryClassic(`ALTER TABLE ${table} DROP CONSTRAINT status_check,
+      ADD CONSTRAINT status_check CHECK (status::text = ANY (${array}))`);
+    await pool.queryClassic(`ALTER DOMAIN ${domain} DROP CONSTRAINT status_check`);
+    await pool.queryClassic(`ALTER DOMAIN ${domain} ADD CONSTRAINT status_check
+      CHECK (VALUE::text = ANY (${array}))`);
+    const replayed = await inspectSchema(request);
+    assert.notEqual(original.fingerprint, replayed.fingerprint);
+    assert.equal(compareSchemas(original, replayed).differences.length, 2);
+    const normalize = { normalizeCheckTextArrayCasts: true };
+    const comparison = compareSchemas(original, replayed, normalize);
+    assert.equal(comparison.equivalent, true);
+    assert.deepEqual(comparison.differences, []);
+    assert.deepEqual(
+      comparison.acceptedDifferences.map(({ path, reason }) => ({ path, reason })),
+      [
+        {
+          path: ['domains', 'status_domain', 'constraints', 'status_check', 'definition'],
+          reason: 'check-text-array-casts',
+        },
+        {
+          path: ['tables', 'records', 'constraints', 'status_check', 'definition'],
+          reason: 'check-text-array-casts',
+        },
+      ],
+    );
+    for (const check of [
+      `CHECK (status::text = ANY (${array.replace('disabled', 'pending')}))`,
+      `CHECK (other::text = ANY (${array}))`,
+      `CHECK (status::text <> ANY (${array}))`,
+      `CHECK (status::text = ANY (${array.replace(/::varchar/g, '::varchar(3)')}))`,
+      `CHECK (status::text COLLATE "C" = ANY (${array}))`,
+      `CHECK (status::text = ANY (${array})) NOT VALID`,
+      `CHECK (status::text = ANY (${array})) NO INHERIT`,
+    ]) {
+      await pool.queryClassic(`ALTER TABLE ${table} DROP CONSTRAINT status_check,
+        ADD CONSTRAINT status_check ${check}`);
+      const changed = await inspectSchema(request);
+      const result = compareSchemas(original, changed, normalize);
+      assert.equal(result.equivalent, false, check);
+      assert.equal(result.differences.length, 1);
+      assert.deepEqual(result.differences[0]!.path, [
+        'tables',
+        'records',
+        'constraints',
+        'status_check',
+        'definition',
+      ]);
+    }
   });
 });
 

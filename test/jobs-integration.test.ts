@@ -156,6 +156,7 @@ test('bulk inspection, keyed schedules and readiness handles retain the ORM scop
 test('running cancellation retains ORM guards, rollback, observation and scope expiry', async (t) => {
   const app = await table();
   const events: QueryEvent[] = [];
+  const runnerEvents: RunnerEvent[] = [];
   const observed = createTenon({
     connection: pool,
     onQuery(event) {
@@ -179,12 +180,30 @@ test('running cancellation retains ORM guards, rollback, observation and scope e
     },
   });
   const job = await observed.jobs.send(definition, 1);
-  start(t, definition, { leaseMs: 600 }, observed);
+  start(
+    t,
+    definition,
+    {
+      // This tests cancellation, not lease expiry. Allow scheduling/DB contention
+      // during the full suite while keeping the heartbeat inside until's budget.
+      leaseMs: 6000,
+      onEvent(event) {
+        runnerEvents.push(event);
+      },
+    },
+    observed,
+  );
   await until(() => signal !== undefined);
   const request = await db.transaction((tx) => tx.jobs.cancel(job.id));
   assert.equal(request.state, 'running');
   assert.ok(request.cancelRequestedAt instanceof Date);
-  await until(async () => (await db.jobs.get(job.id))?.state === 'cancelled');
+  await until(() => runnerEvents.some((event) => event.type !== 'attemptStarted'));
+  assert.deepEqual(
+    runnerEvents.map((event) => event.type),
+    ['attemptStarted', 'attemptCancelled'],
+    JSON.stringify(runnerEvents),
+  );
+  assert.equal((await db.jobs.get(job.id))?.state, 'cancelled');
   assert.equal(signal!.aborted, true);
   assert.deepEqual(await db.query(sql`SELECT value FROM ${app}`, { returns: 'many' }), []);
   assert.ok(events.some((event) => event.label === 'cancel.write' && event.outcome === 'success'));

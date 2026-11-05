@@ -55,13 +55,12 @@ Either candidate can be selected independently. The harness overrides transitive
 that artifact; omitted variables use registry dependencies. Jobs owns the real Next.js host fixture
 and its native worker tests. Tenon keeps the ORM worker entry and guarded HTTP-host integration checks.
 
-Tenon 0.5.1 currently requires the prepared but unpublished pgclear 0.3.6 and Jobs 0.3.0 changes.
-Until they are published, use the local packed-artifact workflow above. Their lockfile entries reserve
-those versions without invented registry URLs or integrity values. Before a future release, publish
-those verified supporting artifacts first, regenerate registry metadata with
-`npm install --package-lock-only --ignore-scripts`, review that only the intended dependency entries
-change, then run `npm ci` and the complete checks without candidate overrides. No registry-only
-clean-install verification is claimed while those required versions remain unpublished.
+Release validation uses registry dependencies without candidate overrides. Publish verified
+supporting packages before publishing Tenon, then refresh registry metadata with
+`npm install --package-lock-only --ignore-scripts`. Never invent registry URLs or integrity values.
+Review that only the intended dependency entries change, then run `npm ci` and the complete checks
+without candidate overrides. Local candidate checks alone do not establish registry-install
+compatibility.
 
 ### Regenerate the fixture
 
@@ -133,6 +132,11 @@ preserves completed investigations and retired implementation plans.
 Update `package.json`, `package-lock.json`, and the changelog together. Changelog entries should
 describe consumer-visible changes and required upgrade actions; keep investigations in repository
 notes. Documentation-only releases use a new patch version.
+
+Write changelogs, documentation, and examples in release-ready language from the outset. Avoid
+temporary labels such as "Unreleased", "In development", "coming soon", or similar wording that
+suggests unfinished work: these are easily missed and can ship in releases. Describe implemented
+behavior and actual limitations directly; keep unfinished plans in repository planning notes.
 
 Run `npm run check`, inspect PostgreSQL 16/18 CI, review the source diff, and inspect
 `npm pack --dry-run`. The artifact should include compiled code/declarations, README, license,

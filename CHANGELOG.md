@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.3
 
 - Add `compareSchemas` with named object/property differences and explicit acceptance of the narrow
   CHECK text-array/varchar-array cast equivalence. Keep version-1 snapshots and fingerprints intact;

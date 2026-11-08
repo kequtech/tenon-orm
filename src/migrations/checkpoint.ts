@@ -136,12 +136,13 @@ export async function baselineDisposition(
   );
   if (observed.every((schema) => !schema.objects.length)) return 'fresh';
   const differences = checkpoint.schemas.flatMap((expected, i) =>
-    compareSchemas(expected, observed[i]!, { normalizeCheckTextArrayCasts: true }).differences.map(
-      (difference) => ({
-        ...difference,
-        path: ['schemas', expected.namespace, ...difference.path],
-      }),
-    ),
+    compareSchemas(expected, observed[i]!, {
+      ignorePostgresMajor: true,
+      normalizeCheckTextArrayCasts: true,
+    }).differences.map((difference) => ({
+      ...difference,
+      path: ['schemas', expected.namespace, ...difference.path],
+    })),
   );
   if (differences.length)
     throw new Error(

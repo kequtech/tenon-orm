@@ -209,8 +209,9 @@ Exclusions never perform live cleanup.
 
 The checkpoint compares [version-1 relation/type metadata](checking.md#schema-checkpoints), object
 names, and function, view, trigger and rule definitions. Row contents and sequence positions are
-ignored. The narrow CHECK text-array/varchar-array cast equivalence is accepted; PostgreSQL major
-differences on existing storage are refused. Other unsupported deparser differences stop adoption.
+ignored. PostgreSQL version metadata is recorded but does not block adoption; schema definitions
+are still compared. The narrow CHECK text-array/varchar-array cast equivalence is accepted.
+Other unsupported deparser differences stop adoption.
 It does not establish owners, grants, RLS policy, legacy ledger contents, external dependencies or
 complete extension/foreign/custom-type definitions. Verify those application-specific contracts
 separately and keep external DDL frozen: other runners do not share Tenon's lock.

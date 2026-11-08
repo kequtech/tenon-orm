@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.1
+
+- Allow automatic baseline adoption across PostgreSQL major versions when schema definitions
+  match. Server version metadata alone no longer blocks migration. Schema differences and invalid
+  SQL/checkpoint pairs still refuse initial adoption; no extra flag or confirmation is required.
+
 ## 0.6.0
 
 - Capture `0001_baseline.checkpoint.json` alongside baseline SQL using one exported database

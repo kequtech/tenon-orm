@@ -328,8 +328,9 @@ such as NOT VALID and NO INHERIT. Length-limited casts, other types, functions, 
 unrecognized expressions remain differences. This is intentionally not general SQL equivalence;
 review unsupported differences or regenerate a reference from an independently verified replay.
 
-`ignorePostgresMajor` accepts only the major field difference; use it after independently reviewing
-compatibility across the selected versions. It does not resolve deparsed expression differences.
+`ignorePostgresMajor` excludes server version metadata from equivalence while retaining schema
+definition checks. Use it to compare schemas across server versions; automatic baseline adoption
+already does so. It does not resolve deparsed expression differences.
 Accepted raw changes remain visible in `acceptedDifferences` with reason `postgres-major` or
 `check-text-array-casts`. Log or review those alongside blocking differences. Comparison does not
 rewrite the snapshots or change version-1 fingerprint inputs, so existing saved checkpoints remain

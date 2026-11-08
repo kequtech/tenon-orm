@@ -204,10 +204,12 @@ test('partially initialized multi-schema storage refuses adoption and preserves 
   });
 });
 
-test('existing storage with a different PostgreSQL major is refused even with a valid checkpoint hash', async () => {
+test('server version metadata does not block adoption or hide schema differences', async () => {
   await migrationProject(pool)({}, async (options) => {
+    const table = qualified(options.namespace, 'records');
     await pool.queryClassic(`CREATE SCHEMA ${quote(options.namespace)}`);
-    await pool.queryClassic(`CREATE TABLE ${qualified(options.namespace, 'records')} (id integer)`);
+    await pool.queryClassic(`CREATE TABLE ${table} (id integer)`);
+    await pool.queryClassic(`INSERT INTO ${table} VALUES (7)`);
     const { checkpointPath } = await captureBaseline({
       ...options,
       connection: testConnection,
@@ -227,8 +229,19 @@ test('existing storage with a different PostgreSQL major is refused even with a 
       checkpointPath,
       JSON.stringify({ ...changed, fingerprint: checkpointHash(changed) }),
     );
-    await assert.rejects(migrate(options), /postgresMajor/);
+    await pool.queryClassic(`ALTER TABLE ${table} ADD COLUMN drift text`);
+    await assert.rejects(migrate(options), /Schema differs[\s\S]*drift/);
     assert.deepEqual((await migrationStatus(options)).applied, []);
+    await pool.queryClassic(`ALTER TABLE ${table} DROP COLUMN drift`);
+    await writeFile(
+      join(options.directory, '0002_name.up.sql'),
+      'ALTER TABLE records ADD COLUMN name text;',
+    );
+    assert.deepEqual(await migrate(options), ['0001', '0002']);
+    assert.deepEqual(
+      [...(await pool.queryClassic(`SELECT * FROM ${table}`)).rows],
+      [{ id: 7, name: null }],
+    );
   });
 });
 

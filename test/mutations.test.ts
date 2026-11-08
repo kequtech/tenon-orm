@@ -2,7 +2,15 @@ import { param, builtin } from '@kequtech/pgclear';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createPool, type Pool } from '@kequtech/pgclear';
-import { createTenon, identifier, migrate, sql, unsafeSql } from '../src/index.js';
+import {
+  createTenon,
+  identifier,
+  json,
+  migrate,
+  sql,
+  unsafeSql,
+  type MutationCodecs,
+} from '../src/index.js';
 import { assertTestDatabase, migrationProject, testConnection } from './helpers/database.js';
 
 test('insert fragments align heterogeneous rows, preserve defaults and null, and bind data', () => {
@@ -100,6 +108,95 @@ test('query compilation enforces the combined PostgreSQL bind limit without impl
     () => sql`INSERT INTO users ${sql.insertValues(rows)} RETURNING ${1}`,
     /65535 bound parameters; received 65536/,
   );
+});
+
+test('mutation codec maps reject accessors and invalid encoders without reading getters', () => {
+  assert.throws(
+    () => sql.assignments({ value: 1 }, undefined, new Date() as never),
+    /plain object/,
+  );
+  assert.throws(
+    () => sql.insertValues({ value: 1 }, undefined, { value: null } as never),
+    /codec data property/,
+  );
+  assert.throws(
+    () =>
+      sql.insertValues({ value: 1 }, undefined, {
+        get value() {
+          throw new Error('getter must not execute');
+        },
+      } as never),
+    /codec data property/,
+  );
+  assert.throws(
+    () => sql.assignments({ value: 1 }, undefined, { value: { oid: 0 } } as never),
+    /codec/i,
+  );
+});
+
+test('field codecs encode batches and patches while preserving native scalars, defaults and SQL null', async () => {
+  const pool = createPool(testConnection);
+  const db = createTenon({ connection: pool });
+  try {
+    await assertTestDatabase(pool);
+    await migrationProject(pool)(
+      {
+        '0001_records.up.sql': `CREATE TABLE records (
+        id integer PRIMARY KEY, payload jsonb DEFAULT '{"default":true}', tags text[] DEFAULT '{default}'
+      );`,
+      },
+      async (options) => {
+        await migrate(options);
+        const table = identifier(options.namespace, 'records');
+        type Input = { id: number; payload?: unknown; tags?: readonly string[] | null | undefined };
+        const codecs = {
+          payload: builtin.jsonb,
+          tags: builtin.textArray,
+        } satisfies MutationCodecs<Input>;
+        const rows: Input[] = [
+          { id: 1, payload: { sent: false }, tags: ['comma,quote"', 'NULL'] },
+          { id: 2, payload: null, tags: null },
+          { id: 3, payload: undefined, tags: undefined },
+        ];
+        const query = sql`INSERT INTO ${table} ${sql.insertValues<Input>(rows, ['id', 'payload', 'tags'], codecs)}`;
+        assert.equal(query.values[0], 1);
+        await db.query(query);
+        assert.deepEqual((await db.query(sql`SELECT * FROM ${table} ORDER BY id`)).rows, [
+          { id: 1, payload: { sent: false }, tags: ['comma,quote"', 'NULL'] },
+          { id: 2, payload: null, tags: null },
+          { id: 3, payload: { default: true }, tags: ['default'] },
+        ]);
+        await db.query(
+          sql`UPDATE ${table} SET ${sql.assignments<Input>({ id: 3, payload: ['json', null], tags: [] }, ['payload', 'tags'], codecs)} WHERE id = ${3}`,
+        );
+        await db.query(
+          sql`UPDATE ${table} SET ${sql.assignments<Input>({ id: 1, payload: null, tags: undefined }, ['payload', 'tags'], codecs)} WHERE id = ${1}`,
+        );
+        assert.deepEqual((await db.query(sql`SELECT * FROM ${table} ORDER BY id`)).rows, [
+          { id: 1, payload: null, tags: ['comma,quote"', 'NULL'] },
+          { id: 2, payload: null, tags: null },
+          { id: 3, payload: ['json', null], tags: [] },
+        ]);
+        // JSON null remains available through the explicit single-value encoder.
+        await db.query(
+          sql`UPDATE ${table} SET ${sql.assignments({ payload: json(null) })} WHERE id = ${2}`,
+        );
+        assert.equal(
+          (await db.query(sql`SELECT payload IS NULL AS missing FROM ${table} WHERE id = ${2}`))
+            .rows[0]!.missing,
+          false,
+        );
+        assert.deepEqual(rows[0], {
+          id: 1,
+          payload: { sent: false },
+          tags: ['comma,quote"', 'NULL'],
+        });
+      },
+    );
+  } finally {
+    await db.close();
+    await pool.close();
+  }
 });
 
 test('mutation fragments execute defaults, upserts, partial updates and generated-column rules', async () => {

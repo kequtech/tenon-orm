@@ -137,7 +137,7 @@ export async function loadConfig(
   const baseline = configSection(
     config.baseline === undefined ? {} : config.baseline,
     'baseline config',
-    ['connection', 'schemas'],
+    ['connection', 'schemas', 'excludeTables'],
   );
   if (
     baseline.connection !== undefined &&
@@ -145,12 +145,27 @@ export async function loadConfig(
       !baseline.connection.trim() ||
       baseline.connection.includes('\0'))
   ) {
-    throw new Error('Baseline connection must be a nonempty native libpq connection string.');
+    throw new Error(
+      'Baseline connection must be a nonempty PostgreSQL URI usable by pgclear and pg_dump.',
+    );
   }
   if (baseline.schemas !== undefined) {
     if (!Array.isArray(baseline.schemas) || !baseline.schemas.length)
       throw new Error('Baseline schemas must be a nonempty array.');
     for (const schema of baseline.schemas) validateName(schema as string);
+  }
+  if (baseline.excludeTables !== undefined) {
+    if (
+      !Array.isArray(baseline.excludeTables) ||
+      Array.from(baseline.excludeTables).some(
+        (pattern: unknown) =>
+          typeof pattern !== 'string' || !pattern.trim() || pattern.includes('\0'),
+      )
+    ) {
+      throw new Error(
+        'Baseline excludeTables must be an array of nonempty pg_dump patterns without NUL.',
+      );
+    }
   }
   const session = sessionOptions(config.session === undefined ? {} : config.session);
   const timeouts = timeoutOptions(config.timeouts === undefined ? {} : config.timeouts);
@@ -174,6 +189,9 @@ export async function loadConfig(
       baseline: {
         ...(baseline.connection !== undefined && { connection: baseline.connection as string }),
         ...(baseline.schemas !== undefined && { schemas: [...(baseline.schemas as string[])] }),
+        ...(baseline.excludeTables !== undefined && {
+          excludeTables: [...(baseline.excludeTables as string[])],
+        }),
       },
     }),
     session,

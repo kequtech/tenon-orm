@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, test } from 'node:test';
 import { createPool, type Pool } from '@kequtech/pgclear';
-import { adoptBaseline, captureBaseline, migrate } from '../src/index.js';
+import { captureBaseline, migrate } from '../src/index.js';
 import { qualified, quote } from '../src/sql.js';
 import { assertTestDatabase, testConnection } from './helpers/database.js';
 
@@ -81,7 +81,7 @@ test('portable baseline replays without source roles; application SQL and provis
       [{ reader: sourceOwner, value: 'private' }],
     );
     await captureBaseline(options);
-    await adoptBaseline(options);
+    await migrate(options);
     assert.deepEqual(await securityState(namespace), original);
 
     await admin.queryClassic(`DROP SCHEMA ${quote(namespace)} CASCADE`, []);

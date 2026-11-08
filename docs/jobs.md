@@ -16,11 +16,15 @@ npx tenon migrate
 
 Setup copies concrete installation SQL into an application-owned numbered migration pair, offline.
 Review/commit it and apply it through the existing runner. Repeated setup preserves saved files.
+Worker startup validates the installed storage version; it performs no installation or upgrade.
 Database/transaction facades are always available and inert; access creates neither storage nor
 workers. Transaction facades expose only record operations.
 
 Jobs uses one pgclear_jobs schema per database. Tenon's migrations.namespace selects its own
-history/search path, not queue isolation. Existing storage needs deliberate migration ownership.
+history/search path, not queue isolation. If Jobs storage is already represented in a captured
+baseline or existing migrations, keep that ownership; do not add a second installation migration.
+When replacing another queue, transferring any retained jobs is a separate application migration;
+setup only installs Jobs storage.
 
 ### Upgrade existing storage
 

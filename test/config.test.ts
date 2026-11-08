@@ -266,6 +266,9 @@ test('invalid, ambiguous and failing configurations reject without generating or
       'export default {connection: "postgresql://unused", timeouts: {lockMs: null}};',
       'export default {connection: "postgresql://unused", baseline: {schemas: []}};',
       'export default {connection: "postgresql://unused", baseline: {connection: 123}};',
+      'export default {connection: "postgresql://unused", baseline: {excludeTables: "legacy"}};',
+      'export default {connection: "postgresql://unused", baseline: {excludeTables: [""]}};',
+      'export default {connection: "postgresql://unused", baseline: {excludeTables: [123]}};',
       'throw new Error("secret_import_failure");',
     ]) {
       await writeFile(filename, source);

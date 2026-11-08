@@ -14,7 +14,6 @@ import {
   migrationStatus,
   generateDefinitions,
   captureBaseline,
-  adoptBaseline,
 } from '@kequtech/tenon-orm';
 import * as second from './second-tenon/index.js';
 
@@ -118,7 +117,7 @@ try {
   });
   await pool.queryClassic('CREATE SCHEMA "' + history + '"', []);
   assert.deepEqual(
-    await adoptBaseline({ connection: pool, namespace: history, directory: baselineDirectory }),
+    await migrate({ connection: pool, namespace: history, directory: baselineDirectory }),
     ['0001'],
   );
   assert.deepEqual(await oldRead(db, { id: account.id }), account);

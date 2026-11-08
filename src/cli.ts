@@ -5,7 +5,7 @@ import { resolve } from 'node:path';
 import { defaultCodecs } from '@kequtech/pgclear';
 import { formatCheckReport } from './check/output.js';
 import type { DatabaseToolOptions } from './migrations/connection.js';
-import { adoptBaseline, captureBaseline } from './baseline.js';
+import { captureBaseline } from './baseline.js';
 import { describeFlags, inspectionSettings } from './inspection/cli.js';
 import { loadConfig } from './config/load.js';
 import { initConfig } from './config/init.js';
@@ -23,8 +23,8 @@ import { installedDocumentation } from './documentation.js';
 const help = `tenon init [--config path] (create config without a database)
 tenon docs [--json] (paths to the installed Tenon, driver and Jobs documentation)
 tenon migrate|status|rollback [--directory migrations] [--namespace public]
-tenon baseline capture|adopt [--directory migrations] [--namespace public]
-baseline capture: [--schema name ...] [--connection native-uri] (default: whole database schema)
+tenon baseline capture [--directory migrations] [--namespace public]
+baseline capture: [--schema name ...] [--exclude-table pattern ...] [--connection native-uri] (default: whole database schema)
 tenon new <name> [--directory migrations] (no database required)
 tenon jobs setup [--directory migrations] (generate Jobs migration files without a database)
 tenon generate [--out path] [--namespace public] [--check] [--config path]
@@ -45,35 +45,24 @@ function warn(message: string): void {
 }
 
 async function runBaseline(
-  action: 'capture' | 'adopt',
-  options: DatabaseToolOptions & { readonly schemas?: readonly string[] },
+  options: DatabaseToolOptions & {
+    readonly schemas?: readonly string[];
+    readonly excludeTables?: readonly string[];
+  },
 ): Promise<void> {
-  warn(
-    "Capture one shared baseline at the old ORM's final schema checkpoint. Each existing database must be at that checkpoint before adoption. Tenon does not compare schemas or remove the old ORM.",
-  );
-  if (action === 'capture') {
-    if (typeof options.connection !== 'string') {
-      throw new Error(
-        'Baseline capture needs a native libpq URI. Pass --connection or use a string config connection.',
-      );
-    }
-    const result = await captureBaseline({
-      ...options,
-      connection: options.connection,
-      onWarning: warn,
-    });
-    process.stdout.write(
-      `Captured ${result.upPath}. Source history and data were not changed. Commit this file and generated definitions.\n`,
-    );
-  } else {
-    warn(
-      'Adoption records 0001_baseline without executing its SQL. Use migrate for a fresh database. Disable the old migration runner when switching to Tenon.',
-    );
-    const completed = await adoptBaseline(options);
-    process.stdout.write(
-      `baseline adopt: ${completed.length ? completed.join(', ') : 'already recorded'}\n`,
+  if (typeof options.connection !== 'string') {
+    throw new Error(
+      'Baseline capture needs a PostgreSQL URI usable by pgclear and pg_dump. Pass --connection or use a string config connection.',
     );
   }
+  const result = await captureBaseline({
+    ...options,
+    connection: options.connection,
+    onWarning: warn,
+  });
+  process.stdout.write(
+    `Captured ${result.upPath}\nCaptured ${result.checkpointPath}\nReview and commit both files. Run migrate on fresh and existing databases. Source history and data were not changed.\n`,
+  );
 }
 
 async function main(): Promise<void> {
@@ -89,6 +78,7 @@ async function main(): Promise<void> {
       out: { type: 'string' },
       check: { type: 'boolean', default: false },
       schema: { type: 'string', multiple: true },
+      'exclude-table': { type: 'string', multiple: true },
       steps: { type: 'string', default: '1' },
       help: { type: 'boolean', default: false },
       project: { type: 'string' },
@@ -143,6 +133,7 @@ async function main(): Promise<void> {
   if (command !== 'init') allowed.add('database');
   if (command === 'baseline' && argument === 'capture') {
     allowed.add('schema');
+    allowed.add('exclude-table');
     allowed.add('connection');
   }
   if (command === 'check') {
@@ -194,7 +185,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  const baseline = command === 'baseline' && (argument === 'capture' || argument === 'adopt');
+  const baseline = command === 'baseline' && argument === 'capture';
   const valid =
     command === 'check'
       ? positionals.length <= 2
@@ -204,7 +195,7 @@ async function main(): Promise<void> {
           ['migrate', 'generate', 'schema', 'status', 'rollback'].includes(command ?? '');
   if (!valid) {
     throw new Error(
-      'Choose init, new, jobs setup, baseline capture|adopt, migrate, generate, schema, describe <query.sql>, check [file.ts[:line]], status, or rollback. Use --help for options.',
+      'Choose init, new, jobs setup, baseline capture, migrate, generate, schema, describe <query.sql>, check [file.ts[:line]], status, or rollback. Use --help for options.',
     );
   }
 
@@ -282,9 +273,12 @@ async function main(): Promise<void> {
   };
   if (baseline) {
     const schemas = values.schema ?? (capture ? config?.baseline?.schemas : undefined);
-    await runBaseline(argument, {
+    const excludeTables =
+      values['exclude-table'] ?? (capture ? config?.baseline?.excludeTables : undefined);
+    await runBaseline({
       ...options,
       ...(schemas !== undefined && { schemas }),
+      ...(excludeTables !== undefined && { excludeTables }),
     });
     return;
   }

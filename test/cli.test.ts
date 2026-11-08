@@ -52,7 +52,8 @@ test('flags for other commands reject before changing files or the database', as
       ['migrate', '--role', 'ignored-role'],
       ['status', '--statement-timeout-ms', '100'],
       ['status', '--out', join(options.directory, 'unexpected.ts')],
-      ['baseline', 'adopt', '--schema', 'public'],
+      ['baseline', 'adopt'],
+      ['adopt'],
       ['new', 'unexpected', '--check'],
     ]) {
       await assert.rejects(run(process.execPath, [cli, ...args, ...common], { env }));

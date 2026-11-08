@@ -1,6 +1,7 @@
 import { quote } from '../sql.js';
 
 export const baselineHeader = '-- Tenon baseline captured by pg_dump.\n';
+export const checkpointFilename = '0001_baseline.checkpoint.json';
 
 /** Bridge pg_dump's plain-text script to transactional SQL execution. */
 export function prepareBaselineSql(dump: string, namespace: string): string {

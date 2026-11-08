@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { mkdir, open, readdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import { baselineHeader } from './baseline-sql.js';
+import { baselineHeader, checkpointFilename } from './baseline-sql.js';
 import { validateMigrationSql } from './sql.js';
 
 export interface SqlMigration {
@@ -143,7 +143,7 @@ export async function readMigrations(directory = 'migrations'): Promise<readonly
     }
     return 0;
   });
-  return sorted.map(([id, group], i) => {
+  const migrations = sorted.map(([id, group], i) => {
     if (i && BigInt(sorted[i - 1]![0]) === BigInt(id)) {
       throw new Error(`Duplicate migration version: ${id}`);
     }
@@ -160,4 +160,17 @@ export async function readMigrations(directory = 'migrations'): Promise<readonly
         .digest('hex'),
     };
   });
+  const baseline = migrations[0];
+  if (
+    files.some((file) => file.name === checkpointFilename) &&
+    !(
+      baseline?.id === '0001' &&
+      baseline.name === 'baseline' &&
+      baseline.up.startsWith(baselineHeader)
+    )
+  )
+    throw new Error(
+      'The baseline checkpoint has no matching captured 0001_baseline.up.sql. Restore the captured pair before migrating.',
+    );
+  return migrations;
 }

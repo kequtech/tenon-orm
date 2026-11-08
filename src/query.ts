@@ -2,6 +2,8 @@ import { joinSeparator, quote } from './sql.js';
 import {
   assignmentParts,
   insertParts,
+  mutationCodecs,
+  type MutationCodecs,
   type MutationColumns,
   type MutationPart,
 } from './mutations.js';
@@ -112,10 +114,11 @@ function join(fragments: readonly SqlFragment[], separator: 'AND' | 'OR' | ','):
 function insertValues<Input extends object>(
   input: Input | readonly Input[],
   columns?: readonly NoInfer<MutationColumns<Input>>[],
+  codecs?: NoInfer<MutationCodecs<Input>>,
 ): SqlFragment {
   return Object.freeze({
     __tenonFragment: true as const,
-    [fragmentTag]: Object.freeze(insertParts(input, columns)),
+    [fragmentTag]: Object.freeze(insertParts(input, columns, mutationCodecs(codecs))),
   });
 }
 
@@ -123,10 +126,11 @@ function insertValues<Input extends object>(
 function assignments<Input extends object>(
   input: Input,
   columns?: readonly NoInfer<MutationColumns<Input>>[],
+  codecs?: NoInfer<MutationCodecs<Input>>,
 ): SqlFragment {
   return Object.freeze({
     __tenonFragment: true as const,
-    [fragmentTag]: Object.freeze(assignmentParts(input, columns)),
+    [fragmentTag]: Object.freeze(assignmentParts(input, columns, mutationCodecs(codecs))),
   });
 }
 

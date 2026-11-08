@@ -36,7 +36,8 @@ writes must change exactly one row or stay below a bound. The optional checker c
 source queries with PostgreSQL metadata; database tests establish actual behavior.
 
 The [pgclear driver](https://github.com/kequtech/pgclear) and
-[Jobs engine](https://github.com/kequtech/pgclear-jobs) are included. Jobs supports transactional
+[Jobs engine](https://github.com/kequtech/pgclear-jobs) are included. Captured baselines include source checkpoints so `tenon migrate` can initialize fresh storage or
+adopt a matching existing schema automatically. Jobs supports transactional
 submissions and durable background work; installing storage and starting workers are explicit.
 The TypeScript compiler is installed for checking and loaded only when checking.
 A server reuses one database instance and closes it after its requests and workers stop.

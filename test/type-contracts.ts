@@ -12,6 +12,7 @@ import type {
   UnknownRow,
   TenonConfig,
   SchemaSnapshot,
+  MutationCodecs,
 } from '../src/index.js';
 import {
   CardinalityError,
@@ -37,6 +38,39 @@ import {
 import type { User } from './fixtures/models.js';
 import { echoValues } from './fixtures/queries.js';
 import { checkQueries, type CheckReport } from '../src/check.js';
+
+function mutationCodecContracts() {
+  type Input = {
+    id: number;
+    payload?: { enabled: boolean } | null;
+    tags?: readonly string[] | null;
+  };
+  const codecs = {
+    payload: builtin.jsonb,
+    tags: builtin.textArray,
+  } satisfies MutationCodecs<Input>;
+  sql.insertValues<Input>(
+    { id: 1, payload: { enabled: true }, tags: ['a'] },
+    ['id', 'payload', 'tags'],
+    codecs,
+  );
+  sql.assignments<Input>({ id: 1, tags: null }, undefined, codecs);
+  sql.assignments({ tags: ['a'] }, ['tags'], { tags: builtin.textArray });
+  // Decoder output does not constrain an encoder's input type.
+  sql.assignments({ value: 1 }, undefined, {
+    value: {
+      oid: 23,
+      text: { encode: (value: number) => String(value), decode: (text: string) => ({ text }) },
+    },
+  });
+  // @ts-expect-error codec keys must belong to the input shape
+  sql.insertValues<Input>({ id: 1 }, undefined, { missing: builtin.jsonb });
+  // @ts-expect-error a number array encoder cannot encode string arrays
+  sql.assignments<Input>({ id: 1, tags: ['a'] }, undefined, { tags: builtin.int4Array });
+  // @ts-expect-error codecs cannot widen the inferred input to accept an incompatible value
+  sql.assignments({ tags: [1] }, undefined, { tags: builtin.textArray });
+}
+void mutationCodecContracts;
 
 async function queryCancellationContracts(db: Database, signal: AbortSignal) {
   const row: { id: number } | undefined = await db.query(sql<{ id: number }>`SELECT 1 AS id`, {

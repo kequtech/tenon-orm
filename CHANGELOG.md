@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.6.0
+
+- Capture `0001_baseline.checkpoint.json` alongside baseline SQL using one exported database
+  snapshot. Initial `migrate` executes the baseline on fresh storage, records it without replay on
+  matching existing storage, and refuses schema drift before creating history. It then applies
+  later migrations normally. Checkpoints bind the SQL checksum and migration namespace, cover all
+  captured schemas, and include excluded legacy storage for adoption checks.
+- **Upgrade action:** remove `baseline adopt` / `adoptBaseline` calls and use `migrate` for both
+  paths. The unchecked adoption API and standalone example are removed. Unapplied captured baselines
+  require the matching checkpoint: recapture the pair at the reviewed legacy checkpoint before
+  initial deployment. Already recorded history continues normally. Keep applied SQL immutable.
+  Capture now requires a PostgreSQL URI supported by both pgclear and native pg_dump; migrate needs
+  no native tools. Owners, grants, RLS, ledger data and external dependencies remain app-owned.
+
+- Add baseline `excludeTables` and repeatable `--exclude-table` capture options, including config
+  defaults. Exclusions use native pg_dump patterns and preserve live legacy storage for transfer.
+- Accept typed field codec maps in `sql.insertValues` and `sql.assignments`. Reuse driver codecs
+  for JSON, arrays and custom values while preserving defaults, omission and SQL NULL semantics.
+  Recover fixed codec maps in source checks; retain explicit unknown-OID and unchecked diagnostics.
+- Keep existing-application guidance concise and link to the query, database and Jobs contracts.
+  Clarify strict single-row results, explicit value encoding, uncertain-commit compensation, initial
+  adoption versus later schema drift, and Jobs migration ownership.
+
 ## 0.5.3
 
 - Add `compareSchemas` with named object/property differences and explicit acceptance of the narrow

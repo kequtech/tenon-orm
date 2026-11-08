@@ -2,6 +2,16 @@ import type { CatalogClient } from '../generation/catalog.js';
 import { migrationTable } from '../migrations/history.js';
 import type { SchemaMetadata } from './types.js';
 
+/** Transaction-local formatting shared by public snapshots and baseline checkpoints. */
+export async function configureSchemaCatalog(client: CatalogClient): Promise<void> {
+  await client.query(`SELECT pg_catalog.set_config(name, value, true) FROM (VALUES
+    ('search_path', 'pg_catalog'), ('quote_all_identifiers', 'on'),
+    ('standard_conforming_strings', 'on'), ('TimeZone', 'UTC'),
+    ('DateStyle', 'ISO, YMD'), ('IntervalStyle', 'postgres'),
+    ('bytea_output', 'hex'), ('extra_float_digits', '3'), ('lc_monetary', 'C')
+  ) AS settings(name, value)`);
+}
+
 /** Versioned catalog contract: change formatVersion when changing fingerprint inputs. */
 export async function readSchema(
   client: CatalogClient,

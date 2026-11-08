@@ -12,6 +12,7 @@ export interface Binding {
   readonly node: ts.Expression;
   readonly type: ts.Type;
   readonly field?: string;
+  readonly codec?: ts.Expression;
 }
 type Part = string | Binding;
 interface Expansion {
@@ -797,8 +798,18 @@ export class SourceAnalysis {
     const input = node.arguments[0];
     if (!input)
       return this.fail(node, 'expansion-input-required', 'Object expansion requires an input.');
-    const explicit = node.arguments[1]
-      ? this.array(node.arguments[1]).map((key) => this.text(key))
+    const optionalArgument = (index: number): ts.Expression | undefined => {
+      const value = node.arguments[index];
+      return value &&
+        !((this.project.checker.getTypeAtLocation(value)?.flags ?? 0) & ts.TypeFlags.Undefined)
+        ? value
+        : undefined;
+    };
+    const codecInput = optionalArgument(2);
+    const codecs = codecInput ? this.mutationCodecFields(codecInput) : new Map<string, Binding>();
+    const columnsInput = optionalArgument(1);
+    const explicit = columnsInput
+      ? this.array(columnsInput).map((key) => this.text(key))
       : undefined;
     if (explicit && (!explicit.length || new Set(explicit).size !== explicit.length))
       return this.fail(node, 'expansion-columns', 'Expansion columns must be nonempty and unique.');
@@ -872,7 +883,10 @@ export class SourceAnalysis {
           (!literal && !!(property && property.flags & ts.SymbolFlags.Optional)) ||
           members.some((member) => !!(member.flags & ts.TypeFlags.Undefined));
         const values: (Binding | undefined)[] = [];
-        if (binding && defined) values.push(binding);
+        if (binding && defined) {
+          const codec = codecs.get(name);
+          values.push(codec ? { ...binding, codec: codec.node } : binding);
+        }
         if (optional || !defined) values.push(undefined);
         choices = choices.flatMap((choice) =>
           values.map((value) => ({ ...choice, [name]: value })),
@@ -922,6 +936,40 @@ export class SourceAnalysis {
           'The runtime helper rejects empty assignments or default-only batches before SQL is sent. Only SQL-producing variants are analysed; validate inputs if rejection is not intended.',
       });
     return result;
+  }
+
+  /** Recover only fixed codec maps that never escape to arbitrary application code. */
+  private mutationCodecFields(input: ts.Expression, depth = 0): Map<string, Binding> {
+    if (depth > 32)
+      return this.fail(input, 'composition-depth', 'Mutation codec map exceeds the depth limit.');
+    const node = unwrap(input);
+    const declaration = variable(this.project.checker, node);
+    if (declaration) {
+      if (!constant(declaration) || !declaration.initializer)
+        return this.fail(
+          input,
+          'dynamic-mutation-codecs',
+          'Mutation codecs require a fixed const map.',
+        );
+      this.closedReference(
+        declaration,
+        symbol(this.project.checker, node)!,
+        (call, value) =>
+          ['sql.insertValues', 'sql.assignments'].includes(this.role(call.expression) ?? '') &&
+          call.arguments[2] === value,
+        'mutable-mutation-codecs',
+        'The mutation codec map can be mutated or escape; use a fixed map only in mutation helpers.',
+      );
+      return this.mutationCodecFields(declaration.initializer, depth + 1);
+    }
+    const fields = this.literalFields(node);
+    if (!fields)
+      return this.fail(
+        input,
+        'dynamic-mutation-codecs',
+        'Mutation codecs require a data-property literal or const map without spreads, accessors or computed keys.',
+      );
+    return fields;
   }
 
   private expression(input: ts.Expression, depth: number): Expansion[] {
@@ -1073,6 +1121,8 @@ export class SourceAnalysis {
     const checker = this.project.checker;
     const hints = new Set<number>();
     let uncertain = false;
+    if (binding.codec)
+      return this.encodedHints(binding, parameter, () => this.codecOid(binding.codec!));
     const visit = (type: ts.Type): void => {
       if (binding.field !== undefined && type.flags & ts.TypeFlags.Undefined) return;
       if (type.isUnionType()) {
@@ -1134,35 +1184,9 @@ export class SourceAnalysis {
         return;
       }
       if (checker.isTypeAssignableTo(type, this.project.parameterType)) {
-        let oid: number | undefined;
-        try {
-          oid = this.encoderOid(binding.node);
-        } catch (error) {
-          if (!(error instanceof Unsupported)) throw error;
-        }
-        if (oid !== undefined && Number.isInteger(oid) && oid > 0 && oid <= 0xffffffff) {
-          hints.add(oid);
-          return;
-        }
-        if (oid !== undefined) {
-          this.issues.push({
-            ...location(binding.node),
-            kind: 'mismatch',
-            code: 'encoder-oid-invalid',
-            parameter,
-            message: `The encoder declares invalid PostgreSQL OID ${oid}.`,
-          });
-        } else {
-          uncertain = true;
-          this.issues.push({
-            ...location(binding.node),
-            kind: 'unproven',
-            code: 'encoder-oid-unproven',
-            parameter,
-            message: `Input ${binding.field ?? parameter} is declared as a pgclear Parameter, but its encoder OID is unknown. Describe uses server inference; parameter and dependent result contracts remain unproven.`,
-          });
-        }
-        hints.add(0);
+        const encoded = this.encodedHints(binding, parameter, () => this.encoderOid(binding.node));
+        encoded.oids.forEach((oid) => hints.add(oid));
+        uncertain ||= encoded.uncertain;
         return;
       }
       this.issues.push({
@@ -1178,6 +1202,32 @@ export class SourceAnalysis {
     };
     visit(binding.type);
     return { oids: [...hints], uncertain };
+  }
+
+  private encodedHints(
+    binding: Binding,
+    parameter: number,
+    resolve: () => number | undefined,
+  ): { oids: readonly number[]; uncertain: boolean } {
+    let oid: number | undefined;
+    try {
+      oid = resolve();
+    } catch (error) {
+      if (!(error instanceof Unsupported)) throw error;
+    }
+    if (oid !== undefined && Number.isInteger(oid) && oid > 0 && oid <= 0xffffffff)
+      return { oids: [oid], uncertain: false };
+    this.issues.push({
+      ...location(binding.codec ?? binding.node),
+      kind: oid === undefined ? 'unproven' : 'mismatch',
+      code: oid === undefined ? 'encoder-oid-unproven' : 'encoder-oid-invalid',
+      parameter,
+      message:
+        oid === undefined
+          ? `Input ${binding.field ?? parameter} uses an explicit encoder, but its OID is unknown. Describe uses server inference; parameter and dependent result contracts remain unproven.`
+          : `The encoder declares invalid PostgreSQL OID ${oid}.`,
+    });
+    return { oids: [0], uncertain: oid === undefined };
   }
 
   recover(node: QueryNode): QueryVariant[] {

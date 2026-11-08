@@ -8,6 +8,11 @@ import {
   recordMigration,
 } from './migrations/history.js';
 import { qualified, quote } from './sql.js';
+import {
+  baselineDisposition,
+  isCapturedBaseline,
+  readCheckpoint,
+} from './migrations/checkpoint.js';
 
 export interface MigrationStatus {
   readonly applied: readonly string[];
@@ -46,16 +51,33 @@ async function execute(
     if (!selected.length) {
       return [];
     }
-    await client.queryClassic(`CREATE SCHEMA IF NOT EXISTS ${quote(namespace)}`, []);
-    await createHistoryTable(client, namespace);
     const completed: string[] = [];
     for (const file of selected) {
       try {
-        await client.queryClassic('BEGIN', []);
+        const checkpoint =
+          direction === 'up' && isCapturedBaseline(file)
+            ? await readCheckpoint(options.directory ?? 'migrations', namespace, file)
+            : undefined;
+        await client.queryClassic(
+          checkpoint ? 'BEGIN ISOLATION LEVEL REPEATABLE READ' : 'BEGIN',
+          [],
+        );
+        let adopt = false;
+        if (checkpoint) {
+          // Catalog deparser settings must not change how the migration's SQL is parsed.
+          await client.queryClassic('SAVEPOINT tenon_baseline_check', []);
+          adopt = (await baselineDisposition(client, checkpoint)) === 'matching';
+          await client.queryClassic('ROLLBACK TO SAVEPOINT tenon_baseline_check', []);
+          await client.queryClassic('RELEASE SAVEPOINT tenon_baseline_check', []);
+        }
+        if (direction === 'up' && !completed.length) {
+          await client.queryClassic(`CREATE SCHEMA IF NOT EXISTS ${quote(namespace)}`, []);
+          await createHistoryTable(client, namespace);
+        }
         // Match the string-literal rules used by the authored migration scanner.
         await client.queryClassic('SET LOCAL standard_conforming_strings TO on', []);
         await client.queryClassic(`SET LOCAL search_path TO ${quote(namespace)}, pg_catalog`, []);
-        await client.script(direction === 'up' ? file.up : file.down!);
+        if (!adopt) await client.script(direction === 'up' ? file.up : file.down!);
         if (direction === 'up') {
           await recordMigration(client, namespace, file);
         } else {

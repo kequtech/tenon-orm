@@ -17,10 +17,11 @@ export interface TenonConfig {
     readonly directory?: string;
     readonly namespace?: string;
   };
-  /** Native pg_dump connection/scope; defaults to the main connection only when it is a string. */
+  /** PostgreSQL URI for baseline capture/scope; defaults to the main connection only when it is a string. */
   readonly baseline?: {
     readonly connection?: string | undefined;
     readonly schemas?: readonly string[];
+    readonly excludeTables?: readonly string[];
   };
   readonly check?: {
     readonly project?: string;

@@ -79,7 +79,6 @@ test('the packed package preserves API contracts and consumes generated .d.ts sc
       'examples/jobs-worker.ts',
       'examples/jobs-host.ts',
       'examples/testing.ts',
-      'examples/adopt-baseline.ts',
     ]) {
       assert.ok(paths.includes(required), `Package is missing ${required}`);
     }

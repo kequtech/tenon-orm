@@ -28,9 +28,11 @@ placeholders into a template. A constructed query is inert and exposes `.text` a
 `sql<Row>` declares one result row; without it field values are unknown. It performs no runtime
 validation. Use unique selected names and quoted aliases for camelCase.
 
-`returns: 'many'` returns an array, `oneOrNone` permits undefined, `one` requires exactly one row,
-and the default `native` returns driver metadata and rows. Modes inspect actual returned rows;
-they do not add LIMIT or RETURNING. An UPDATE without RETURNING can affect rows while returning none.
+`returns: 'many'` returns an array, `oneOrNone` requires zero or one row, and `one` requires exactly
+one row. Both single-row modes reject extra rows with `CardinalityError`; `oneOrNone` returns
+undefined when no row matches. The default `native` returns driver metadata and rows. To select
+the first of several matches, write an explicit ordering and LIMIT 1. Modes add neither LIMIT nor
+RETURNING; an UPDATE without RETURNING can affect rows while returning none.
 
 Write joins and aggregates in PostgreSQL:
 
@@ -160,6 +162,26 @@ await db.query(sql`INSERT INTO public.deliveries (payload, tags)
 JSON arrays and PostgreSQL arrays differ. `json(null)` is JSON null; plain null is SQL NULL.
 `json('text')` encodes a JSON string, not a pre-encoded document. JSON rejects bigint.
 See [types and encodings](types.md).
+
+For repeated object writes, pass driver codecs by field as the third argument:
+
+```ts
+import type { MutationCodecs } from '@kequtech/tenon-orm';
+type Delivery = { payload: { sent: boolean }; tags: readonly string[] };
+const codecs = {
+  payload: builtin.jsonb,
+  tags: builtin.textArray,
+} satisfies MutationCodecs<Delivery>;
+await db.query(sql`INSERT INTO public.deliveries
+  ${sql.insertValues<Delivery>({ payload: { sent: false }, tags: ['news'] }, ['payload', 'tags'], codecs)}`);
+```
+
+`sql.assignments(input, columns, codecs)` uses the same map. Pass `undefined` for columns to retain
+key inference. A mapped field takes a raw value and binds it through `param(value, codec)`; do not
+pass an already encoded Parameter for that field. Unmapped scalar fields bind unchanged. Undefined
+still means default/omission and null remains SQL NULL. The map only applies to selected fields;
+it does not change the result codec registry. Codecs must accept the field's input type; decoder
+output types do not constrain writes. Fixed maps are [checker-recognized](checking.md#expand-object-writes).
 
 For batches, use `insertValues(rows, columns)` and choose a size below the whole query's 65,535
 parameter limit, including surrounding interpolations. DEFAULT cells consume no parameters. Tenon

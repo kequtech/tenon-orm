@@ -152,64 +152,71 @@ application-owned upgrades and permissions.
 
 ## Adopt an existing schema
 
-First replace query workflows without changing schema/migration ownership. Identify behavior the
-old ORM supplied—defaults, timestamps, hooks, IDs, validation and transaction boundaries—and retain
-needed behavior in application code, constraints or SQL. Verify rows, permissions and rollback.
-
-To transfer migration ownership:
-
-1. Bring targets to the old runner's final checkpoint; stop it and freeze schema changes. The runners
-   do not share locks.
-2. Capture, review and commit one baseline; verify an independent disposable replay.
-3. Compare each target with that frozen reference, including the separate security/history checks below.
-4. Adopt matching targets, apply later migrations and test application workflows on adopted/fresh storage.
-
-Capture the checkpoint into an empty Tenon migration directory:
+`tenon migrate` handles fresh installation and adoption through the same command. First bring the
+source to the old runner's final checkpoint, stop that runner and freeze DDL. Capture once from
+that reviewed source into an empty Tenon migration directory:
 
 ```sh
 npx tenon baseline capture --namespace app --schema app --connection "$DATABASE_URL"
 ```
 
-The directory must contain no SQL files. Native `pg_dump --schema-only --no-owner --no-privileges`
-writes `0001_baseline.up.sql` with no down file. Use compatible native client tools, preferably the
-server's major version. Preserve required libpq authentication/TLS settings; Tenon does not convert
-driver options into native settings. `baseline.connection` supplies a native URI when runtime
-connection is an object. Omitted `--schema` captures the whole database, regardless of namespace.
+Capture writes `0001_baseline.up.sql` and `0001_baseline.checkpoint.json`. Review and commit both;
+verify the SQL on disposable fresh storage. The SQL and catalog checkpoint share one exported
+repeatable-read snapshot. The checkpoint records the migration namespace, SQL checksum, PostgreSQL
+major and captured schema metadata, with its own content hash. It stores no rows or credentials.
+Keep the pair immutable; later changes belong in new migrations.
 
-Review and commit the SQL and its capture header; that header enables native baseline parsing.
-Do not add it to handwritten migrations. Capture preserves no data or sequence positions. Provision
-external schemas, functions, extensions and roles required by a scoped dump. Dumps omit owners,
-grants and default privileges; fresh objects belong to the migration role. Verify SECURITY DEFINER
-ownership and PUBLIC function execution deliberately on both adopted and fresh databases.
-
-Before adoption, independently establish that the target matches the reviewed checkpoint:
+Deploy with the usual command on every database:
 
 ```sh
-npx tenon baseline adopt --namespace app
 npx tenon migrate --namespace app
 ```
 
-The target namespace must already exist for adoption. Adoption records the baseline checksum without
-executing its SQL. It does not compare the live schema
-with the baseline. Matching repeated adoption is harmless; conflicting history fails. A new database
-instead runs `migrate` to execute the baseline normally, followed by later changes.
+When the captured baseline is pending, migrate validates its checkpoint and checks the captured
+schemas under the exclusive migration lock, before creating history:
 
-The [adoption example](../examples/adopt-baseline.ts) compares a frozen
-[schema checkpoint](checking.md#schema-checkpoints) before adoption, then applies pending migrations:
+| Target state                                                     | Result                                                           |
+| ---------------------------------------------------------------- | ---------------------------------------------------------------- |
+| All captured schemas absent or empty of application objects      | Execute the baseline SQL                                         |
+| Existing schema matches the source checkpoint                    | Record the baseline without executing it; preserve data          |
+| Existing schema differs, including partially initialized storage | Stop with object/property differences; write no baseline history |
+| Tenon history already exists                                     | Validate applied checksums and run pending migrations normally   |
 
-```sh
-# Generate once from the reviewed disposable replay, before later migrations; commit this reference.
-npx tenon schema --namespace app --config ./replay.config.ts > baseline-checkpoint.json
-cp node_modules/@kequtech/tenon-orm/examples/adopt-baseline.ts ./adopt-baseline.ts
-DATABASE_URL="$TARGET_DATABASE_URL" node adopt-baseline.ts baseline-checkpoint.json migrations
-```
+Both successful initial paths record `0001`, then apply later migrations in order. Returned IDs
+include a baseline recorded through adoption. Each file commits separately; a later failure can
+leave the baseline recorded. Subsequent runs validate migration-file checksums and apply pending
+files; they do not recheck the live schema. For later schema drift, compare against a snapshot from
+fresh storage with all current migrations applied, using [schema comparison](checking.md#schema-checkpoints).
+The original baseline is no longer the expected schema after later migrations.
+Missing, corrupt or mismatched checkpoints refuse initial migration on fresh and existing storage.
+Handwritten migrations without the captured-baseline header retain normal execution behavior.
 
-The example uses structured comparison and explicitly accepts the narrow varchar-array/text-array
-CHECK cast equivalence described in [schema checkpoints](checking.md#schema-checkpoints). It reports
-object/property differences before refusing adoption, and logs any accepted definition differences.
-PostgreSQL major changes still fail unless separately reviewed and explicitly allowed in the script.
+Omitting `--schema` captures every user schema, regardless of migration namespace; the checkpoint
+covers that same scope. A scoped capture leaves unrelated schemas alone. The migration namespace
+must match capture, but may be separate from the schemas containing application tables. Use direct
+or session connections. Capture requires compatible native `pg_dump` tools and a PostgreSQL URI
+usable by both pgclear and pg_dump; deployment needs only pgclear, with no native client tools.
+`baseline.connection` supplies that URI when runtime connection options are an object.
 
-Keep DDL frozen across comparison/adoption. The snapshot omits functions, security and migration
-history; verify those separately before running the example. Never derive the reference from the
-target. Use this script once at handover, ordinary migrate thereafter. Test drift refusal and real
-application workflows on adopted and fresh databases. Keep old references until replacements are verified.
+Repeat `--exclude-table pattern`, configure `baseline.excludeTables`, or pass `excludeTables` to
+`captureBaseline` to omit legacy tables from fresh-install SQL while retaining their live storage.
+CLI exclusions replace the configured list. Patterns use native pg_dump syntax: use qualified names
+such as `public.kysely_migration`, quoting identifier components inside the pattern for literal mixed
+case, dots or wildcards. Owned sequences may need separate exclusions. Review dependent views and
+verify replay. **Excluded objects remain in the source checkpoint**, so adoption verifies the legacy
+schema retained for transfer; fresh installs omit it. Tenon's history is ignored during comparison.
+Exclusions never perform live cleanup.
+
+The checkpoint compares [version-1 relation/type metadata](checking.md#schema-checkpoints), object
+names, and function, view, trigger and rule definitions. Row contents and sequence positions are
+ignored. The narrow CHECK text-array/varchar-array cast equivalence is accepted; PostgreSQL major
+differences on existing storage are refused. Other unsupported deparser differences stop adoption.
+It does not establish owners, grants, RLS policy, legacy ledger contents, external dependencies or
+complete extension/foreign/custom-type definitions. Verify those application-specific contracts
+separately and keep external DDL frozen: other runners do not share Tenon's lock.
+
+Capture omits owners, grants and default privileges. Fresh objects belong to the migration role;
+verify SECURITY DEFINER ownership and PUBLIC execution on fresh and adopted storage. Provision
+external schemas, extensions and roles required by scoped SQL. Test application workflows and
+permissions on both paths. Never regenerate a checkpoint from a mismatched deployment target merely
+to make it pass.

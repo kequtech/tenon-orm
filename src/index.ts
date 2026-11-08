@@ -66,6 +66,7 @@ export { AffectedRowsError, CardinalityError } from './errors.js';
 export type { QueryOptions, QueryOutput, QueryReturnMode } from './query-options.js';
 export { identifier, sql, unsafeSql } from './query.js';
 export type { SqlFragment, SqlQuery, UnknownRow } from './query.js';
+export type { MutationCodecs } from './mutations.js';
 export type { CloseOptions, Database, QueryClient, QueryEvent, Transaction } from './types.js';
 
 export { describeQuery } from './describe.js';
@@ -80,7 +81,7 @@ export type {
   QueryDescription,
 } from './inspection/types.js';
 
-export { adoptBaseline, captureBaseline } from './baseline.js';
+export { captureBaseline } from './baseline.js';
 export type { CaptureBaselineOptions, CapturedBaseline } from './baseline.js';
 export { generateDefinitions } from './generate.js';
 export type { GenerateOptions } from './generate.js';

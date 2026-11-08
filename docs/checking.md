@@ -153,6 +153,14 @@ other mutations, spread pushes, loops and early exits remain unchecked. The budg
 
 ### Expand object writes
 
+Both mutation helpers accept a third `MutationCodecs<Shape>` field map, such as
+`{payload: builtin.jsonb, tags: builtin.textArray}`. The checker recovers direct data-property maps
+and const maps shared only with mutation helpers, including imports. It uses the selected codec's
+OID without executing its encoder. Opaque codec OIDs remain `encoder-oid-unproven`; mutated,
+escaping, computed, spread or dynamically built maps remain explicitly unchecked. Keep explicit
+shapes and column lists for predictable recovery. A map does not prove JSON contents, encoder
+range/format validity or result nullability. See [object writes](queries.md#write-objects).
+
 Object expansion needs an explicit finite shape:
 
 ```ts
@@ -331,8 +339,10 @@ Version 1 excludes functions, privileges/owners, RLS, triggers, rules, views/mat
 foreign tables, extension/composite/range and collation definitions, external definitions and table
 storage settings. Index storage clauses emitted in index definitions are included. Qualified external
 references remain in SQL definitions. Uncoordinated external DDL is outside Tenon's lock contract.
-This is a checkpoint component, not full equivalence. [Baseline adoption](database.md#adopt-an-existing-schema)
-requires separately reviewed function/security/history checks and a frozen trusted replay reference.
+This public snapshot is a checkpoint component, not full equivalence. Automatic
+[baseline adoption](database.md#adopt-an-existing-schema) uses its own captured checkpoint, adding
+object inventories and function/view/trigger/rule definitions without changing this version-1
+contract. Security, legacy ledger data and external dependencies still need application checks.
 
 ## Behavior tests
 

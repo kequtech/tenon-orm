@@ -117,6 +117,15 @@ syntax or comments. Its fingerprint includes PostgreSQL major and schema identit
 scope exclusions. Keep the version-1 inputs stable when changing the generator; expand the catalog
 contract under a new format version. See [snapshot scope](docs/checking.md#schema-checkpoints).
 
+Captured baselines have a separate versioned source checkpoint tied to their SQL checksum.
+Capture exports one PostgreSQL snapshot for pg_dump and catalog reads. Initial migrate checks all
+captured schemas under its exclusive lock and records a matching baseline without replay; empty
+scopes execute the SQL, while drift refuses adoption before history DDL. Include excluded legacy
+objects in the adoption checkpoint, since they remain present until an application-owned transfer.
+The public version-1 snapshot stays unchanged; baseline checkpoints also record object inventory and
+function/view/trigger/rule definitions. Security, ledger data and external dependencies remain
+application-owned. There is no separate adoption command or unchecked adoption API.
+
 ## Upgrade checks
 
 Review the installed driver's changelog, configuration, and representation changes. Retain runtime,

@@ -1,25 +1,29 @@
 import { execFile } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { link, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { prepareBaselineSql } from './migrations/baseline-sql.js';
-import type { DatabaseToolOptions } from './migrations/connection.js';
 import { withMigrationLock } from './migrations/connection.js';
-import { readMigrations, withMigrationCreationLock } from './migrations/files.js';
+import { withMigrationCreationLock } from './migrations/files.js';
 import {
-  createHistoryTable,
-  migrationState,
-  migrationTable,
-  recordMigration,
-} from './migrations/history.js';
+  checkpointCatalog,
+  checkpointFilename,
+  checkpointHash,
+  readBaselineSchemas,
+  type BaselineCheckpoint,
+} from './migrations/checkpoint.js';
+import { migrationTable } from './migrations/history.js';
 import { qualified, quote } from './sql.js';
 
 export interface CaptureBaselineOptions {
-  /** Native libpq connection string, passed directly to pg_dump. */
+  /** PostgreSQL URI usable by pgclear and native pg_dump. */
   readonly connection: string;
   readonly namespace?: string;
   /** Optional native pg_dump schema selection; omitted captures the whole database schema. */
   readonly schemas?: readonly string[];
+  /** Native pg_dump table patterns, e.g. public.kysely_migration. Source tables are untouched. */
+  readonly excludeTables?: readonly string[];
   readonly directory?: string;
   /** Receives native pg_dump warnings; defaults to console.warn. */
   readonly onWarning?: (message: string) => void;
@@ -27,6 +31,7 @@ export interface CaptureBaselineOptions {
 export interface CapturedBaseline {
   readonly id: string;
   readonly upPath: string;
+  readonly checkpointPath: string;
 }
 const run = promisify(execFile);
 
@@ -43,8 +48,23 @@ export async function captureBaseline(options: CaptureBaselineOptions): Promise<
   const namespace = options.namespace ?? 'public';
   quote(namespace);
   const schemas = options.schemas?.map((schema) => `--schema=${quote(schema)}`) ?? [];
+  const excluded = options.excludeTables === undefined ? [] : options.excludeTables;
+  if (
+    !Array.isArray(excluded) ||
+    Array.from(excluded).some(
+      (pattern) => typeof pattern !== 'string' || !pattern.trim() || pattern.includes('\0'),
+    )
+  ) {
+    throw new Error(
+      'Baseline excludeTables must be an array of nonempty pg_dump patterns without NUL.',
+    );
+  }
   return withMigrationCreationLock(options.directory ?? 'migrations', async (directory) => {
-    if ((await readdir(directory)).some((name) => name.endsWith('.sql'))) {
+    if (
+      (await readdir(directory)).some(
+        (name) => name.endsWith('.sql') || name === checkpointFilename,
+      )
+    ) {
       throw new Error(
         'Baseline capture requires an empty Tenon migration directory. Existing files were not changed.',
       );
@@ -52,85 +72,91 @@ export async function captureBaseline(options: CaptureBaselineOptions): Promise<
     const temporary = await mkdtemp(join(directory, '.tenon-baseline-'));
     try {
       const file = join(temporary, 'dump.sql');
-      let warnings: string;
-      try {
-        const result = await run('pg_dump', [
-          '--dbname',
-          options.connection,
-          '--no-password',
-          '--schema-only',
-          '--no-owner',
-          '--no-privileges',
-          '--quote-all-identifiers',
-          '--strict-names',
-          ...schemas,
-          `--exclude-table=${qualified(namespace, migrationTable)}`,
-          '--file',
-          file,
-        ]);
-        warnings = result.stderr.trim();
-      } catch (error) {
-        // execFile's Error includes argv, potentially containing credentials.
-        // Do not propagate that Error, its command line, or a credential-bearing cause.
-        if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
-          throw new Error(
-            'Baseline capture requires pg_dump on PATH. Install PostgreSQL client tools.',
-          );
-        }
-        throw new Error(
-          'pg_dump failed. Check database access, permissions and PostgreSQL client/server compatibility. No baseline was written.',
-        );
-      }
-      if (warnings) {
-        (options.onWarning ?? console.warn)(warnings);
-      }
+      const captured = await withMigrationLock(
+        { connection: options.connection, namespace },
+        'shared',
+        (client) =>
+          client.transaction(
+            async (transaction) => {
+              const catalog = checkpointCatalog(transaction);
+              const snapshot = await catalog.query<{ id: string }>(
+                'SELECT pg_catalog.pg_export_snapshot() AS id',
+              );
+              let warnings: string;
+              try {
+                const result = await run('pg_dump', [
+                  '--dbname',
+                  options.connection,
+                  '--no-password',
+                  '--schema-only',
+                  '--no-owner',
+                  '--no-privileges',
+                  '--quote-all-identifiers',
+                  '--strict-names',
+                  `--snapshot=${snapshot.rows[0]!.id}`,
+                  ...schemas,
+                  `--exclude-table=${qualified(namespace, migrationTable)}`,
+                  ...excluded.map((pattern) => `--exclude-table=${pattern}`),
+                  '--file',
+                  file,
+                ]);
+                warnings = result.stderr.trim();
+              } catch (error) {
+                // execFile's Error includes argv, potentially containing credentials.
+                // Do not propagate that Error, its command line, or a credential-bearing cause.
+                if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
+                  throw new Error(
+                    'Baseline capture requires pg_dump on PATH. Install PostgreSQL client tools.',
+                  );
+                }
+                throw new Error(
+                  'pg_dump failed. Check database access, permissions and PostgreSQL client/server compatibility. No baseline was written.',
+                );
+              }
+              if (warnings) {
+                (options.onWarning ?? console.warn)(warnings);
+              }
+
+              const namespaces =
+                options.schemas ??
+                (
+                  await catalog.query<{ name: string }>(
+                    `SELECT nspname AS name FROM pg_catalog.pg_namespace
+             WHERE nspname <> 'information_schema' AND nspname !~ '^pg_'
+             ORDER BY nspname COLLATE "C"`,
+                  )
+                ).rows.map((row) => row.name);
+              const up = prepareBaselineSql(await readFile(file, 'utf8'), namespace);
+              const checkpoint: BaselineCheckpoint = {
+                formatVersion: 1,
+                namespace,
+                migrationChecksum: createHash('sha256')
+                  .update(JSON.stringify([up, null]))
+                  .digest('hex'),
+                schemas: await readBaselineSchemas(catalog, [...new Set(namespaces)].sort()),
+              };
+              return { up, checkpoint: { ...checkpoint, fingerprint: checkpointHash(checkpoint) } };
+            },
+            { isolation: 'repeatable read', readOnly: true },
+          ),
+      );
       const upPath = join(directory, '0001_baseline.up.sql');
+      const checkpointPath = join(directory, checkpointFilename);
       const prepared = join(temporary, 'migration.sql');
-      await writeFile(prepared, prepareBaselineSql(await readFile(file, 'utf8'), namespace));
-      // Publish a complete file atomically without replacing an existing path.
-      await link(prepared, upPath);
-      return { id: '0001', upPath };
+      const preparedCheckpoint = join(temporary, 'checkpoint.json');
+      await writeFile(prepared, captured.up);
+      await writeFile(preparedCheckpoint, JSON.stringify(captured.checkpoint, null, 2) + '\n');
+      // Publish the checkpoint first, SQL last. A reader can never execute an incomplete pair.
+      await link(preparedCheckpoint, checkpointPath);
+      try {
+        await link(prepared, upPath);
+      } catch (error) {
+        await rm(checkpointPath);
+        throw error;
+      }
+      return { checkpointPath, id: '0001', upPath };
     } finally {
       await rm(temporary, { recursive: true, force: true });
     }
-  });
-}
-
-/** Acknowledge the saved baseline on an existing database; never execute its SQL. */
-export async function adoptBaseline(options: DatabaseToolOptions): Promise<readonly string[]> {
-  const files = await readMigrations(options.directory);
-  const baseline = files[0];
-  if (
-    !baseline ||
-    baseline.id !== '0001' ||
-    baseline.name !== 'baseline' ||
-    baseline.down !== undefined
-  ) {
-    throw new Error(
-      'Adoption requires 0001_baseline.up.sql with no down file. Capture and commit a baseline first.',
-    );
-  }
-  return withMigrationLock(options, 'exclusive', async (client, namespace) => {
-    const applied = await migrationState(client, namespace, files);
-    if (applied.length) {
-      return [];
-    }
-    const schema = await client.queryClassic(
-      'SELECT 1 FROM pg_catalog.pg_namespace WHERE nspname = $1',
-      [namespace],
-    );
-    if (!schema.rows.length) {
-      throw new Error(
-        'The baseline namespace does not exist. Use migrate to initialize a fresh database.',
-      );
-    }
-    await client.queryClassic('BEGIN', []);
-    await createHistoryTable(client, namespace);
-    await recordMigration(client, namespace, baseline);
-    const result = await client.queryClassic('COMMIT', []);
-    if (result.command !== 'COMMIT') {
-      throw new Error('Baseline adoption was rolled back.');
-    }
-    return [baseline.id];
   });
 }

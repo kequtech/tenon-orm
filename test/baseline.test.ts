@@ -9,7 +9,6 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { createPool, type Pool } from '@kequtech/pgclear';
 import {
-  adoptBaseline,
   captureBaseline,
   generateDefinitions,
   migrate,
@@ -69,12 +68,13 @@ test('capture, adoption, future migrations and fresh replay share one baseline w
     const original = (await pool.queryClassic(`SELECT * FROM ${table}`, [])).rows;
     const captured = await captureBaseline(options);
     await assert.rejects(
-      adoptBaseline({ ...options, namespace: `${options.namespace}_missing` }),
-      /namespace does not exist/,
+      migrate({ ...options, namespace: `${options.namespace}_missing` }),
+      /checkpoint does not match/,
     );
     assert.deepEqual(captured, {
       id: '0001',
       upPath: join(options.directory, '0001_baseline.up.sql'),
+      checkpointPath: join(options.directory, '0001_baseline.checkpoint.json'),
     });
     assert.deepEqual(
       [...(await pool.queryClassic(`SELECT * FROM ${table}`, [])).rows],
@@ -88,9 +88,12 @@ test('capture, adoption, future migrations and fresh replay share one baseline w
       ).rows[0]!.name,
       null,
     );
-    assert.deepEqual(await readdir(options.directory), ['0001_baseline.up.sql']);
-    assert.deepEqual(await adoptBaseline(options), ['0001']);
-    assert.deepEqual(await adoptBaseline(options), []);
+    assert.deepEqual((await readdir(options.directory)).sort(), [
+      '0001_baseline.checkpoint.json',
+      '0001_baseline.up.sql',
+    ]);
+    assert.deepEqual(await migrate(options), ['0001']);
+    assert.deepEqual(await migrate(options), []);
     assert.deepEqual(await migrate(options), []);
     assert.deepEqual(
       [...(await pool.queryClassic(`SELECT * FROM ${table}`, [])).rows],
@@ -126,7 +129,7 @@ test('capture, adoption, future migrations and fresh replay share one baseline w
       'ALTER TABLE "Customer" DROP COLUMN active;',
     );
     assert.deepEqual(await migrate(options), ['0002']);
-    assert.deepEqual(await adoptBaseline(options), []);
+    assert.deepEqual(await migrate(options), []);
     const definitions = await generateDefinitions(options);
     assert.deepEqual(await rollback(options), ['0002']);
     assert.deepEqual(
@@ -196,25 +199,120 @@ test('concurrent pre-start adoption and migration are repeatable and edited base
       join(options.directory, '0002_name.up.sql'),
       'ALTER TABLE "Record" ADD COLUMN name text;',
     );
-    const results = await Promise.all(
-      [1, 2].map(async () => ({
-        adopted: await adoptBaseline(options),
-        migrated: await migrate(options),
-      })),
-    );
-    assert.deepEqual(
-      results.flatMap((result) => result.adopted),
-      ['0001'],
-    );
-    assert.deepEqual(
-      results.flatMap((result) => result.migrated),
-      ['0002'],
-    );
+    const results = await Promise.all([1, 2].map(() => migrate(options)));
+    assert.deepEqual(results.flat().sort(), ['0001', '0002']);
     assert.deepEqual(await migrationStatus(options), { applied: ['0001', '0002'], pending: [] });
     const baseline = join(options.directory, '0001_baseline.up.sql');
     await writeFile(baseline, (await readFile(baseline, 'utf8')) + '\n-- edited\n');
-    await assert.rejects(adoptBaseline(options), /history differs/);
     await assert.rejects(migrate(options), /history differs/);
+    await assert.rejects(migrate(options), /history differs/);
+  });
+});
+
+test('capture exclusions preserve live legacy tables while fresh replay omits their storage', async () => {
+  await project(async (options) => {
+    const table = qualified(options.namespace, 'records');
+    const legacy = qualified(options.namespace, 'legacy.queue');
+    const legacySequence = qualified(options.namespace, 'legacy.queue_id_seq');
+    const history = qualified(options.namespace, 'kysely_migration');
+    await pool.withSession((session) =>
+      session.script(`
+      CREATE TABLE ${table} (id serial PRIMARY KEY);
+      CREATE TABLE ${legacy} (id serial PRIMARY KEY, payload jsonb);
+      CREATE TABLE ${history} (name text PRIMARY KEY);
+      INSERT INTO ${legacy} (payload) VALUES ('{"retained":true}');
+      INSERT INTO ${history} VALUES ('last_old_migration');
+    `),
+    );
+    await captureBaseline({ ...options, excludeTables: [legacy, legacySequence, history] });
+    await migrate(options);
+    assert.equal((await pool.queryClassic(`SELECT payload FROM ${legacy}`, [])).rows.length, 1);
+    assert.equal((await pool.queryClassic(`SELECT name FROM ${history}`, [])).rows.length, 1);
+    await pool.queryClassic(`DROP SCHEMA ${quote(options.namespace)} CASCADE`, []);
+    await migrate(options);
+    assert.equal(
+      (await pool.queryClassic(`INSERT INTO ${table} DEFAULT VALUES RETURNING id`, [])).rows[0]!.id,
+      1,
+    );
+    for (const name of ['legacy.queue', 'legacy.queue_id_seq', 'kysely_migration']) {
+      assert.equal(
+        (
+          await pool.queryClassic('SELECT to_regclass($1) AS name', [
+            qualified(options.namespace, name),
+          ])
+        ).rows[0]!.name,
+        null,
+      );
+    }
+  });
+});
+
+test('capture exclusions flow through config and repeated CLI overrides', async () => {
+  await project(async (options) => {
+    const keep = qualified(options.namespace, 'keep');
+    const first = qualified(options.namespace, 'first');
+    const second = qualified(options.namespace, 'second');
+    await pool.withSession((session) =>
+      session.script(
+        `CREATE TABLE ${keep} (id integer); CREATE TABLE ${first} (id integer); CREATE TABLE ${second} (id integer);`,
+      ),
+    );
+    const config = await writeConfig(options.directory, {
+      connection,
+      migrations: { namespace: options.namespace },
+      baseline: { schemas: options.schemas, excludeTables: [keep] },
+    });
+    await run(process.execPath, [
+      cli,
+      'baseline',
+      'capture',
+      '--config',
+      config,
+      '--directory',
+      options.directory,
+      '--exclude-table',
+      first,
+      '--exclude-table',
+      second,
+    ]);
+    await pool.queryClassic(`DROP SCHEMA ${quote(options.namespace)} CASCADE`, []);
+    await migrate(options);
+    assert.equal((await pool.queryClassic(`SELECT * FROM ${keep}`, [])).rows.length, 0);
+    for (const name of [first, second]) {
+      assert.equal(
+        (await pool.queryClassic('SELECT to_regclass($1) AS name', [name])).rows[0]!.name,
+        null,
+      );
+    }
+    await rm(join(options.directory, '0001_baseline.up.sql'));
+    await rm(join(options.directory, '0001_baseline.checkpoint.json'));
+    await run(process.execPath, [
+      cli,
+      'baseline',
+      'capture',
+      '--config',
+      config,
+      '--directory',
+      options.directory,
+    ]);
+    await pool.queryClassic(`DROP SCHEMA ${quote(options.namespace)} CASCADE`, []);
+    await migrate(options);
+    assert.equal(
+      (await pool.queryClassic('SELECT to_regclass($1) AS name', [keep])).rows[0]!.name,
+      null,
+    );
+  });
+});
+
+test('invalid baseline exclusion patterns fail without writing a file', async () => {
+  await project(async (options) => {
+    for (const excludeTables of [[''], [' '], ['x\0y'], [123], 'legacy', null, new Array(1)]) {
+      await assert.rejects(
+        captureBaseline({ ...options, excludeTables: excludeTables as never }),
+        /excludeTables/,
+      );
+      assert.deepEqual(await readdir(options.directory), []);
+    }
   });
 });
 
@@ -234,7 +332,7 @@ test('capture failures preserve existing files and release the creation lock', a
     await assert.rejects(captureBaseline(options), /empty Tenon migration directory/);
     assert.ok((await readFile(captured.upPath, 'utf8')).length > 0);
     await writeFile(join(options.directory, '0001_baseline.down.sql'), 'SELECT 1;');
-    await assert.rejects(adoptBaseline(options), /no down file/);
+    await assert.rejects(migrate(options), /checkpoint does not match/);
   });
 });
 
@@ -260,13 +358,13 @@ test('baseline CLI captures and adopts without replaying live data or exposing c
       [...original],
     );
 
-    await run(process.execPath, [cli, 'baseline', 'adopt', ...args], { env });
+    await run(process.execPath, [cli, 'migrate', ...args], { env });
     assert.deepEqual(await migrationStatus(options), { applied: ['0001'], pending: [] });
     assert.deepEqual(
       [...(await pool.queryClassic(`SELECT * FROM ${table}`, [])).rows],
       [...original],
     );
-    await run(process.execPath, [cli, 'baseline', 'adopt', ...args], { env });
+    await run(process.execPath, [cli, 'migrate', ...args], { env });
     assert.deepEqual(await migrationStatus(options), { applied: ['0001'], pending: [] });
     assert.deepEqual(
       [...(await pool.queryClassic(`SELECT * FROM ${table}`, [])).rows],
@@ -279,6 +377,7 @@ test('baseline CLI captures and adopts without replaying live data or exposing c
     await run(process.execPath, [cli, 'generate', '--config', configPath], { env });
     await run(process.execPath, [cli, 'generate', '--config', configPath, '--check'], { env });
     await rm(join(options.directory, '0001_baseline.up.sql'));
+    await rm(join(options.directory, '0001_baseline.checkpoint.json'));
     await assert.rejects(
       run(process.execPath, [cli, 'baseline', 'capture', ...args, '--schema', options.namespace], {
         env: { ...env, DATABASE_URL: 'postgresql://postgres:secret_for_test@localhost:1/missing' },

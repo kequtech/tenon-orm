@@ -13,6 +13,11 @@ Read its database module, `tenon.config.*`, query functions, migration runner, g
 check scripts. Preserve those conventions and connections. Start with [queries](queries.md) when
 the application is already configured; there is no requirement to adopt Tenon's migration runner.
 For an upgrade, read the [changelog](../CHANGELOG.md) from the installed version to the target.
+When replacing another ORM, check [result cardinality](queries.md#read-and-reuse),
+[value encoding](queries.md#write-objects) and [commit outcomes](queries.md#errors).
+To transfer schema ownership, [capture a baseline](database.md#adopt-an-existing-schema) and use
+`tenon migrate` for deployment. [Jobs storage](jobs.md#install-storage) uses ordinary application
+migrations.
 
 ## Connect
 

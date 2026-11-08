@@ -114,7 +114,10 @@ removes them independently.
 ## Documentation
 
 The [README](README.md) is the entry point. It links seven consumer guides: getting-started, queries, database, types, checking, jobs and
-reference. Keep concepts in their owning guide and exact lookup tables in the reference. The README, all of `docs/`, and [changelog](CHANGELOG.md) ship in the package. This guide
+reference. Keep each behavior contract in its owning guide and exact lookup tables in the reference.
+Existing-application pointers belong in getting-started; link to the relevant contracts instead of
+copying them into a separate migration playbook. Keep consumer-specific cutover plans in the
+consumer's repository. The README, all of `docs/`, and [changelog](CHANGELOG.md) ship in the package. This guide
 and `CONSIDERATIONS.md` stay in the repository.
 
 When changing documentation, check examples against actual public imports, schema assumptions,

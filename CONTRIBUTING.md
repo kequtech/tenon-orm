@@ -27,7 +27,11 @@ isolate their fixed `pgclear_jobs` schema, preserving any storage in `tenon_orm_
 therefore needs `CREATEDB`. Some tests need permission to create roles; connection-failure tests terminate their
 own backends. Scripts do not load `.env` automatically.
 
-CI runs PostgreSQL 16 and 18 with matching `pg_dump` clients. Packed-consumer tests install the actual
+CI runs PostgreSQL 16 and 18 with matching `pg_dump` clients, plus a real PostgreSQL 18 capture → 16
+fresh-replay job that verifies SQL object bodies remain unchanged. Run that job locally with
+`npm run test:baseline-portability`, a PostgreSQL 18 `pg_dump` on PATH,
+`TENON_BASELINE_SOURCE_DATABASE_URL` pointing to an isolated PostgreSQL 18 `tenon_orm_test`, and
+`TENON_TEST_DATABASE_URL` pointing to PostgreSQL 16 `tenon_orm_test`. Packed-consumer tests install the actual
 artifact and compile public/generated types with TypeScript 6 and 7, without repository development
 dependencies. They prefer npm's cache and fetch missing packages/metadata. No application checkout
 or third-party ORM installation is required.

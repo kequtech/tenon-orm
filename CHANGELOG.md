@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.2
+
+- Apply pg_dump's zero `transaction_timeout` preamble setting only when the target supports it,
+  allowing PostgreSQL 18 captures to replay fresh on PostgreSQL 16. Normalize new captures and
+  handle existing captured pairs during replay without rewriting files or changing their checksums.
+  Preserve SQL object bodies and ordinary authored migrations. Add a PostgreSQL 18 → 16 CI regression.
+
 ## 0.6.1
 
 - Allow automatic baseline adoption across PostgreSQL major versions when schema definitions

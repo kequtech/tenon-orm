@@ -8,6 +8,7 @@ import {
   recordMigration,
 } from './migrations/history.js';
 import { qualified, quote } from './sql.js';
+import { prepareBaselineReplay } from './migrations/baseline-sql.js';
 import {
   baselineDisposition,
   isCapturedBaseline,
@@ -54,10 +55,10 @@ async function execute(
     const completed: string[] = [];
     for (const file of selected) {
       try {
-        const checkpoint =
-          direction === 'up' && isCapturedBaseline(file)
-            ? await readCheckpoint(options.directory ?? 'migrations', namespace, file)
-            : undefined;
+        const capturedBaseline = direction === 'up' && isCapturedBaseline(file);
+        const checkpoint = capturedBaseline
+          ? await readCheckpoint(options.directory ?? 'migrations', namespace, file)
+          : undefined;
         await client.queryClassic(
           checkpoint ? 'BEGIN ISOLATION LEVEL REPEATABLE READ' : 'BEGIN',
           [],
@@ -77,7 +78,10 @@ async function execute(
         // Match the string-literal rules used by the authored migration scanner.
         await client.queryClassic('SET LOCAL standard_conforming_strings TO on', []);
         await client.queryClassic(`SET LOCAL search_path TO ${quote(namespace)}, pg_catalog`, []);
-        if (!adopt) await client.script(direction === 'up' ? file.up : file.down!);
+        if (!adopt) {
+          const sql = direction === 'up' ? file.up : file.down!;
+          await client.script(capturedBaseline ? prepareBaselineReplay(sql) : sql);
+        }
         if (direction === 'up') {
           await recordMigration(client, namespace, file);
         } else {

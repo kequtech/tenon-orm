@@ -3,6 +3,20 @@ import { quote } from '../sql.js';
 export const baselineHeader = '-- Tenon baseline captured by pg_dump.\n';
 export const checkpointFilename = '0001_baseline.checkpoint.json';
 
+/** Normalize known dump boilerplate without changing captured objects or saved checksums. */
+export function prepareBaselineReplay(sql: string): string {
+  const start = sql.indexOf('\n-- Name:');
+  const preamble = start === -1 ? sql : sql.slice(0, start);
+  const objects = start === -1 ? '' : sql.slice(start);
+  return (
+    preamble.replace(
+      /^SET LOCAL transaction_timeout = 0;\r?$/gm,
+      "SELECT pg_catalog.set_config('transaction_timeout', '0', true)\n" +
+        "WHERE pg_catalog.current_setting('transaction_timeout', true) IS NOT NULL;",
+    ) + objects
+  );
+}
+
 /** Bridge pg_dump's plain-text script to transactional SQL execution. */
 export function prepareBaselineSql(dump: string, namespace: string): string {
   // Recent pg_dump versions bracket psql scripts with a random restrict key.
@@ -34,14 +48,14 @@ export function prepareBaselineSql(dump: string, namespace: string): string {
   if (isSchemaDeclaration) {
     objects = objects.replace(declaration, `\nCREATE SCHEMA IF NOT EXISTS ${quote(namespace)};`);
   }
-  return (
+  return prepareBaselineReplay(
     baselineHeader +
-    preamble
-      .replace(/^SET /gm, 'SET LOCAL ')
-      .replace(
-        "SELECT pg_catalog.set_config('search_path', '', false);",
-        "SELECT pg_catalog.set_config('search_path', '', true);",
-      ) +
-    objects
+      preamble
+        .replace(/^SET /gm, 'SET LOCAL ')
+        .replace(
+          "SELECT pg_catalog.set_config('search_path', '', false);",
+          "SELECT pg_catalog.set_config('search_path', '', true);",
+        ) +
+      objects,
   );
 }

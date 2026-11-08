@@ -1,6 +1,6 @@
 {
   "name": "@kequtech/tenon-orm",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "license": "ISC",
   "type": "module",
   "description": "A PostgreSQL ORM designed for coding agents, with explicit SQL, typed queries, and migrations",
@@ -50,6 +50,7 @@
     "typecheck": "node node_modules/typescript/bin/tsc --noEmit -p tsconfig.json",
     "test": "npm run build && node node_modules/typescript/bin/tsc -p config/tsconfig.test.json && node .test-dist/test/check-database.js && node --test .test-dist/test/*.test.js",
     "test:consumer": "npm run build && node node_modules/typescript/bin/tsc -p config/tsconfig.test.json && node --test .test-dist/test/consumer.test.js",
+    "test:baseline-portability": "npm run build && node node_modules/typescript/bin/tsc -p config/tsconfig.test.json && node --test .test-dist/test/compatibility/baseline-replay.js",
     "test:describe": "node node_modules/typescript/bin/tsc -p config/tsconfig.test.json && node --test .test-dist/test/describe*.test.js",
     "check": "npm run format:check && npm run typecheck && npm test",
     "prepack": "npm run build",

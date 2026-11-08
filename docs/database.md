@@ -197,6 +197,9 @@ must match capture, but may be separate from the schemas containing application 
 or session connections. Capture requires compatible native `pg_dump` tools and a PostgreSQL URI
 usable by both pgclear and pg_dump; deployment needs only pgclear, with no native client tools.
 `baseline.connection` supplies that URI when runtime connection options are an object.
+The dump's zero `transaction_timeout` setting is applied only when the target supports it. This also
+works for older captured pairs during replay, preserving saved files and checksums. SQL object
+bodies are unchanged; other SQL still needs to be supported by the target.
 
 Repeat `--exclude-table pattern`, configure `baseline.excludeTables`, or pass `excludeTables` to
 `captureBaseline` to omit legacy tables from fresh-install SQL while retaining their live storage.
